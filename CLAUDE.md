@@ -23,7 +23,7 @@ it without operator approval.
   the only network stage; every stage left of it (incl. the token GUARD and cost
   estimate) is local and offline — no `count_tokens` or any network call. The
   pipeline must run end-to-end in CI against a stub summarizer.
-- **Every push to `main` passes CI: ruff + mypy + tests.** No exceptions.
+- **Every push to `main` passes: ruff + mypy + tests.** No exceptions.
 - **No manual workarounds.** Provisioning, fetching, and recovery must be automated
   and idempotent.
 

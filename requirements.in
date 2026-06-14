@@ -1,0 +1,28 @@
+# EchoGist runtime dependencies — SOURCE OF TRUTH (plan §2 / §12.2).
+#
+# The hash-pinned lockfile is generated from this file:
+#     scripts/lock-deps   ->   requirements.lock
+# run.bat installs with:  pip install --require-hashes -r requirements.lock
+#
+# Cross-platform: CUDA wheels are platform-specific (win_amd64 vs manylinux).
+# Pin the SAME versions on both, generate hashes on each OS, and reconcile to one
+# hashed set covering both platform wheels (the one detail to confirm on the first
+# Windows cold run — plan §12.2).
+
+faster-whisper==1.2.*
+imageio-ffmpeg==0.6.*
+fpdf2==2.*
+anthropic>=0.109
+
+# --- The one pin that matters: cuDNN MAJOR <-> ctranslate2 build ------------------
+# ctranslate2's GPU binary is built against a specific cuDNN MAJOR (4.4+ -> cuDNN 9).
+# The nvidia-cudnn-cu12 / nvidia-cublas-cu12 wheel majors MUST match the ctranslate2
+# build, or you get a silent cuDNN ABI mismatch -> cryptic DLL load error on first
+# run (the #1 silent first-run failure, TD-3 / outside-voice #4).
+#
+# NEVER bump ctranslate2 with `pip install -U` on its own, and never bump cudnn/cublas
+# independently. Bumping = re-run scripts/lock-deps, then a Windows cold run + the
+# §12.3 GPU smoke BEFORE committing the new lock. This comment is the skew tripwire.
+ctranslate2==4.5.*
+nvidia-cudnn-cu12==9.*
+nvidia-cublas-cu12==12.*

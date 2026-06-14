@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# EchoGist dev fast loop (plan §12.1 / T13).
+#
+# The fast inner loop runs in WSL with the real GPU: lint + types + the pure-stage
+# test suite against the STUB summarizer (killswitch-safe — no live API, no key).
+# Cold Windows runs are reserved for scripts/win-smoke.bat.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VENV="${VENV:-.venv}"
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+echo "== ruff =="
+ruff check .
+ruff format --check .
+
+echo "== mypy =="
+mypy
+
+echo "== pytest =="
+pytest
+
+echo "dev-loop: all gates green."

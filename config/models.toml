@@ -1,0 +1,46 @@
+# EchoGist model + pricing config — DATA, not code.
+#
+# Edit this file to add/update tiers, model IDs, prices, or the model-asset
+# source URL WITHOUT touching Python (CLAUDE.md: "Config is data, not code").
+#
+# Prices are USD per million tokens (MTok). Verify model IDs + prices against
+# the Claude API reference when bumping. A deprecated/unknown model does not
+# crash the app — the summarize call surfaces it and Settings guides re-select.
+
+[tiers.economy]
+model_id = "claude-haiku-4-5"
+context_window = 200000
+price_in_per_mtok = 1.0
+price_out_per_mtok = 5.0
+
+[tiers.balanced]
+model_id = "claude-sonnet-4-6"
+context_window = 1000000
+price_in_per_mtok = 3.0
+price_out_per_mtok = 15.0
+
+[tiers.flagship]
+model_id = "claude-opus-4-8"
+context_window = 1000000
+price_in_per_mtok = 5.0
+price_out_per_mtok = 25.0
+
+[guard]
+# Fraction of a tier's context window usable by one single-pass transcript+prompt.
+# The overflow guard (plan §4) stops cleanly above this. Biased to estimate high.
+safe_budget_fraction = 0.8
+# Fixed output allowance for cost estimation. Summary length is roughly constant
+# regardless of transcript length, so output is a fixed absolute, not a fraction
+# of input (plan §3, outside-voice #3).
+output_tokens_estimate = 2000
+
+[model_asset]
+# Whisper model distribution (TD-1). The source URL is CONFIGURABLE on purpose:
+# a GitHub block from RU has an automated fallback — point this at a mirror you
+# host, or drop the files into local_dir, with no per-run manual step.
+name = "large-v3-int8_float16"
+source_url = "https://github.com/OWNER/REPO/releases/download/models-v1/large-v3-int8_float16.zip"
+# sha256 of the downloaded asset for resume + integrity verify (filled at T2).
+sha256 = ""
+# Pre-placed local model directory escape hatch (app-relative or absolute).
+local_dir = "models/large-v3-int8_float16"

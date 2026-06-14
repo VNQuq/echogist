@@ -1,0 +1,43 @@
+[project]
+name = "echogist"
+version = "0.1.0"
+description = "Local audio/video -> MP3 and/or structured RU/EN summary. Windows console tool."
+requires-python = ">=3.11"
+# Runtime deps are pinned via the hash-locked requirements file (T2), not here.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["echogist"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+files = ["echogist", "tests"]
+
+# Runtime wheels are GPU/native and not installed in the dev/CI venv; they are
+# imported lazily inside functions, so stub-less imports are fine to ignore.
+[[tool.mypy.overrides]]
+module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "imageio_ffmpeg"]
+ignore_missing_imports = true
+
+# echogist.menu lands in T9; until then __main__ imports it lazily.
+[[tool.mypy.overrides]]
+module = ["echogist.menu"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

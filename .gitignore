@@ -32,6 +32,16 @@ build/
 .DS_Store
 Thumbs.db
 
+# EchoGist runtime artifacts (recovery state, not source)
+output/
+# Downloaded Whisper model (TD-1) — fetched/pre-placed, never committed
+models/
+# Model-fetch download cache + partial downloads
+.cache/
+*.part
+# Operator's runtime settings — written by the Settings menu, not source
+config/settings.json
+
 # Data / logs / dumps
 data/
 logs/

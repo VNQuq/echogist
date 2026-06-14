@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Generate the hash-pinned requirements.lock from requirements.in (plan §12.2).
+#
+# Cross-platform protocol (CUDA wheels are platform-specific):
+#   1. Run this on WSL/Linux  -> hashes for the manylinux wheels.
+#   2. Run this on Windows     -> hashes for the win_amd64 wheels.
+#   3. Reconcile to ONE lock with the SAME versions whose --hash lines cover both
+#      platform wheels, and verify it resolves on the Windows cold run.
+#
+# Never bump ctranslate2 / cudnn / cublas without re-running this AND the §12.3 GPU
+# smoke before committing the new lock.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VENV="${VENV:-.venv}"
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+pip install --quiet --upgrade pip-tools
+pip-compile --quiet --generate-hashes --output-file requirements.lock requirements.in
+
+echo "Wrote requirements.lock from requirements.in."
+echo "Reconcile with the Windows-generated hashes before committing (plan §12.2)."
