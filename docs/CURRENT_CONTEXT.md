@@ -14,17 +14,24 @@ Done:
 
 1. `/office-hours` complete → design APPROVED. Architecture: Approach C (job-state engine
    + thin CLI, chunk-checkpointing in v1). Detail in the design doc + checkpoint (see SoT).
+2. **Manual spike complete (2026-06-14, Windows + WSL2, RTX 4060).** Proved on-paper /
+   visually: **Cyrillic→PDF** (fpdf2 + embedded DejaVuSans, no tofu); **cost math**
+   (Haiku $1/$5, Sonnet $3/$15, Opus $5/$25 per MTok → ~$0.04–$0.20 per 2 h video,
+   negligible; maps to econ/balanced/flagship); **GPU env on Windows** (CUDA visible,
+   cuDNN/cuBLAS DLLs register via `os.add_dll_directory` before import — no load error).
+   Found three hard problems → TD-1/TD-2/TD-3 (see Open debts). Spike scripts:
+   `~/echogist-spike/` (throwaway, not in repo).
 
 Next:
 
-- **Manual spike (real-world, before any code):** on Windows, one real 1.5–2.5h video →
-  yt-dlp pull → faster-whisper **GPU** transcribe (confirm GPU, time it) → one Anthropic
-  summarize call (check token counts vs cost math) → render a Cyrillic string to PDF
-  (confirm not blank boxes). Record where it breaks.
-- Run `/plan-eng-review` with the approved design doc → lock stack, job-state +
-  chunk-checkpoint file format, chunking thresholds, PDF-font + model-config impl.
-- Verify current Anthropic model IDs + per-MTok prices (incl. cache/batch) against the
-  Claude API reference; seed editable config (econ / balanced / flagship).
+- **Run `/plan-eng-review`** with the approved design doc. It MUST resolve, as gating
+  decisions: **TD-1** (model distribution — HF blocked in region), **TD-2** (YouTube
+  ingestion as a maintained subsystem incl. non-expiring auth), **TD-3** (launcher
+  provisioning of cuDNN/cuBLAS + deno + model, cmd/`.bat` only). Operator constraint:
+  **no manual workarounds** — these need automated, durable solutions.
+- In eng-review also lock: stack, job-state + chunk-checkpoint file format, chunking
+  thresholds, PDF-font + model-config impl; seed editable model config (econ/balanced/
+  flagship) with the verified IDs/prices above.
 
 ## Relevant SoT
 
@@ -36,12 +43,17 @@ Next:
 
 ## Open blockers
 
-- None.
+- **TD-1 (HIGH):** Whisper model un-downloadable at runtime — HF region-blocked
+  (stalled on sandbox AND user's machine; mirror unreachable). Blocks transcription.
+- **TD-2 (HIGH):** YouTube ingestion broken end-to-end (bot-check + JS-runtime +
+  EJS solver + fast-expiring cookies; browser-direct cookies dead via DPAPI). Blocks
+  the primary input source. Both must be solved in `/plan-eng-review` before code.
 
 ## Open debts
 
-- GPU transcription has a first-run asterisk: `faster-whisper` on Windows needs
-  cuDNN/CUDA DLLs a `.bat` can't silently install. Resolve in `/plan-eng-review`.
+- **TD-1** model distribution · **TD-2** YouTube ingestion subsystem · **TD-3**
+  launcher provisioning (cuDNN/cuBLAS + deno + model, cmd/`.bat`) · **TD-4** GPU
+  transcription speed unmeasured (blocked by TD-1).
 
 Details → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
