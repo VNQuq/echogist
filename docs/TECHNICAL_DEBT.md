@@ -55,6 +55,12 @@ distil/medium) under the download constraint.
 ### TD-2 — YouTube ingestion is a maintained subsystem, not a retry
 
 Severity: HIGH · Created 2026-06-14 · Trigger: resolve in `/plan-eng-review` · SoT: this file
+**Most product-critical of the open debts** — the main input depends on this path.
+
+**Inputs (priority).** YouTube and local files are the **primary, expected** inputs;
+Vimeo is secondary and rare (nice-to-have). Local files carry no ingestion risk, so
+**YouTube is the fragile half of the main path** — its fragility is a **core product
+risk, not an edge case**.
 
 **What.** Downloading a YouTube link now requires a *stack* of cooperating pieces,
 each of which breaks on YouTube's cadence: (1) **bot-check** needs authenticated
@@ -66,15 +72,19 @@ Chromium/Windows** (Brave/Chrome ≥127 app-bound encryption → `Failed to decr
 with DPAPI`, yt-dlp #10927). A manually exported `cookies.txt` got past the
 bot-check but cookies **expire fast** and manual re-export is rejected (automated app).
 
-**Why deferred.** No clean automated cookie-refresh path exists yet; needs design.
+**Why deferred.** No clean automated path chosen yet; needs design + research (below).
 
 **When to open.** Now (eng-review). The design's "self-update yt-dlp + retry once"
 does NOT address any of this. Candidate directions: bundled + auto-updated yt-dlp;
 bundled deno + auto-fetched EJS solver; an **automated, non-expiring auth path**
 (managed logged-in browser profile / scheduled headless cookie refresh, or an
-alternative extraction path), weighing ToS/2FA fragility. Also re-weight
-non-YouTube sources (Vimeo, direct files, saved transcript) since YouTube is the
-most fragile input.
+alternative extraction path), weighing ToS/2FA fragility.
+
+**Research before deciding.** Many third-party YouTube downloader sites/services
+work reliably in the target region — strong evidence a viable automated extraction
+path exists, so do NOT rush a fragile cookie-based workaround. In `/plan-eng-review`,
+first survey how working downloaders solve bot-check / n-signature / auth, then
+evaluate those approaches before committing to one.
 
 ### TD-3 — GPU + JS runtime provisioning the launcher must automate
 
