@@ -40,7 +40,7 @@ The File Map below is a routing table, not a preload list.
 
 Upon task completion, before closing:
 - Propose an update to `docs/CURRENT_CONTEXT.md`
-- Flag any new technical debt for `docs/journal/TECHNICAL_DEBT.md`
+- Flag any new technical debt for `docs/TECHNICAL_DEBT.md`
 
 ## Workflow (gstack)
 
