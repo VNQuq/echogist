@@ -5,6 +5,14 @@ REM the app run via the venv python.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+REM --- 0. Double-click detection (humane exit) ---
+REM When launched from Explorer, the spawning shell's command line contains this
+REM script's name (cmd /c "...run.bat"). When run from an open prompt or `call`ed
+REM from win-smoke.bat, it does not. We only pause-on-exit in the double-click case
+REM so the window stays readable, without hanging automated acceptance runs.
+set "PAUSE_ON_EXIT="
+echo "%cmdcmdline%" | find /i "%~nx0" >nul && set "PAUSE_ON_EXIT=1"
+
 REM --- 1. Python check (manual prerequisite; never auto-installed) ---
 where python >nul 2>&1
 if errorlevel 1 (
@@ -50,9 +58,13 @@ goto :end
 
 :fail
 echo.
-echo [EchoGist] Startup aborted.
+echo [EchoGist] Startup aborted. Read the messages above for what to fix.
+if defined PAUSE_ON_EXIT ( echo. & echo Press any key to close this window... & pause >nul )
 endlocal
 exit /b 1
 
 :end
+echo.
+echo [EchoGist] Done.
+if defined PAUSE_ON_EXIT ( echo Press any key to close this window... & pause >nul )
 endlocal
