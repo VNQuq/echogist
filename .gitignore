@@ -1,2 +1,62 @@
-# Claude Code machine-local settings (do not commit)
-.claude/settings.local.json
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+.envrc
+secrets/
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.uv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Data / logs / dumps
+data/
+logs/
+*.log
+*.dump
+*.sql.gz
+*.tar.gz
+.scratch/
+
+# Node
+node_modules/
+.next/
+
+# Docker volumes
+pg_data/
+redis_data/
+
+# Backup artefacts
+*.bak
+*.backup
+_commit_msg.txt
+
+# gstack — local-only artifacts
+.gstack/
+.claude/
+.context/
+~/.gstack/
+.gstack-worktrees/
