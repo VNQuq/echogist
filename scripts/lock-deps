@@ -1,23 +1,44 @@
 #!/usr/bin/env bash
 # Generate the hash-pinned requirements.lock from requirements.in (plan §12.2).
 #
-# Cross-platform protocol (CUDA wheels are platform-specific):
-#   1. Run this on WSL/Linux  -> hashes for the manylinux wheels.
-#   2. Run this on Windows     -> hashes for the win_amd64 wheels.
-#   3. Reconcile to ONE lock with the SAME versions whose --hash lines cover both
-#      platform wheels, and verify it resolves on the Windows cold run.
+# Cross-platform in ONE pass via uv's universal resolver. CUDA wheels are
+# platform-specific (win_amd64 vs manylinux), so we resolve a single version set
+# that is valid across platforms and emit --hash lines covering every wheel of
+# each pinned version. No second pass on Windows, no manual reconcile.
+#
+#   uv pip compile --universal --generate-hashes  ->  one lock, both OSes.
+#   run.bat installs with:  pip install --require-hashes -r requirements.lock
+#
+# Python target = 3.11, the Windows ship target enforced by run.bat. ctranslate2 /
+# faster-whisper ship CPython-specific wheels (cp311 vs cp312); pinning the target
+# keeps the lock's wheel tags aligned with the box that actually installs it.
 #
 # Never bump ctranslate2 / cudnn / cublas without re-running this AND the §12.3 GPU
-# smoke before committing the new lock.
+# smoke on a Windows cold run before committing the new lock (the cuDNN-major ↔
+# ctranslate2-build skew tripwire lives in requirements.in).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VENV="${VENV:-.venv}"
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
+PY_TARGET="${PY_TARGET:-3.11}"
 
-pip install --quiet --upgrade pip-tools
-pip-compile --quiet --generate-hashes --output-file requirements.lock requirements.in
+# uv from the dev venv if present, else a system/standalone uv on PATH.
+if [ -x "$VENV/bin/uv" ]; then
+  UV="$VENV/bin/uv"
+elif command -v uv >/dev/null 2>&1; then
+  UV="uv"
+else
+  echo "lock-deps: uv not found. Install it: '$VENV/bin/pip install uv' (or see https://docs.astral.sh/uv/)." >&2
+  exit 1
+fi
 
-echo "Wrote requirements.lock from requirements.in."
-echo "Reconcile with the Windows-generated hashes before committing (plan §12.2)."
+"$UV" pip compile \
+  --universal \
+  --generate-hashes \
+  --python-version "$PY_TARGET" \
+  --output-file requirements.lock \
+  requirements.in
+
+echo "Wrote requirements.lock (universal, python $PY_TARGET) from requirements.in."
+echo "Acceptance gate: verify it installs on the first Windows cold run via"
+echo "  pip install --require-hashes -r requirements.lock   (plan §12.2 / T2)."

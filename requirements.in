@@ -5,9 +5,10 @@
 # run.bat installs with:  pip install --require-hashes -r requirements.lock
 #
 # Cross-platform: CUDA wheels are platform-specific (win_amd64 vs manylinux).
-# Pin the SAME versions on both, generate hashes on each OS, and reconcile to one
-# hashed set covering both platform wheels (the one detail to confirm on the first
-# Windows cold run — plan §12.2).
+# scripts/lock-deps uses uv's universal resolver (one pass, no Windows box) to pin
+# ONE version set and emit --hash lines covering both platform wheels; sys_platform
+# markers carry the OS-only deps. Still confirm it installs on the first Windows
+# cold run (plan §12.2).
 
 faster-whisper==1.2.*
 imageio-ffmpeg==0.6.*

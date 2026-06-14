@@ -270,7 +270,7 @@ render). Reuse the patterns, not the spike code.
 Synthesized from this review. P1 blocks a working v1; P2 same-branch; P3 follow-up.
 
 - [ ] **T1 (P1)** — config — editable model/price config + settings (lang/format/tier/threshold), deprecated-model guidance (F5). Verify: load + bad-model path.
-- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`pip-compile --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch w/ resume+checksum + **configurable source URL + pre-placed-dir fallback** (F14), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
+- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`uv pip compile --universal --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch w/ resume+checksum + **configurable source URL + pre-placed-dir fallback** (F14), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
 - [ ] **T3 (P1)** — transcribe — faster-whisper GPU, DLL registration before import, timestamped autolang, save transcript; segment progress. Verify: real 1.5-2.5h file (TD-4).
 - [ ] **T4 (P1)** — extract — imageio-ffmpeg video→mp3 / audio→mp3, dedup naming (F9, F11). Verify: video+audio inputs.
 - [ ] **T5 (P1)** — guard — **local language-aware** token estimate (conservative-high) vs context budget, clean overflow stop (F6). Verify: under/over budget, RU vs EN ratio.
@@ -326,8 +326,8 @@ wheels is the top silent failure (cuDNN major ABI mismatch → cryptic DLL load 
 Concrete approach:
 
 - **Hash-pinned lockfile, not `>=`.** A tiny `requirements.in` → `requirements.lock`
-  via `pip-compile --generate-hashes` (or `uv pip compile`). The lock pins exact
-  versions + `--hash=sha256:...` for the full transitive closure: `ctranslate2`,
+  via `uv pip compile --universal --generate-hashes` (`scripts/lock-deps`). The lock
+  pins exact versions + `--hash=sha256:...` for the full transitive closure: `ctranslate2`,
   `faster-whisper`, `nvidia-cudnn-cu12`, `nvidia-cublas-cu12`, `anthropic`, `fpdf2`,
   `imageio-ffmpeg`. `run.bat` installs with `pip install --require-hashes -r
   requirements.lock` — a substituted/corrupt wheel fails loudly, never silently.
@@ -336,13 +336,19 @@ Concrete approach:
   Pin the cudnn/cublas wheel majors to match, with a `# WHY` comment in
   `requirements.in` so a future `pip install -U ctranslate2` can't quietly pull an
   incompatible cuDNN. This single comment is the skew tripwire.
-- **Two platforms, identical versions.** CUDA wheels are platform-specific
-  (`win_amd64` vs `manylinux`). Pin the **same versions** on both; generate hashes
-  covering both platform wheels (compile on each OS, reconcile to one version set).
-  Verify on the first Windows cold run that the lock resolves there. Flag: this is the
-  one cross-platform detail to confirm in T2.
+- **Two platforms, ONE pass (uv universal).** CUDA wheels are platform-specific
+  (`win_amd64` vs `manylinux`). `uv pip compile --universal` resolves a single version
+  set valid across platforms and emits `--hash` lines covering every wheel of each
+  pinned version; OS-only deps (e.g. `colorama ; sys_platform == 'win32'`) are
+  marker-guarded. No second compile on Windows, no manual reconcile. `--python-version
+  3.11` targets the Windows ship runtime (run.bat enforces 3.11) so the cp311 wheel
+  tags align. Verified here: the lock dry-run-resolves under `--require-hashes` for
+  both Windows/cp311 and Linux/cp312, with cp311 `win_amd64` hashes present for
+  ctranslate2 + the cudnn/cublas stack. Acceptance gate stays the first Windows cold
+  run (`pip install --require-hashes`) — uv gets platform-complete without a Windows box,
+  but the cold-run install is the T2 sign-off.
 - **Update protocol (closes the debt, keeps it closed).** Bumping ctranslate2 = re-run
-  `pip-compile` → Windows cold run + the §12.3 GPU smoke **before** committing the new
+  `scripts/lock-deps` → Windows cold run + the §12.3 GPU smoke **before** committing the new
   lock. Never bump cudnn/cublas independently of ctranslate2. Keep Dependabot/Renovate
   **off** for these three (or grouped + gated behind the GPU smoke) — an auto patch
   bump of cuDNN is exactly the skew trap.
