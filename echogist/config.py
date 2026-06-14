@@ -65,12 +65,15 @@ class GuardConfig:
 
 @dataclass(frozen=True)
 class ModelAsset:
-    """Whisper model distribution (TD-1). Source URL is configurable on purpose."""
+    """Whisper model distribution (TD-1). Fetched from Hugging Face by repo id; a
+    pre-placed ``local_dir`` is the offline escape hatch. ``source_url``/``sha256``
+    are the dormant self-host fields (removed once the HF path is gate-verified)."""
 
     name: str
-    source_url: str
-    sha256: str
+    hf_repo: str
     local_dir: str
+    source_url: str = ""
+    sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -222,9 +225,10 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         raise ConfigError(f"{_MODELS_FILENAME}: missing [model_asset] table.")
     asset = ModelAsset(
         name=str(_require(asset_table, "name", "[model_asset]")),
-        source_url=str(_require(asset_table, "source_url", "[model_asset]")),
-        sha256=str(asset_table.get("sha256", "")),
+        hf_repo=str(_require(asset_table, "hf_repo", "[model_asset]")),
         local_dir=str(_require(asset_table, "local_dir", "[model_asset]")),
+        source_url=str(asset_table.get("source_url", "")),
+        sha256=str(asset_table.get("sha256", "")),
     )
 
     return ModelConfig(tiers=tiers, guard=guard, asset=asset)

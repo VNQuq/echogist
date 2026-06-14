@@ -31,18 +31,23 @@ rule dropped). Gate still holds: every push to `main` passes ruff + mypy + tests
   + `win-smoke.bat` (T13 scaffolding).
 - `/review` run: 2 fail-loud bugs auto-fixed. Gates green: **ruff + mypy + 50 tests**.
 - Dev env: WSL `.venv` on **python3.12** (3.11+; has `tomllib`). RTX 4060 visible in WSL.
-- **`requirements.lock` generated** (hash-pinned, §12.2) via `scripts/lock-deps` =
-  `uv pip compile --universal` (one pass, no Windows box). 49 reqs, all hashed; verified
-  cp311 `win_amd64` + Linux wheels both covered; dry-run-resolves under `--require-hashes`
-  for Windows/cp311 + Linux/cp312. Acceptance gate = first Windows cold-run install.
+- **`requirements.lock` generated + Windows-verified** (hash-pinned, §12.2) via
+  `scripts/lock-deps` = `uv pip compile --universal`. 49 reqs, all hashed; **a cold
+  Windows `run.bat` installed it cleanly under `--require-hashes`** (Python 3.11.9) — the
+  lock blocker is closed.
+- **`run.bat` humane exit** — pauses only when double-clicked (not when `call`ed/automated).
+- **TD-1 reworked → HF auto-fetch** (operator 2026-06-15): provisioning pulls vanilla
+  `Systran/faster-whisper-large-v3` (float16) from HF via `snapshot_download`; T3 loads
+  `compute_type=int8_float16`. Self-host zip path kept dormant. Decision reverses the
+  original "HF region-blocked" TD-1 finding — the cold-run gate retires that risk.
 
 **Next:**
 
-- **Windows cold-run install** of the lock (`run.bat` → `pip install --require-hashes`)
-  + §12.3 GPU smoke — the T2 sign-off. Only a real Windows box proves it end-to-end.
+- **TD-1 live gate (on Windows w/ 4060):** cold `run.bat` → HF download of large-v3
+  succeeds + loads `int8_float16` (`cuda devices: 1`, no cuDNN/cuBLAS DLL error) + a short
+  clip transcribes (show the log). Only then remove the dormant self-host fields/code.
 - **T3 transcribe / T4 extract** — install `ctranslate2`/`faster-whisper`/`imageio-ffmpeg`
-  into the WSL `.venv`. T3 unblocks TD-1 (first real model fetch) + TD-4 (speed/int8 RU
-  quality, measured in T11).
+  into the WSL `.venv`. T3 unblocks TD-4 (speed/int8 RU quality, measured in T11).
 - Then T5 guard → T6 summarize → T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
 
 ## Relevant SoT
@@ -56,16 +61,16 @@ rule dropped). Gate still holds: every push to `main` passes ruff + mypy + tests
 
 ## Open blockers
 
-- **Lock unverified on real Windows** — `requirements.lock` exists and dry-run-resolves for
-  Windows/cp311, but the actual `pip install --require-hashes` cold run hasn't been done on a
-  Windows box yet (T2 sign-off). uv universal removed the need for a Windows compile pass.
-- **TD-1 (mitigated):** model fetch via configurable source URL + pre-placed-dir fallback is
-  coded in T2; validate on the first real fetch in T3 and on a cold Windows run.
+- **TD-1 HF reachability UNPROVEN from RU** — provisioning now fetches from HF, which the
+  original TD-1 found region-throttled on the user's own Windows box (tiny stalled at
+  ~2.6 MB). The cold-run gate must confirm HF works now; if it stalls, fall back to the
+  dormant self-host path (do NOT delete it until the gate is green).
 
 ## Open debts
 
-- **TD-1** model distribution (coded, validate at T3/cold-Windows) · **TD-3** provisioning
-  (run.bat + GPU preflight landed in T2; cold-Windows run still pending) · **TD-4** GPU speed
+- **TD-1** model distribution → HF auto-fetch (closes when the live HF gate passes +
+  dormant self-host removed) · **TD-3** provisioning (run.bat lock-install proven on cold
+  Windows; GPU preflight still pending the live run) · **TD-4** GPU speed
   + int8 RU quality unmeasured (T11) · **TD-5** chunked map-reduce deferred. TD-2 closed.
 
 Details → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)

@@ -1,12 +1,14 @@
 """Whisper model provisioning (TD-1, plan §5.4 / F14).
 
-The model is fetched once from a **configurable** source URL with resume +
-checksum verify, OR pre-placed in the local dir as a drop-in escape hatch. A
-GitHub block from RU therefore has an automated fallback (point the config at a
-mirror, or drop the files in) with no per-run manual step.
+The model is fetched once from **Hugging Face** (``hf_repo``, the vanilla CT2
+large-v3 stored float16), OR pre-placed in the local dir as a drop-in escape
+hatch (``local_dir/model.bin`` present → no fetch, fully offline). The download
+is one-time provisioning, not a pipeline stage, so the killswitch is unaffected.
 
-Stdlib-only (``urllib``) so provisioning does not depend on the runtime wheels
-and stays offline except for this one-time fetch.
+The HF download is decoupled from the CUDA stack (no ctranslate2 import) so the
+dedicated GPU preflight owns those diagnostics. The zip-from-URL helpers below
+are the **dormant** self-host path, kept until the HF route is gate-verified on a
+cold Windows run, then removed with the matching config fields (TD-1).
 """
 
 from __future__ import annotations
@@ -25,6 +27,15 @@ from .config import ModelAsset
 _SENTINEL = "model.bin"
 _CHUNK = 1 << 20
 
+# CT2 model files to pull from the HF repo (mirrors faster-whisper's own set).
+_HF_ALLOW_PATTERNS = (
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+)
+
 Logger = Callable[[str], object]
 
 
@@ -37,6 +48,11 @@ def model_present(local_dir: Path) -> bool:
     return (local_dir / _SENTINEL).is_file()
 
 
+# --------------------------------------------------------------------------- #
+# DORMANT self-host path (zip-from-URL + checksum). Superseded by fetch_from_hf;
+# kept until the HF route is gate-verified on a cold Windows run, then removed
+# with [model_asset].source_url / sha256 (TD-1). Not wired into ensure_model.
+# --------------------------------------------------------------------------- #
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -100,6 +116,38 @@ def download_resumable(url: str, dest: Path, *, expected_sha: str = "") -> Path:
     return dest
 
 
+def fetch_from_hf(repo_id: str, local_dir: Path) -> None:
+    """Download the CT2 model files for ``repo_id`` from Hugging Face into ``local_dir``.
+
+    Uses ``huggingface_hub.snapshot_download`` (a runtime dep, imported lazily so the
+    pre-placed/offline path needs neither it nor the CUDA stack). Any hub/network
+    failure raises a recoverable ``ProvisionError`` pointing at the pre-place escape
+    hatch (CLAUDE.md: fail loud, return to menu).
+    """
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise ProvisionError(
+            "huggingface_hub is not installed — run.bat installs it from "
+            "requirements.lock. Or pre-place the model in the local dir."
+        ) from exc
+
+    local_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(local_dir),
+            allow_patterns=list(_HF_ALLOW_PATTERNS),
+        )
+    except Exception as exc:  # any hub/network failure -> loud + recoverable
+        raise ProvisionError(
+            f"Hugging Face download of {repo_id} failed: {exc}. "
+            f"Check your network, or pre-place the model in {local_dir} "
+            f"({_SENTINEL} + config.json + tokenizer.json + vocabulary + "
+            "preprocessor_config.json)."
+        ) from exc
+
+
 def _resolve_local_dir(asset: ModelAsset, app_root: Path) -> Path:
     local = Path(asset.local_dir)
     return local if local.is_absolute() else (app_root / local)
@@ -126,28 +174,19 @@ def _extract_zip(zip_path: Path, dest: Path) -> None:
 
 
 def ensure_model(asset: ModelAsset, app_root: Path, *, log: Logger = print) -> Path:
-    """Guarantee the model exists locally, fetching it if needed. Returns its dir."""
+    """Guarantee the model exists locally, fetching it from HF if needed. Returns its dir."""
     local_dir = _resolve_local_dir(asset, app_root)
     if model_present(local_dir):
-        log(f"Model present at {local_dir}.")
+        log(f"Model present at {local_dir}; using it (no fetch).")
         return local_dir
 
-    log(f"Model not found at {local_dir}; fetching from {asset.source_url} ...")
-    if not asset.sha256:
-        log(
-            "WARNING: no sha256 in [model_asset]; skipping integrity verify "
-            "(set it before release)."
-        )
-
-    cache = app_root / ".cache" / Path(asset.source_url).name
-    download_resumable(asset.source_url, cache, expected_sha=asset.sha256)
-    log(f"Extracting {cache.name} -> {local_dir} ...")
-    _extract_zip(cache, local_dir)
+    log(f"Model not found at {local_dir}; fetching {asset.hf_repo} from Hugging Face ...")
+    fetch_from_hf(asset.hf_repo, local_dir)
 
     if not model_present(local_dir):
         raise ProvisionError(
-            f"Extraction did not produce {local_dir / _SENTINEL}. "
-            "Check the asset contents at [model_asset].source_url."
+            f"Hugging Face fetch of {asset.hf_repo} left no {local_dir / _SENTINEL}. "
+            "Check the repo id, or pre-place the model in the local dir."
         )
     log(f"Model ready at {local_dir}.")
     return local_dir

@@ -32,9 +32,10 @@ output_tokens_estimate = 2000
 
 [model_asset]
 name = "large-v3-int8_float16"
-source_url = "https://example.com/model.zip"
-sha256 = ""
+hf_repo = "Systran/faster-whisper-large-v3"
 local_dir = "models/large-v3-int8_float16"
+source_url = ""
+sha256 = ""
 """
 
 

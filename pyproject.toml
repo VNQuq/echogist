@@ -30,7 +30,7 @@ files = ["echogist", "tests"]
 # Runtime wheels are GPU/native and not installed in the dev/CI venv; they are
 # imported lazily inside functions, so stub-less imports are fine to ignore.
 [[tool.mypy.overrides]]
-module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "imageio_ffmpeg"]
+module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "imageio_ffmpeg", "huggingface_hub"]
 ignore_missing_imports = true
 
 # echogist.menu lands in T9; until then __main__ imports it lazily.

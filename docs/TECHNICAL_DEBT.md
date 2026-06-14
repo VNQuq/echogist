@@ -47,12 +47,31 @@ same un-downloadable model.
 
 **Why deferred.** Needs an architectural decision, not a patch.
 
-**When to open.** Now (eng-review). Candidate directions: (a) **bundle the model
-in the installer/dist** (largest, most reliable); (b) **self-hosted / region-
-reachable mirror with resumable download + retry/verify**; (c) configurable model
-source + offline mode (`HF_HUB_OFFLINE`). Manual download is rejected (automated
-app). Decision must also cover model choice vs size (large-v3 ~3 GB vs
-distil/medium) under the download constraint.
+**Decision (2026-06-15, operator).** Provisioning fetches the vanilla CT2
+`Systran/faster-whisper-large-v3` (float16 on disk) **direct from Hugging Face**
+via `huggingface_hub.snapshot_download` into `local_dir`; T3 loads it with
+`compute_type=int8_float16` (quantized at load — keep full large-v3, no
+downscaling, no fine-tune). Implemented in `model_asset.fetch_from_hf` /
+`ensure_model`; the pre-placed `local_dir/model.bin` escape hatch keeps it
+offline-safe. The earlier **self-host zip-from-URL path is retained but dormant**
+(`model_asset.py` "DORMANT" block + `[model_asset].source_url`/`sha256`), to be
+removed only after the gate below is green.
+
+**RETAINED RISK — this reverses the original "HF region-blocked" finding above.**
+That finding was confirmed on the user's real Windows machine (tiny stalled at
+~2.6 MB). The HF route is therefore unproven from the target region; the cold-run
+gate is exactly what retires (or refutes) it. If HF stalls on the live run, the
+dormant self-host path is the fallback — do NOT delete it until the gate passes.
+
+**Tradeoff (accepted, logged).** The model now arrives **outside**
+`requirements.lock` — integrity is HF's checksums, not our hash pins. Acceptable
+for a personal tool.
+
+**Acceptance gate (TD-1 closes when ALL pass).** On a cold Windows run, zero
+manual hosting: (a) HF download of Systran large-v3 succeeds; (b) it loads on the
+4060 with `compute_type=int8_float16` (`cuda devices: 1`, no cuDNN/cuBLAS DLL
+error); (c) a short clip transcribes (show the log). Then remove the dormant
+self-host fields + code.
 
 ### TD-3 — GPU provisioning the launcher must automate
 

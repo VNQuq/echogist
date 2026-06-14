@@ -35,12 +35,18 @@ safe_budget_fraction = 0.8
 output_tokens_estimate = 2000
 
 [model_asset]
-# Whisper model distribution (TD-1). The source URL is CONFIGURABLE on purpose:
-# a GitHub block from RU has an automated fallback — point this at a mirror you
-# host, or drop the files into local_dir, with no per-run manual step.
+# Whisper model distribution (TD-1). Provisioning fetches the CT2 large-v3 weights
+# from Hugging Face (float16 on disk); T3 loads them with compute_type=int8_float16
+# (quantized at load — the int8 speed/VRAM win). One-time provisioning fetch, not a
+# pipeline stage — the killswitch is unaffected.
 name = "large-v3-int8_float16"
-source_url = "https://github.com/OWNER/REPO/releases/download/models-v1/large-v3-int8_float16.zip"
-# sha256 of the downloaded asset for resume + integrity verify (filled at T2).
-sha256 = ""
-# Pre-placed local model directory escape hatch (app-relative or absolute).
+# The HF repo the model is pulled from (vanilla large-v3, no fine-tune).
+hf_repo = "Systran/faster-whisper-large-v3"
+# Pre-placed local model directory escape hatch (app-relative or absolute). If
+# local_dir/model.bin already exists, provisioning skips the fetch (offline-safe).
 local_dir = "models/large-v3-int8_float16"
+# Dormant self-host fields — kept until the HF path is gate-verified on a cold
+# Windows run, then removed (TD-1). The model arrives outside requirements.lock;
+# integrity is HF's checksums, an accepted tradeoff for a personal tool.
+source_url = ""
+sha256 = ""

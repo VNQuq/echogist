@@ -31,7 +31,7 @@ checkpointing — v1 is single-pass with a hard overflow guard.
 | Language | Python 3.11 (Windows ship, WSL dev) | manual prereq; launcher prints install steps if absent |
 | Transcription | `faster-whisper` 1.2 / `ctranslate2` 4.x | GPU, timestamped, auto-detect RU/EN |
 | GPU DLLs | `nvidia-cudnn-cu12` + `nvidia-cublas-cu12` (pip wheels) | `os.add_dll_directory(...)` BEFORE `import faster_whisper` |
-| Model | large-v3 CT2 **int8_float16** (~1.5 GB) | default tier; from GitHub Release asset + `HF_HUB_OFFLINE=1` (TD-1) |
+| Model | large-v3 CT2, **float16 on disk** loaded `int8_float16` | vanilla `Systran/faster-whisper-large-v3` from Hugging Face + pre-placed-dir escape hatch (TD-1) |
 | Summarization | `anthropic` SDK (>=0.109) | single structured call; `output_config.format` |
 | Token estimate | **local, language-aware** (bundled small tokenizer or per-script ratio) | offline; Cyrillic costs more tokens/char than Latin — estimate RU **high** |
 | PDF | `fpdf2` + embedded **DejaVuSans** | Cyrillic, no tofu (spike-verified) |
@@ -133,13 +133,17 @@ Return to menu; transcript already saved. No silent truncation.
    versions** (cudnn/cublas wheels matched to the exact ctranslate2 4.x build —
    version skew is the #1 silent first-run failure, outside-voice #4). Pin in a
    lockfile, not `-U`.
-4. **model fetch (TD-1)** — if the local model dir is absent, download large-v3
-   int8_float16 with **resume + checksum verify**. Source is a **configurable URL**
-   (default: the GitHub Release asset) and the launcher also **accepts a
-   pre-placed local model dir** as a drop-in escape hatch — so a GitHub block from
-   RU has an automated fallback (point the config at a mirror you host, or drop the
-   files in) without any per-run manual step (outside-voice #5). On success set
-   `HF_HUB_OFFLINE=1` for all runs. HF is never contacted.
+4. **model fetch (TD-1)** — if the local model dir is absent, fetch the vanilla CT2
+   `Systran/faster-whisper-large-v3` (float16 on disk) **from Hugging Face** via
+   `huggingface_hub.snapshot_download` into `local_dir`; T3 loads it with
+   `compute_type=int8_float16` (quantized at load — int8 speed/VRAM, full large-v3).
+   The launcher also **accepts a pre-placed local model dir** as a drop-in escape
+   hatch (`local_dir/model.bin` present → no fetch, offline-safe). The download is
+   decoupled from the CUDA stack (no ctranslate2 import) so the GPU preflight owns
+   those diagnostics. **Live risk (TD-1):** HF was region-throttled from RU/MSK; the
+   cold-run gate retires it, and the **dormant self-host zip path** is the fallback
+   until then. Tradeoff: the model arrives **outside `requirements.lock`** (HF's
+   checksums, not our hash pins) — accepted for a personal tool.
 5. **output dirs** — create `output/{audio,transcripts,summaries}`.
 6. **GPU preflight + DLLs** — register the `nvidia/*/bin` dirs via
    `os.add_dll_directory(...)` **before** importing `faster_whisper`, then run a
@@ -167,18 +171,18 @@ added at ratification.
   problem the design itself flagged; aligns with your "no manual workarounds"
   stance. Net: MP3 extract/convert just works on first run.
 - **Model default = large-v3 int8_float16** ✓ ratified (not float16, not distil).
-  int8_float16 is ~1.5 GB (fits GitHub's 2 GB per-asset limit), expected near-identical
-  RU quality, runs on the 4060. RU-quality of int8 is a **hypothesis** confirmed-or-
-  overturned by the TD-4 measurement run (§12.3 / T11); distil is excluded
-  (English-distilled, weak on RU).
+  Expected near-identical RU quality, runs on the 4060. RU-quality of int8 is a
+  **hypothesis** confirmed-or-overturned by the TD-4 measurement run (§12.3 / T11);
+  distil is excluded (English-distilled, weak on RU).
+  - **SUPERSEDED by the TD-1 HF decision (2026-06-15):** int8_float16 is now a
+    load-time `compute_type` on the **one float16 `model.bin`** pulled from HF, not a
+    separately-distributed ~1.5 GB artifact. The GitHub-2 GB-limit sizing reasoning
+    below is moot under HF and kept only as history.
   - **float16 fallback path (flagged):** if TD-4 shows int8 RU quality is not good
-    enough, the fallback is large-v3 CT2 **float16 (~3 GB)**. 3 GB **exceeds GitHub's
-    2 GB per-asset limit**, so float16 cannot ship as a single GitHub Release asset.
-    The fallback distribution is therefore: a **split/multi-part asset** reassembled
-    by `run.bat`, an **operator-hosted mirror**, or the **pre-placed model dir**
-    escape hatch — all already covered by the configurable-source-URL + pre-placed-dir
-    design (§5.4 / F14). No new architecture needed; just a heavier artifact. This is
-    the only reason the source must stay configurable rather than a hardcoded GitHub URL.
+    enough, the fallback is loading the same model `float16` (no re-download). The old
+    "3 GB exceeds GitHub's 2 GB asset limit → split-zip/mirror" contingency no longer
+    applies — HF serves the float16 weights directly, and the **pre-placed model dir**
+    (§5.4 / F14) remains the offline escape hatch.
 
 ---
 
@@ -192,14 +196,14 @@ added at ratification.
 | F4 | 429 / insufficient credit | unit (mock) | catch RateLimitError/billing | "retry from saved transcript later" |
 | F5 | Deprecated/unknown model | unit (mock 404) | catch NotFoundError | "pick another model in Settings" (no crash) |
 | F6 | Transcript over context budget | unit | overflow guard (§4) | clean "too long" message |
-| F7 | Model download fails/unreachable (TD-1) | unit | resumable retry + checksum | "model download failed, retry / check connection" |
+| F7 | Model download fails/unreachable (TD-1) | unit | HF fetch wrapped → ProvisionError; pre-placed-dir escape hatch | "HF download failed, check network / pre-place the model" |
 | F8 | cuDNN/CUDA load error / wheel skew / old driver | manual | GPU preflight (§5.6) catches before use | specific diagnostic (which DLL / driver), not a crash |
 | F9 | Title sanitization collision | unit | per-artifact numeric suffix | deduped filename |
 | F10 | Model returns no title | unit | fallback source-stem + date | named output, no crash |
 | F11 | ffmpeg binary missing/corrupt | unit | imageio-ffmpeg presence check | clear msg, never silently skip |
 | F12 | Interrupted mid-transcription | manual | no partial marker (accepted) | re-transcribe that file from scratch |
 | F13 | RENDER fails after a paid summarize call | unit | raw result saved as .json BEFORE render (§3) | re-render from saved .json; never re-pay |
-| F14 | Model source (GitHub) blocked from RU | manual | configurable source URL + pre-placed dir (§5.4) | point config at mirror / drop in files |
+| F14 | Model source (HF) throttled/blocked from RU | manual | pre-placed model dir escape hatch (§5.4); dormant self-host zip fallback | drop the model files into local_dir |
 
 **Critical-gap check:** none of F1-F14 is both untested AND unhandled AND silent.
 F12 is a known, accepted limitation (Whisper has no mid-file checkpoint), not a gap.
@@ -270,7 +274,7 @@ render). Reuse the patterns, not the spike code.
 Synthesized from this review. P1 blocks a working v1; P2 same-branch; P3 follow-up.
 
 - [ ] **T1 (P1)** — config — editable model/price config + settings (lang/format/tier/threshold), deprecated-model guidance (F5). Verify: load + bad-model path.
-- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`uv pip compile --universal --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch w/ resume+checksum + **configurable source URL + pre-placed-dir fallback** (F14), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
+- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`uv pip compile --universal --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch via **HF `snapshot_download` (Systran large-v3) + pre-placed-dir fallback** (F14; dormant self-host path retained until the cold-run gate), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
 - [ ] **T3 (P1)** — transcribe — faster-whisper GPU, DLL registration before import, timestamped autolang, save transcript; segment progress. Verify: real 1.5-2.5h file (TD-4).
 - [ ] **T4 (P1)** — extract — imageio-ffmpeg video→mp3 / audio→mp3, dedup naming (F9, F11). Verify: video+audio inputs.
 - [ ] **T5 (P1)** — guard — **local language-aware** token estimate (conservative-high) vs context budget, clean overflow stop (F6). Verify: under/over budget, RU vs EN ratio.
@@ -368,7 +372,9 @@ not a one-off terminal session.
 - **DoD gate.** `int8_float16` is "default-ratified" only when the harness shows
   (a) `realtime_factor ≥ <bar>` on the 4060 and (b) RU quality ≥ a **float16 control**
   run on the same RU clip. The harness runs **both** int8 and float16 once = the A/B
-  that either confirms the §6 default or triggers the float16 fallback. `<bar>` is the
+  that either confirms the §6 default or triggers the float16 fallback. Note: the A/B
+  is now a **`compute_type` flip on the one float16 `model.bin`** (int8_float16 vs
+  float16) — no second download, no second artifact (TD-1 HF decision). `<bar>` is the
   one number to set with the operator at T11 (suggested starting point: ≥ 1.5× real
   time, i.e. a 2 h video transcribes in under ~80 min — confirm against the real
   measured value, don't hardcode blind).
