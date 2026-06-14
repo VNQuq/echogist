@@ -2,7 +2,14 @@
 
 ## Identity
 
-<TBD>
+EchoGist: a single-`.bat` Windows console tool. Input is a local audio/video file
+or a saved transcript. Output is an MP3 track and/or a structured RU/EN summary
+(PDF default, Markdown optional). Transcription is local GPU Whisper; summarization
+is one cloud Anthropic call. No online sources, no logins, no history/analytics.
+Personal-use, Windows-only; developed in WSL2.
+
+The authoritative build spec is `docs/V1_ENGINEERING_PLAN.md`. Do not deviate from
+it without operator approval.
 
 ## Hard Constraints
 
@@ -10,10 +17,31 @@
 
 - **No destructive shell commands without explicit operator approval.**
   `rm -rf`, `git reset --hard`, `git clean -fd`, DDL `DROP` statements.
+- **API key from `ANTHROPIC_API_KEY` env or local config file only. Never in code,
+  never committed.**
+- **Killswitch.** Live LLM calls are forbidden without a killswitch. `SUMMARIZE` is
+  the only network stage; every stage left of it (incl. the token GUARD and cost
+  estimate) is local and offline — no `count_tokens` or any network call. The
+  pipeline must run end-to-end in CI against a stub summarizer.
+- **Every push to `main` passes CI: ruff + mypy + tests.** No exceptions.
+- **No manual workarounds.** Provisioning, fetching, and recovery must be automated
+  and idempotent.
 
 ## Principles
 
-<TBD>
+- **Artifact-based recovery, not a job engine.** Durable state = the saved artifacts
+  (`output/{audio,transcripts,summaries}`). The saved transcript is the checkpoint.
+  No `job.json`, no history layer.
+- **Pure stages.** Each pipeline stage is pure over an in-memory object so the whole
+  pipeline is unit-testable with `SUMMARIZE` mocked.
+- **Single-pass v1.** Summarize the whole transcript in one structured call; a hard
+  overflow guard stops cleanly above budget. No chunking until a real input trips it.
+- **Config is data, not code.** Model IDs, prices, model source URL, settings are
+  editable without a code change.
+- **Fail loud, return to menu.** Every error path = human-readable message + clean
+  return to the main menu; never a crash, never silent truncation or skip.
+- **Estimate Cyrillic high.** The local token estimate is language-aware and biased
+  high so an over-long transcript is always caught.
 
 ## State
 
@@ -34,6 +62,7 @@ The File Map below is a routing table, not a preload list.
 | Task | Read |
 |------|------|
 | Current priorities / blockers | `docs/CURRENT_CONTEXT.md` |
+| Implementation (architecture, stack, tasks, tests) | `docs/V1_ENGINEERING_PLAN.md` |
 | Active technical debt | `docs/TECHNICAL_DEBT.md` |
 
 ## State Update Protocol
@@ -58,4 +87,5 @@ Do not skip review gates for: DB, LLM prompts, evaluation, safety, CI/deploy.
 When documents conflict:
 1. Explicit operator instruction in current session
 2. This CLAUDE.md (guardrails take precedence over all docs)
-3. `docs/CURRENT_CONTEXT.md`
+3. `docs/V1_ENGINEERING_PLAN.md` (locked build spec — authoritative for architecture/stack/scope)
+4. `docs/CURRENT_CONTEXT.md` (live status — authoritative for priorities/blockers)
