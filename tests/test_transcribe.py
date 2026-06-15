@@ -185,3 +185,94 @@ def test_transcribe_missing_backend_fails_loud(
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
     with pytest.raises(TranscribeError, match="faster-whisper is not installed"):
         transcribe.transcribe(audio, tmp_path / "model")
+
+
+def _install_fake_whisper(monkeypatch: pytest.MonkeyPatch, model_cls: type) -> None:
+    fake_mod = types.ModuleType("faster_whisper")
+    fake_mod.WhisperModel = model_cls  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_mod)
+
+
+def test_transcribe_model_load_failure_is_diagnosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A cuDNN/cuBLAS load error must surface gpu.diagnose_import_error's F8 message,
+    # not a raw exception — this is the #1 silent first-run failure (TD-3).
+    class _CudnnFailModel:
+        def __init__(self, model_dir: str, device: str, compute_type: str) -> None:
+            raise RuntimeError("Unable to load libcudnn_ops.so")
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"x")
+    _install_fake_whisper(monkeypatch, _CudnnFailModel)
+    with pytest.raises(TranscribeError, match="cuDNN failed to load"):
+        transcribe.transcribe(audio, tmp_path / "model", log=lambda _m: None)
+
+
+def test_transcribe_midstream_failure_fails_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Decoding happens lazily inside the segment loop; a blow-up there must become a
+    # recoverable TranscribeError (F12: the partial is discarded, re-transcribe).
+    def _raising_stream() -> Iterator[_FakeRawSegment]:
+        yield _FakeRawSegment(0.0, 1.0, "ok so far")
+        raise RuntimeError("decoder blew up mid-file")
+
+    class _MidStreamFailModel:
+        def __init__(self, model_dir: str, device: str, compute_type: str) -> None:
+            pass
+
+        def transcribe(
+            self, audio_path: str, language: str | None = None
+        ) -> tuple[Iterator[_FakeRawSegment], _FakeInfo]:
+            return _raising_stream(), _FakeInfo()
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"x")
+    _install_fake_whisper(monkeypatch, _MidStreamFailModel)
+    with pytest.raises(TranscribeError, match="Transcription failed"):
+        transcribe.transcribe(audio, tmp_path / "model", log=lambda _m: None)
+
+
+def test_transcribe_no_speech_empty_info(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No detected language + zero duration: language logs 'unknown', the per-segment
+    # progress branch (total > 0) is skipped, and the result is a valid empty Transcript.
+    class _EmptyInfo:
+        language = ""
+        duration = 0.0
+
+    class _NoSpeechModel:
+        def __init__(self, model_dir: str, device: str, compute_type: str) -> None:
+            pass
+
+        def transcribe(
+            self, audio_path: str, language: str | None = None
+        ) -> tuple[Iterator[_FakeRawSegment], _EmptyInfo]:
+            return iter([]), _EmptyInfo()
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"x")
+    _install_fake_whisper(monkeypatch, _NoSpeechModel)
+    tr = transcribe.transcribe(audio, tmp_path / "model", log=lambda _m: None)
+    assert tr.language == ""
+    assert tr.duration == 0.0
+    assert tr.segments == ()
+
+
+def test_transcribe_uses_int8_float16_cuda_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lock the §6/TD-4 defaults so a regression to plain float16 (or cpu) is caught.
+    captured: dict[str, tuple[str, str, str]] = {}
+
+    class _CapturingModel(_FakeWhisperModel):
+        def __init__(self, model_dir: str, device: str, compute_type: str) -> None:
+            captured["args"] = (model_dir, device, compute_type)
+            super().__init__(model_dir, device, compute_type)
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"x")
+    _install_fake_whisper(monkeypatch, _CapturingModel)
+    transcribe.transcribe(audio, tmp_path / "model", log=lambda _m: None)
+    assert captured["args"][1] == "cuda"
+    assert captured["args"][2] == "int8_float16"

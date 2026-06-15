@@ -25,14 +25,9 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from . import gpu
+from . import gpu, naming
 
 Logger = Callable[[str], object]
-
-# Windows-illegal filename characters (spec §7). The transcript stem usually
-# comes from a real filename and is already legal, but a typed/odd source path
-# could carry one of these, so strip them before building the artifact name.
-_ILLEGAL_CHARS = '\\/:*?"<>|'
 
 
 class TranscribeError(Exception):
@@ -90,24 +85,6 @@ def render_transcript(transcript: Transcript) -> str:
     return "\n".join(f"[{format_timecode(seg.start)}] {seg.text}" for seg in transcript.segments)
 
 
-def _sanitize_stem(stem: str) -> str:
-    cleaned = "".join("-" if ch in _ILLEGAL_CHARS else ch for ch in stem)
-    # Trim padding AND the dashes left by leading/trailing illegal chars, so an
-    # all-illegal stem ("///") falls back rather than becoming "----".
-    cleaned = cleaned.strip().strip("-").strip()
-    return cleaned or "transcript"
-
-
-def _dedup_path(directory: Path, base: str) -> Path:
-    """``base.txt`` if free, else ``base-2.txt``, ``base-3.txt`` ... (F9/F11)."""
-    candidate = directory / f"{base}.txt"
-    counter = 2
-    while candidate.exists():
-        candidate = directory / f"{base}-{counter}.txt"
-        counter += 1
-    return candidate
-
-
 def save_transcript(
     transcript: Transcript,
     out_dir: Path,
@@ -118,12 +95,13 @@ def save_transcript(
     """Write the rendered transcript to ``out_dir/<date>-<stem>.txt`` (deduped).
 
     The saved file is the recovery checkpoint: option 2 of the menu re-summarizes
-    it without re-transcribing. Returns the path written.
+    it without re-transcribing. Returns the path written. Naming (illegal-char
+    strip + ``-2``/``-3`` dedup, F9) is the shared :mod:`echogist.naming` rule.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = (today or date.today()).isoformat()
-    base = f"{stamp}-{_sanitize_stem(source_stem)}"
-    path = _dedup_path(out_dir, base)
+    path = naming.dated_artifact_path(
+        out_dir, source_stem, ".txt", fallback="transcript", today=today
+    )
     path.write_text(render_transcript(transcript) + "\n", encoding="utf-8")
     return path
 
@@ -152,7 +130,11 @@ def transcribe(
     if not audio_path.is_file():
         raise TranscribeError(f"Audio file not found: {audio_path}.")
 
-    gpu.register_cuda_libraries()
+    try:
+        gpu.register_cuda_libraries()
+    except Exception as exc:  # noqa: BLE001 - add_dll_directory can raise on a stale/odd env
+        raise TranscribeError(gpu.diagnose_import_error(exc)) from exc
+
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:  # the GPU wheels are installed by run.bat

@@ -33,14 +33,26 @@ rule dropped). Gate holds: every push to `main` passes ruff + mypy + tests.
   checkpoint, `save_transcript` → `output/transcripts/<date>-<stem>.txt` with `-2/-3`
   dedup) + lazy-import GPU adapter `transcribe()` (`int8_float16`, autolang,
   segment-progress, fail-loud `TranscribeError`). **Gate (c) PASSED on the 4060** (WSL,
-  model via `/mnt/c`): autolang `en`, verbatim timecoded JFK segment. ruff + mypy +
-  **63 tests** green.
+  model via `/mnt/c`): autolang `en`, verbatim timecoded JFK segment.
+- **T4 — extract** (`echogist/extract.py` + `echogist/naming.py`, uncommitted): F9 naming
+  promoted into shared `naming.py` (transcribe now routes through it). `extract_audio()`
+  runs the bundled ffmpeg (`-vn -acodec libmp3lame -q:a 2 -f mp3`) → **atomic** `.part`→
+  `os.replace` into `output/audio/<date>-<stem>.mp3`, deduped; injectable `ffmpeg_exe`+
+  `runner` seams; `is_mp3()` predicate; F11 binary guard; fail-loud `ExtractError`.
+  Multi-agent review applied (3 agents): utf-8 stderr decode (Windows crash), atomic
+  partial-mp3 cleanup, `-nostdin` hang guard, + 5 new T3/T4 failure-path tests (model-load
+  F8, mid-stream, no-speech, int8_float16 default lock). Real-ffmpeg smoke green (cyrillic+`:`
+  mkv→mono mp3, no video, no `.part`). ruff + mypy + **90 tests** (was 63).
 
 **Next:**
 
-- **T4 — extract**: `imageio-ffmpeg` video→mp3 / non-mp3 audio→mp3, dedup naming
-  (F9/F11; reuse/mirror `_dedup_path`/`_sanitize_stem` from `transcribe.py`).
-- Then T5 guard → T6 summarize → T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
+- **T5 — guard**: local language-aware token estimate vs `safe_budget(model)`; clean
+  overflow stop (§4); NO `count_tokens` (killswitch). Reads `Transcript.text`.
+- Then T6 summarize → T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
+- **T7 naming note (from review):** summaries are `<meaningful-title>` (NO date prefix),
+  need title truncation + base-dedup across `.pdf`/`.md`/`.json` together. Use
+  `naming.sanitize_stem`/`dedup_path` primitives directly — `dated_artifact_path` is
+  for the dated audio/transcript artifacts only, not T7. Add the two helpers then (YAGNI now).
 - **TD-4 (T11)**: realtime_factor + int8-vs-float16 RU quality via committed
   `scripts/measure_model.py` (now unblocked — model access solved).
 
