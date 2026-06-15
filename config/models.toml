@@ -34,6 +34,38 @@ safe_budget_fraction = 0.8
 # of input (plan §3, outside-voice #3).
 output_tokens_estimate = 2000
 
+[summarize]
+# The ONE network stage (plan §3, T6). DATA, not code: edit the prompt TEXT here
+# without touching Python (CLAUDE.md "Config is data"). The tool-use SCHEMA (the
+# title+sections field contract) stays in echogist/summarize.py so the prompt and
+# the parser can't drift. The one substitution token, {language}, is replaced at
+# call time with the target summary language (Russian / English).
+#
+# max_output_tokens is the API's hard max_tokens cap. Kept SEPARATE from and larger
+# than [guard].output_tokens_estimate (the ~2K cost projection): a flush cap would
+# truncate a long multi-section RU summary into invalid tool-use JSON and waste the
+# paid call, so it carries real headroom for Cyrillic tokenization.
+max_output_tokens = 4096
+system_prompt = """
+You are a careful summarizer. Read the timestamped transcript the user provides and \
+produce ONE structured summary written entirely in {language}.
+
+Call the emit_summary tool exactly once, filling every field:
+- title: a short, specific, human-meaningful title for the material, in {language}. \
+No file extension, no date, no surrounding quotes.
+- overview: 2-4 sentences stating what the material is and what it covers.
+- key_takeaways: the most important concrete points, each a single sentence.
+- section_timecodes: the major sections in order. For each, copy a timecode that \
+ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title. \
+Never invent or interpolate a timecode that is not present in the transcript; if you \
+are unsure, omit the section rather than guess.
+- recurring_themes: ideas, motifs, or threads that come up repeatedly.
+- core_idea: 1-2 sentences naming the single central point a reader should leave with.
+
+Be faithful to the transcript and add no facts that are not in it. Write naturally in \
+{language}, not a word-for-word translation.
+"""
+
 [model_asset]
 # Whisper model distribution (TD-1). Provisioning fetches the CT2 large-v3 weights
 # from Hugging Face (float16 on disk); T3 loads them with compute_type=int8_float16

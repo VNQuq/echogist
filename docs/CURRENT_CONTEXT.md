@@ -51,15 +51,27 @@ rule dropped). Gate holds: every push to `main` passes ruff + mypy + tests.
   Rates are tunable params w/ defaults. T8 reuses `est_input_tokens`. ruff + mypy +
   **102 tests** (was 90).
 
+- **T6 — summarize** (`echogist/summarize.py` + `config.SummarizeConfig`, uncommitted): the
+  ONE network stage / killswitch boundary. `/plan-eng-review` ratified 3 decisions (logged):
+  forced anthropic **tool-use** (schema in CODE) → `Summary` (title/overview/key_takeaways/
+  section_timecodes/recurring_themes/core_idea/language); prompt TEXT in `models.toml
+  [summarize]` (data), `{language}` injected — **prompt=data, schema=code**. `max_output_tokens`
+  (4096) is a SEPARATE cap from the ~2K cost projection: truncation (`stop_reason==max_tokens`)
+  fails loud, never a half-summary. Lazy `import anthropic` behind injectable `caller` seam →
+  module imports offline (AST-tested); error map F2/F4/F5 + bad-key; F10 title fallback
+  (source-stem+date); F13 `save_raw_result()` → `output/summaries/<title>.json` (no date prefix)
+  BEFORE render; cost from `response.usage` (no `count_tokens`). ruff+mypy+**128 tests** (was 102).
+
 **Next:**
 
-- **T6 — summarize**: the ONE network stage (anthropic). One structured call →
-  title + sections; killswitch-mocked in CI; raw `.json` saved BEFORE render (F13).
-- Then T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
-- **T7 naming note (from review):** summaries are `<meaningful-title>` (NO date prefix),
-  need title truncation + base-dedup across `.pdf`/`.md`/`.json` together. Use
-  `naming.sanitize_stem`/`dedup_path` primitives directly — `dated_artifact_path` is
-  for the dated audio/transcript artifacts only, not T7. Add the two helpers then (YAGNI now).
+- **T7 render** (pdf default / md, Cyrillic+DejaVu) + **T8 cost** (reuse guard est +
+  `response.usage` actual) → T9 menu → T10 eval / T11 measure.
+- **T7 naming note:** summaries are `<title>` (NO date prefix); need title truncation +
+  base-dedup across `.json`/`.pdf`/`.md` **together** (T6 dedups the `.json` alone). Use
+  `naming.sanitize_stem`/`dedup_path` directly — `dated_artifact_path` is dated-artifacts only.
+  Add the two helpers then (YAGNI now).
+- **T6 has no live-API smoke** (killswitch CI only) — first real call is the operator run /
+  T10 prompt eval; that is the eval gate, not a unit test.
 - **TD-4 (T11)**: realtime_factor + int8-vs-float16 RU quality via committed
   `scripts/measure_model.py` (now unblocked — model access solved).
 

@@ -30,6 +30,10 @@ price_out_per_mtok = 5.0
 safe_budget_fraction = 0.8
 output_tokens_estimate = 2000
 
+[summarize]
+max_output_tokens = 4096
+system_prompt = "Summarize in {language}. Call emit_summary once."
+
 [model_asset]
 name = "large-v3-int8_float16"
 hf_repo = "Systran/faster-whisper-large-v3"
@@ -110,6 +114,27 @@ def test_missing_guard_errors(tmp_path: Path) -> None:
     text = VALID_MODELS_TOML.replace("[guard]", "[guardx]")
     with pytest.raises(ConfigError, match=r"\[guard\]"):
         load_model_config(_write(tmp_path / "models.toml", text))
+
+
+def test_missing_summarize_errors(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace("[summarize]", "[summarizex]")
+    with pytest.raises(ConfigError, match=r"\[summarize\]"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
+def test_blank_system_prompt_errors(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace(
+        'system_prompt = "Summarize in {language}. Call emit_summary once."',
+        'system_prompt = "   "',
+    )
+    with pytest.raises(ConfigError, match="non-empty string"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
+def test_shipped_summarize_config_loads() -> None:
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.summarize.max_output_tokens == 4096
+    assert "{language}" in cfg.summarize.system_prompt
 
 
 # --------------------------------------------------------------------------- #

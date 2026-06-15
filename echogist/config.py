@@ -64,6 +64,27 @@ class GuardConfig:
 
 
 @dataclass(frozen=True)
+class SummarizeConfig:
+    """The one network stage's tunables (plan §3, T6). DATA, not code.
+
+    ``system_prompt`` is the prompt TEXT — editable data per "Config is data"
+    (CLAUDE.md). It carries one substitution token, ``{language}``, replaced at
+    call time with the target summary language. The tool-use SCHEMA (the
+    title+sections field contract the parser depends on) lives in code, in
+    :mod:`echogist.summarize`, so the prompt and the schema cannot drift apart.
+
+    ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately
+    SEPARATE from, and larger than, ``GuardConfig.output_tokens_estimate`` (the
+    cost projection). A flush cap truncates a long multi-section RU summary into
+    invalid tool-use JSON and wastes the paid call, so the cap carries real
+    headroom for Cyrillic tokenization.
+    """
+
+    system_prompt: str
+    max_output_tokens: int
+
+
+@dataclass(frozen=True)
 class ModelAsset:
     """Whisper model distribution (TD-1). Fetched from Hugging Face by repo id; a
     pre-placed ``local_dir`` is the offline escape hatch."""
@@ -79,6 +100,7 @@ class ModelConfig:
 
     tiers: dict[str, ModelTier]
     guard: GuardConfig
+    summarize: SummarizeConfig
     asset: ModelAsset
 
     def tier(self, name: str) -> ModelTier:
@@ -217,6 +239,25 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         ),
     )
 
+    summarize_table = raw.get("summarize")
+    if not isinstance(summarize_table, dict):
+        raise ConfigError(f"{_MODELS_FILENAME}: missing [summarize] table.")
+    system_prompt = _require(summarize_table, "system_prompt", "[summarize]")
+    if not isinstance(system_prompt, str) or not system_prompt.strip():
+        raise ConfigError(
+            f"{_MODELS_FILENAME}: 'system_prompt' in [summarize] must be a non-empty string."
+        )
+    summarize = SummarizeConfig(
+        system_prompt=system_prompt,
+        max_output_tokens=int(
+            _as_positive_number(
+                _require(summarize_table, "max_output_tokens", "[summarize]"),
+                "max_output_tokens",
+                "[summarize]",
+            )
+        ),
+    )
+
     asset_table = raw.get("model_asset")
     if not isinstance(asset_table, dict):
         raise ConfigError(f"{_MODELS_FILENAME}: missing [model_asset] table.")
@@ -226,7 +267,7 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         local_dir=str(_require(asset_table, "local_dir", "[model_asset]")),
     )
 
-    return ModelConfig(tiers=tiers, guard=guard, asset=asset)
+    return ModelConfig(tiers=tiers, guard=guard, summarize=summarize, asset=asset)
 
 
 # --------------------------------------------------------------------------- #
