@@ -140,10 +140,11 @@ Return to menu; transcript already saved. No silent truncation.
    The launcher also **accepts a pre-placed local model dir** as a drop-in escape
    hatch (`local_dir/model.bin` present → no fetch, offline-safe). The download is
    decoupled from the CUDA stack (no ctranslate2 import) so the GPU preflight owns
-   those diagnostics. **Live risk (TD-1):** HF was region-throttled from RU/MSK; the
-   cold-run gate retires it, and the **dormant self-host zip path** is the fallback
-   until then. Tradeoff: the model arrives **outside `requirements.lock`** (HF's
-   checksums, not our hash pins) — accepted for a personal tool.
+   those diagnostics. **TD-1 (resolved):** the download stall was the **Xet transport**,
+   not the region — `fetch_from_hf` forces `HF_HUB_DISABLE_XET` to take the classic LFS
+   path (gate a green). The fallback if HF ever fails is the pre-placed dir (browser-
+   download the files, drop them in `local_dir`). Tradeoff: the model arrives **outside
+   `requirements.lock`** (HF's checksums, not our hash pins) — accepted for a personal tool.
 5. **output dirs** — create `output/{audio,transcripts,summaries}`.
 6. **GPU preflight + DLLs** — register the `nvidia/*/bin` dirs via
    `os.add_dll_directory(...)` **before** importing `faster_whisper`, then run a
@@ -203,7 +204,7 @@ added at ratification.
 | F11 | ffmpeg binary missing/corrupt | unit | imageio-ffmpeg presence check | clear msg, never silently skip |
 | F12 | Interrupted mid-transcription | manual | no partial marker (accepted) | re-transcribe that file from scratch |
 | F13 | RENDER fails after a paid summarize call | unit | raw result saved as .json BEFORE render (§3) | re-render from saved .json; never re-pay |
-| F14 | Model source (HF) throttled/blocked from RU | manual | pre-placed model dir escape hatch (§5.4); dormant self-host zip fallback | drop the model files into local_dir |
+| F14 | Model download stalls (Xet transport) | auto+manual | `HF_HUB_DISABLE_XET` forces classic LFS path (§5.4); pre-placed model dir escape hatch | drop the model files into local_dir |
 
 **Critical-gap check:** none of F1-F14 is both untested AND unhandled AND silent.
 F12 is a known, accepted limitation (Whisper has no mid-file checkpoint), not a gap.
@@ -274,7 +275,7 @@ render). Reuse the patterns, not the spike code.
 Synthesized from this review. P1 blocks a working v1; P2 same-branch; P3 follow-up.
 
 - [ ] **T1 (P1)** — config — editable model/price config + settings (lang/format/tier/threshold), deprecated-model guidance (F5). Verify: load + bad-model path.
-- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`uv pip compile --universal --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch via **HF `snapshot_download` (Systran large-v3) + pre-placed-dir fallback** (F14; dormant self-host path retained until the cold-run gate), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
+- [ ] **T2 (P1)** — launcher — `run.bat` provisioning: venv, **hash-pinned lockfile** deps (`uv pip compile --universal --generate-hashes`; `pip install --require-hashes`; ctranslate2↔cudnn major pin documented — §12.2), model fetch via **HF `snapshot_download` (Systran large-v3, `HF_HUB_DISABLE_XET`) + pre-placed-dir fallback** (F14), output dirs, key check, **GPU preflight diagnostic** (F8), cmd-only (§5/TD-3). Verify: cold Windows run.
 - [ ] **T3 (P1)** — transcribe — faster-whisper GPU, DLL registration before import, timestamped autolang, save transcript; segment progress. Verify: real 1.5-2.5h file (TD-4).
 - [ ] **T4 (P1)** — extract — imageio-ffmpeg video→mp3 / audio→mp3, dedup naming (F9, F11). Verify: video+audio inputs.
 - [ ] **T5 (P1)** — guard — **local language-aware** token estimate (conservative-high) vs context budget, clean overflow stop (F6). Verify: under/over budget, RU vs EN ratio.

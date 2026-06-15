@@ -34,16 +34,31 @@ has a **deadline** or **trigger** for closure.
 > online/link ingestion was dropped from scope, so TD-2 is now obsolete (see Closed
 > debts) and TD-3 no longer provisions deno.**
 
-### TD-1 — Whisper model cannot be downloaded at runtime (HF region-blocked)
+### TD-1 — Whisper model runtime download (root cause: Xet transport, not region)
 
-Severity: HIGH · Created 2026-06-14 · Trigger: resolve in `/plan-eng-review` before any transcription code · SoT: this file
+Severity: MEDIUM (was HIGH) · Created 2026-06-14 · Trigger: gate (b)+(c) on the live 4060 run · SoT: this file
 
 **What.** `faster-whisper`/`ctranslate2` pull the model from HuggingFace on first
-use. From the target region (RU/MSK) HF is throttled to a crawl and the standard
-mirror (`hf-mirror.com`) was unreachable too. Confirmed in BOTH the dev sandbox
-and on the user's real Windows machine: `tiny` (~75 MB) stalled at ~2.6 MB and did
-not advance; `large-v3` is ~3 GB. The CPU `int8` fallback is moot — it needs the
-same un-downloadable model.
+use, and `snapshot_download` stalled — `tiny` (~75 MB) hung at ~2.6 MB, `large-v3`
+(~3 GB) hung after its small files. The original read was "HF region-blocked from
+RU/MSK". **That read was wrong** (2026-06-15).
+
+**Root cause (2026-06-15, evidence-backed).** Not the region — the **Xet transport**.
+`requirements.lock` pins `huggingface-hub==1.19.0` + `hf-xet==1.5.1`; in hf_hub 1.x,
+if `hf_xet` is installed it is used automatically, routing large-file transfers
+through the Xet CAS hosts (`cas-bridge` / `transfer.xethub.hf.co`). Those hosts
+stall on the operator's route; plain `huggingface.co` (the classic LFS path a
+browser uses) works. Evidence: a browser download of `model.bin` over the system
+VPN completed fine; from WSL (no VPN) the Xet data hosts timed out; and with
+`HF_HUB_DISABLE_XET=1` the Python `snapshot_download` pulled `model.bin` at a steady
+~10.5 MB/s with no stall. This is a known hf_xet bug class (xet-core#446,
+huggingface_hub#3440), not a regional throttle.
+
+**Fix (landed).** `model_asset.fetch_from_hf` sets `HF_HUB_DISABLE_XET` (via
+`os.environ.setdefault`, so an operator on a Xet-reachable route can opt back in
+with `HF_HUB_DISABLE_XET=0`) **before** importing huggingface_hub, forcing the
+classic LFS path. Covered by `test_fetch_from_hf_disables_xet` +
+`test_fetch_from_hf_respects_explicit_xet_optin`. Ruff + mypy + 48 tests green.
 
 **Why deferred.** Needs an architectural decision, not a patch.
 
@@ -53,25 +68,23 @@ via `huggingface_hub.snapshot_download` into `local_dir`; T3 loads it with
 `compute_type=int8_float16` (quantized at load — keep full large-v3, no
 downscaling, no fine-tune). Implemented in `model_asset.fetch_from_hf` /
 `ensure_model`; the pre-placed `local_dir/model.bin` escape hatch keeps it
-offline-safe. The earlier **self-host zip-from-URL path is retained but dormant**
-(`model_asset.py` "DORMANT" block + `[model_asset].source_url`/`sha256`), to be
-removed only after the gate below is green.
+offline-safe (the operator's actual fallback: browser-download the 5 files, drop
+them in `local_dir`). The earlier self-host zip-from-URL path was **removed**
+(2026-06-15) once gate (a) went green — `download_resumable`/`verify_checksum`/
+`_extract_zip` + `[model_asset].source_url`/`sha256` are gone; `model_asset.py`
+dropped 193→108 lines.
 
-**RETAINED RISK — this reverses the original "HF region-blocked" finding above.**
-That finding was confirmed on the user's real Windows machine (tiny stalled at
-~2.6 MB). The HF route is therefore unproven from the target region; the cold-run
-gate is exactly what retires (or refutes) it. If HF stalls on the live run, the
-dormant self-host path is the fallback — do NOT delete it until the gate passes.
+**Tradeoff (accepted, logged).** The model arrives **outside** `requirements.lock`
+— integrity is HF's checksums, not our hash pins. Acceptable for a personal tool.
 
-**Tradeoff (accepted, logged).** The model now arrives **outside**
-`requirements.lock` — integrity is HF's checksums, not our hash pins. Acceptable
-for a personal tool.
-
-**Acceptance gate (TD-1 closes when ALL pass).** On a cold Windows run, zero
-manual hosting: (a) HF download of Systran large-v3 succeeds; (b) it loads on the
-4060 with `compute_type=int8_float16` (`cuda devices: 1`, no cuDNN/cuBLAS DLL
-error); (c) a short clip transcribes (show the log). Then remove the dormant
-self-host fields + code.
+**Acceptance gate (TD-1 closes when ALL pass).** On the operator's Windows + 4060:
+(a) HF download of Systran large-v3 succeeds with zero manual hosting — **✅ PASSED
+2026-06-15** (Xet disabled, classic path, ~10.5 MB/s, no stall); (b) it loads with
+`compute_type=int8_float16` on the 4060 — **✅ PASSED 2026-06-15** (`WhisperModel(...)`
+printed `ok`, no cuDNN/cuBLAS DLL error; this also exercised the F8 DLL shim); (c) a
+short clip transcribes (T3) — **pending**, closes with T3. The pre-placed
+`local_dir/model.bin` escape hatch stays (operator used it, offline-safe) and is
+now the sole fallback if HF ever fails.
 
 ### TD-3 — GPU provisioning the launcher must automate
 
@@ -87,6 +100,10 @@ automatically, idempotently — cuDNN/cuBLAS DLLs plus the model (TD-1). Must be
 cmd/`.bat` (PowerShell `.ps1` is blocked by execution policy by default — hit twice
 in the spike). **Update (eng-review):** deno provisioning is removed — it was only
 needed for yt-dlp's JS challenge, and online ingestion was dropped from scope.
+**Update (2026-06-15, gate b):** a second skew landmine surfaced and is fixed —
+`ctranslate2` 4.5 imports `pkg_resources` but declares only unbounded `setuptools`;
+setuptools 81 removed `pkg_resources`, so the resolver's latest (82) broke
+`import ctranslate2`. Pinned `setuptools<81` in `requirements.in` (lock → 80.10.2).
 
 **Why deferred.** Provisioning belongs in the launcher/installer design.
 

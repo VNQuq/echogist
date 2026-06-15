@@ -44,9 +44,6 @@ name = "large-v3-int8_float16"
 hf_repo = "Systran/faster-whisper-large-v3"
 # Pre-placed local model directory escape hatch (app-relative or absolute). If
 # local_dir/model.bin already exists, provisioning skips the fetch (offline-safe).
+# The model arrives outside requirements.lock; integrity is HF's checksums, an
+# accepted tradeoff for a personal tool.
 local_dir = "models/large-v3-int8_float16"
-# Dormant self-host fields — kept until the HF path is gate-verified on a cold
-# Windows run, then removed (TD-1). The model arrives outside requirements.lock;
-# integrity is HF's checksums, an accepted tradeoff for a personal tool.
-source_url = ""
-sha256 = ""

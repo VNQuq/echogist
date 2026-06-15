@@ -34,8 +34,6 @@ output_tokens_estimate = 2000
 name = "large-v3-int8_float16"
 hf_repo = "Systran/faster-whisper-large-v3"
 local_dir = "models/large-v3-int8_float16"
-source_url = ""
-sha256 = ""
 """
 
 
