@@ -104,6 +104,13 @@ needed for yt-dlp's JS challenge, and online ingestion was dropped from scope.
 `ctranslate2` 4.5 imports `pkg_resources` but declares only unbounded `setuptools`;
 setuptools 81 removed `pkg_resources`, so the resolver's latest (82) broke
 `import ctranslate2`. Pinned `setuptools<81` in `requirements.in` (lock → 80.10.2).
+**Update (2026-06-15, dep hygiene, `0b350bb`):** the `setuptools<81` shim is **removed** —
+`ctranslate2` bumped 4.5→4.8, which replaced `import pkg_resources` with
+`importlib.resources`, so setuptools rides latest (82.0.1) again. This exercised the
+cuDNN-ABI tripwire (the one pin that matters): CHANGELOG confirmed no cuDNN-major change
+4.5→4.8, and the bump was verified on a verify branch (`deps/ct2-4.8`) via a cold
+`run.bat` `--require-hashes` install + int8_float16 GPU smoke on the 4060 **before**
+fast-forwarding to `main`. Other runtime deps were already latest.
 
 **Why deferred.** Provisioning belongs in the launcher/installer design.
 

@@ -53,9 +53,15 @@ rule dropped). Gate still holds: every push to `main` passes ruff + mypy + tests
   `model_asset.py` 193→108 lines. Pre-placed `local_dir` escape hatch stays as the sole
   fallback. ruff + mypy + **48 tests** green. Gate (a) HF download **PASSED**; gate (b)
   `int8_float16` load on the 4060 **PASSED** (`WhisperModel(...)` → `ok`, no DLL error).
-- **setuptools skew fixed (gate b landmine):** `ctranslate2` 4.5 imports `pkg_resources`,
-  which setuptools 81 removed → resolver's 82 broke `import ctranslate2`. Pinned
-  `setuptools<81` in `requirements.in`; lock regenerated (→ 80.10.2, hash-pinned).
+- **setuptools skew fixed → then root-caused away (dep hygiene, `0b350bb`).** The gate-b
+  landmine was `ctranslate2` 4.5 importing `pkg_resources` (setuptools 81 removed it).
+  First patched with `setuptools<81`; then resolved properly by bumping `ctranslate2`
+  **4.5→4.8** (4.8 switched to `importlib.resources`, no `pkg_resources`), so the shim is
+  **gone** and setuptools rides latest (82.0.1). cuDNN major unchanged (still 9 per
+  CHANGELOG 4.5→4.8); existing `cudnn==9.*`/`cublas==12.*` pins already covered it. The
+  cuDNN-ABI tripwire was honored: cold `run.bat` install under `--require-hashes` +
+  int8_float16 GPU smoke **both re-verified on the 4060** before the bump landed on `main`.
+  All other deps were already latest. ruff + mypy + 48 tests green.
 
 **Next:**
 
