@@ -24,13 +24,6 @@ anthropic>=0.109
 # NEVER bump ctranslate2 with `pip install -U` on its own, and never bump cudnn/cublas
 # independently. Bumping = re-run scripts/lock-deps, then a Windows cold run + the
 # §12.3 GPU smoke BEFORE committing the new lock. This comment is the skew tripwire.
-ctranslate2==4.5.*
+ctranslate2==4.8.*
 nvidia-cudnn-cu12==9.*
 nvidia-cublas-cu12==12.*
-
-# ctranslate2 4.5 imports pkg_resources at import time but declares only an
-# unbounded `setuptools` dep. setuptools 81 removed pkg_resources, so the universal
-# resolver's latest (82.x) makes `import ctranslate2` die with
-# `ModuleNotFoundError: No module named 'pkg_resources'`. Cap below 81 so
-# pkg_resources still ships. Drop this when ctranslate2 stops importing it.
-setuptools<81
