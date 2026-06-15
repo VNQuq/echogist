@@ -43,12 +43,19 @@ rule dropped). Gate holds: every push to `main` passes ruff + mypy + tests.
   partial-mp3 cleanup, `-nostdin` hang guard, + 5 new T3/T4 failure-path tests (model-load
   F8, mid-stream, no-speech, int8_float16 default lock). Real-ffmpeg smoke green (cyrillic+`:`
   mkv→mono mp3, no video, no `.part`). ruff + mypy + **90 tests** (was 63).
+- **T5 — guard** (`echogist/guard.py`, uncommitted): pure offline overflow guard (§4).
+  `estimate_input_tokens()` = per-script tokens/char biased high (Cyrillic 0.60 >
+  default 0.30, ceil + fixed 1000 prompt overhead) — NO `count_tokens`, no network,
+  no anthropic import (killswitch verified). `GuardResult.over_budget` vs
+  `GuardConfig.safe_budget(tier)`; `check_overflow()` + `overflow_message()` (F6).
+  Rates are tunable params w/ defaults. T8 reuses `est_input_tokens`. ruff + mypy +
+  **102 tests** (was 90).
 
 **Next:**
 
-- **T5 — guard**: local language-aware token estimate vs `safe_budget(model)`; clean
-  overflow stop (§4); NO `count_tokens` (killswitch). Reads `Transcript.text`.
-- Then T6 summarize → T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
+- **T6 — summarize**: the ONE network stage (anthropic). One structured call →
+  title + sections; killswitch-mocked in CI; raw `.json` saved BEFORE render (F13).
+- Then T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
 - **T7 naming note (from review):** summaries are `<meaningful-title>` (NO date prefix),
   need title truncation + base-dedup across `.pdf`/`.md`/`.json` together. Use
   `naming.sanitize_stem`/`dedup_path` primitives directly — `dated_artifact_path` is
