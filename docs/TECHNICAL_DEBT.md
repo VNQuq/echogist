@@ -34,96 +34,24 @@ has a **deadline** or **trigger** for closure.
 > online/link ingestion was dropped from scope, so TD-2 is now obsolete (see Closed
 > debts) and TD-3 no longer provisions deno.**
 
-### TD-1 — Whisper model runtime download (root cause: Xet transport, not region) ✓ CLOSED
-
-Severity (was): MEDIUM/HIGH · Created 2026-06-14 → Closed 2026-06-15 (T3, gate c) · SoT: this file
-
-**Closed.** All three acceptance gates green on the 4060. Gate (c) passed via the
-T3 `transcribe()` stage: the vanilla CT2 large-v3 loaded at `int8_float16`, autolang
-detected the clip, and a verbatim timecoded segment came back — proving the model +
-CUDA stack + transcribe path end to end. Full open-debt writeup retained below for
-git history; severity/trigger fields are historical. (This record may be relocated to
-the Closed section in a later compaction.)
-
-**What.** `faster-whisper`/`ctranslate2` pull the model from HuggingFace on first
-use, and `snapshot_download` stalled — `tiny` (~75 MB) hung at ~2.6 MB, `large-v3`
-(~3 GB) hung after its small files. The original read was "HF region-blocked from
-RU/MSK". **That read was wrong** (2026-06-15).
-
-**Root cause (2026-06-15, evidence-backed).** Not the region — the **Xet transport**.
-`requirements.lock` pins `huggingface-hub==1.19.0` + `hf-xet==1.5.1`; in hf_hub 1.x,
-if `hf_xet` is installed it is used automatically, routing large-file transfers
-through the Xet CAS hosts (`cas-bridge` / `transfer.xethub.hf.co`). Those hosts
-stall on the operator's route; plain `huggingface.co` (the classic LFS path a
-browser uses) works. Evidence: a browser download of `model.bin` over the system
-VPN completed fine; from WSL (no VPN) the Xet data hosts timed out; and with
-`HF_HUB_DISABLE_XET=1` the Python `snapshot_download` pulled `model.bin` at a steady
-~10.5 MB/s with no stall. This is a known hf_xet bug class (xet-core#446,
-huggingface_hub#3440), not a regional throttle.
-
-**Fix (landed).** `model_asset.fetch_from_hf` sets `HF_HUB_DISABLE_XET` (via
-`os.environ.setdefault`, so an operator on a Xet-reachable route can opt back in
-with `HF_HUB_DISABLE_XET=0`) **before** importing huggingface_hub, forcing the
-classic LFS path. Covered by `test_fetch_from_hf_disables_xet` +
-`test_fetch_from_hf_respects_explicit_xet_optin`. Ruff + mypy + 48 tests green.
-
-**Why deferred.** Needs an architectural decision, not a patch.
-
-**Decision (2026-06-15, operator).** Provisioning fetches the vanilla CT2
-`Systran/faster-whisper-large-v3` (float16 on disk) **direct from Hugging Face**
-via `huggingface_hub.snapshot_download` into `local_dir`; T3 loads it with
-`compute_type=int8_float16` (quantized at load — keep full large-v3, no
-downscaling, no fine-tune). Implemented in `model_asset.fetch_from_hf` /
-`ensure_model`; the pre-placed `local_dir/model.bin` escape hatch keeps it
-offline-safe (the operator's actual fallback: browser-download the 5 files, drop
-them in `local_dir`). The earlier self-host zip-from-URL path was **removed**
-(2026-06-15) once gate (a) went green — `download_resumable`/`verify_checksum`/
-`_extract_zip` + `[model_asset].source_url`/`sha256` are gone; `model_asset.py`
-dropped 193→108 lines.
-
-**Tradeoff (accepted, logged).** The model arrives **outside** `requirements.lock`
-— integrity is HF's checksums, not our hash pins. Acceptable for a personal tool.
-
-**Acceptance gate (TD-1 closes when ALL pass).** On the operator's Windows + 4060:
-(a) HF download of Systran large-v3 succeeds with zero manual hosting — **✅ PASSED
-2026-06-15** (Xet disabled, classic path, ~10.5 MB/s, no stall); (b) it loads with
-`compute_type=int8_float16` on the 4060 — **✅ PASSED 2026-06-15** (`WhisperModel(...)`
-printed `ok`, no cuDNN/cuBLAS DLL error; this also exercised the F8 DLL shim); (c) a
-short clip transcribes (T3) — **✅ PASSED 2026-06-15** (the T3 `transcribe()` stage on
-the 4060: large-v3 `int8_float16`, autolang `en`, verbatim segment with a correct
-`[HH:MM:SS]` timecode; run in WSL against the pre-placed model via `/mnt/c`). The
-pre-placed `local_dir/model.bin` escape hatch stays (operator used it, offline-safe)
-and is now the sole fallback if HF ever fails. **TD-1 CLOSED** with T3.
-
 ### TD-3 — GPU provisioning the launcher must automate
 
 Severity: MEDIUM · Created 2026-06-14 · Trigger: resolve in `/plan-eng-review` (impl) · SoT: this file
 
-**What.** Confirmed concrete (sharpens the design's flagged cuDNN asterisk):
-`faster-whisper` 1.2 / `ctranslate2` 4.x do **not** auto-install cuDNN/cuBLAS.
-On Windows the working fix is the pip wheels `nvidia-cudnn-cu12` +
-`nvidia-cublas-cu12` plus registering their `...\nvidia\*\bin` dirs via
-`os.add_dll_directory(...)` **before** importing `faster_whisper` (proven: DLLs
-registered cleanly on the 4060, no cuDNN load error). The launcher must provision —
-automatically, idempotently — cuDNN/cuBLAS DLLs plus the model (TD-1). Must be
-cmd/`.bat` (PowerShell `.ps1` is blocked by execution policy by default — hit twice
-in the spike). **Update (eng-review):** deno provisioning is removed — it was only
-needed for yt-dlp's JS challenge, and online ingestion was dropped from scope.
-**Update (2026-06-15, gate b):** a second skew landmine surfaced and is fixed —
-`ctranslate2` 4.5 imports `pkg_resources` but declares only unbounded `setuptools`;
-setuptools 81 removed `pkg_resources`, so the resolver's latest (82) broke
-`import ctranslate2`. Pinned `setuptools<81` in `requirements.in` (lock → 80.10.2).
-**Update (2026-06-15, dep hygiene, `0b350bb`):** the `setuptools<81` shim is **removed** —
-`ctranslate2` bumped 4.5→4.8, which replaced `import pkg_resources` with
-`importlib.resources`, so setuptools rides latest (82.0.1) again. This exercised the
-cuDNN-ABI tripwire (the one pin that matters): CHANGELOG confirmed no cuDNN-major change
-4.5→4.8, and the bump was verified on a verify branch (`deps/ct2-4.8`) via a cold
-`run.bat` `--require-hashes` install + int8_float16 GPU smoke on the 4060 **before**
-fast-forwarding to `main`. Other runtime deps were already latest.
+**What.** `faster-whisper` 1.2 / `ctranslate2` 4.x do **not** auto-install cuDNN/cuBLAS.
+Fix: pip wheels `nvidia-cudnn-cu12` + `nvidia-cublas-cu12`, loaded before
+`import faster_whisper` — on Windows via `os.add_dll_directory(...)` of `nvidia\*\bin`
+(`gpu.register_cuda_libraries`), on WSL/Linux via `LD_LIBRARY_PATH` of the wheel
+`lib` dirs (`scripts/dev-loop`). `run.bat` provisions DLLs + model idempotently;
+cmd-only (`.ps1` is execution-policy-blocked). cuDNN-major↔ctranslate2 skew is the #1
+silent failure — `requirements.in` carries the tripwire comment; bumping ctranslate2
+re-runs lock-deps + Windows cold run + GPU smoke first (done for 4.5→4.8, dropping the
+`setuptools<81` shim). Full skew history in git.
 
-**Why deferred.** Provisioning belongs in the launcher/installer design.
+**Remaining.** The cuDNN/cuBLAS load path is proven green on the 4060 (T3 gate b/c, in
+WSL). The Windows `run.bat` GPU **preflight** live-run is still unverified.
 
-**When to open.** Now (eng-review), as part of the first-run-contract spec.
+**When to open.** Now (first-run-contract spec); close on the next Windows cold run.
 
 ### TD-4 — GPU transcription speed unmeasured
 
@@ -133,16 +61,14 @@ Severity: LOW · Created 2026-06-14 · Trigger: once TD-1 unblocks model access 
 measured — blocked purely by TD-1 (no model bytes). The GPU env itself is proven
 (CUDA visible, cuDNN DLLs load). Sizes the core UX (how long a 2 h video takes).
 
-**Why deferred.** Cannot run without the model; not architecture-blocking.
+**Why deferred.** Not architecture-blocking; needs a warm, fixtured measurement.
 
-**Update (2026-06-15, T3).** Unblocked — model access is solved (TD-1 closed) and the
-T3 stage runs on the 4060. A first end-to-end run on an 11 s English clip showed
-`realtime_factor` ≈ 0.35, but that is **warmup/model-load dominated** (3 GB `model.bin`
-read over the `/mnt/c` 9p mount, cold first inference) and is **not** the measurement.
-The real number needs T11's committed RU+EN fixtures via `scripts/measure_model.py`
-(§12.3), warm, with peak-VRAM + the int8-vs-float16 A/B.
+**Update (2026-06-15, T3).** Unblocked (model access solved, T3 runs on the 4060). An
+11 s clip showed `realtime_factor` ≈ 0.35, but that is warmup/model-load dominated
+(`/mnt/c` 9p read, cold first inference) — **not** the measurement.
 
-**When to open.** T11, via the committed measurement harness (not ad-hoc).
+**When to open.** T11, via the committed `scripts/measure_model.py` harness (warm,
+RU+EN fixtures, peak-VRAM, int8-vs-float16 A/B) — not ad-hoc.
 
 ### TD-5 — Chunked map-reduce summarization deferred from v1
 
@@ -167,6 +93,22 @@ a clean seam to add a summarization sub-stage without reshaping the pipeline.
 ---
 
 ## Closed debts
+
+### TD-1 — Whisper model runtime download ✓ CLOSED (root cause: Xet, not region)
+
+Severity (was): MEDIUM/HIGH · Created 2026-06-14 → Closed 2026-06-15 (T3, gate c)
+
+The fork was how to distribute the ~3 GB CT2 large-v3 when `snapshot_download` stalled.
+Root cause was the **Xet transport** (hf_hub 1.x auto-routes large files through the Xet
+CAS hosts, which stall on the operator's route), not RU region-blocking — proven by a
+`HF_HUB_DISABLE_XET=1` pull at ~10.5 MB/s vs the Xet-host timeout (xet-core#446). Decision:
+fetch vanilla `Systran/faster-whisper-large-v3` (float16) from HF with `HF_HUB_DISABLE_XET`
+forced on for the classic LFS path; load `int8_float16` at runtime; pre-placed `local_dir`
+as the offline fallback; the dormant self-host zip path was removed. Tradeoff (accepted):
+the model arrives outside `requirements.lock` (HF checksums, not our hash pins). All three
+gates green on the 4060: (a) HF download, (b) `int8_float16` load, (c) a clip transcribes
+via the T3 `transcribe()` stage (autolang `en`, verbatim timecoded segment). Commits:
+1f25ef1, d7b23c3, 0b350bb, 7cbc5dc, 2748196 (T3).
 
 ### TD-2 — YouTube ingestion subsystem ✓ CLOSED (obsolete)
 
