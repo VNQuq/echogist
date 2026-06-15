@@ -4,10 +4,14 @@ Two responsibilities, both kept import-light so the pure stages and CI import
 this module without a GPU or the heavy wheels present:
 
 * :func:`register_cuda_libraries` — make the bundled cuDNN/cuBLAS DLLs loadable
-  **before** ``import faster_whisper``. Windows-only; on WSL/Linux the linker
-  finds the ``nvidia-*-cu12`` wheels via RPATH/``LD_LIBRARY_PATH``, so it is a
-  no-op there. This is the single ``win32`` platform shim — every other stage
-  imports identically across WSL and Windows.
+  **before** ``import faster_whisper``. Windows-only; on WSL/Linux it is a no-op
+  because ``ctranslate2`` dlopens the ``nvidia-*-cu12`` ``.so`` files via the
+  dynamic linker — which means the wheel lib dirs
+  (``site-packages/nvidia/{cublas,cudnn}/lib``) must be on ``LD_LIBRARY_PATH``
+  at process start (the dev loop / measurement harness export them; ld.so reads
+  the var only at launch, so a runtime ``os.environ`` set would be too late).
+  This is the single ``win32`` platform shim — every other stage imports
+  identically across WSL and Windows.
 * :func:`preflight` — load the GPU backend and probe for a CUDA device, turning
   the usual cryptic DLL/driver crash into a specific, actionable diagnostic (F8).
 

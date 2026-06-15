@@ -34,9 +34,16 @@ has a **deadline** or **trigger** for closure.
 > online/link ingestion was dropped from scope, so TD-2 is now obsolete (see Closed
 > debts) and TD-3 no longer provisions deno.**
 
-### TD-1 — Whisper model runtime download (root cause: Xet transport, not region)
+### TD-1 — Whisper model runtime download (root cause: Xet transport, not region) ✓ CLOSED
 
-Severity: MEDIUM (was HIGH) · Created 2026-06-14 · Trigger: gate (b)+(c) on the live 4060 run · SoT: this file
+Severity (was): MEDIUM/HIGH · Created 2026-06-14 → Closed 2026-06-15 (T3, gate c) · SoT: this file
+
+**Closed.** All three acceptance gates green on the 4060. Gate (c) passed via the
+T3 `transcribe()` stage: the vanilla CT2 large-v3 loaded at `int8_float16`, autolang
+detected the clip, and a verbatim timecoded segment came back — proving the model +
+CUDA stack + transcribe path end to end. Full open-debt writeup retained below for
+git history; severity/trigger fields are historical. (This record may be relocated to
+the Closed section in a later compaction.)
 
 **What.** `faster-whisper`/`ctranslate2` pull the model from HuggingFace on first
 use, and `snapshot_download` stalled — `tiny` (~75 MB) hung at ~2.6 MB, `large-v3`
@@ -82,9 +89,11 @@ dropped 193→108 lines.
 2026-06-15** (Xet disabled, classic path, ~10.5 MB/s, no stall); (b) it loads with
 `compute_type=int8_float16` on the 4060 — **✅ PASSED 2026-06-15** (`WhisperModel(...)`
 printed `ok`, no cuDNN/cuBLAS DLL error; this also exercised the F8 DLL shim); (c) a
-short clip transcribes (T3) — **pending**, closes with T3. The pre-placed
-`local_dir/model.bin` escape hatch stays (operator used it, offline-safe) and is
-now the sole fallback if HF ever fails.
+short clip transcribes (T3) — **✅ PASSED 2026-06-15** (the T3 `transcribe()` stage on
+the 4060: large-v3 `int8_float16`, autolang `en`, verbatim segment with a correct
+`[HH:MM:SS]` timecode; run in WSL against the pre-placed model via `/mnt/c`). The
+pre-placed `local_dir/model.bin` escape hatch stays (operator used it, offline-safe)
+and is now the sole fallback if HF ever fails. **TD-1 CLOSED** with T3.
 
 ### TD-3 — GPU provisioning the launcher must automate
 
@@ -126,7 +135,14 @@ measured — blocked purely by TD-1 (no model bytes). The GPU env itself is prov
 
 **Why deferred.** Cannot run without the model; not architecture-blocking.
 
-**When to open.** First run after TD-1 is resolved.
+**Update (2026-06-15, T3).** Unblocked — model access is solved (TD-1 closed) and the
+T3 stage runs on the 4060. A first end-to-end run on an 11 s English clip showed
+`realtime_factor` ≈ 0.35, but that is **warmup/model-load dominated** (3 GB `model.bin`
+read over the `/mnt/c` 9p mount, cold first inference) and is **not** the measurement.
+The real number needs T11's committed RU+EN fixtures via `scripts/measure_model.py`
+(§12.3), warm, with peak-VRAM + the int8-vs-float16 A/B.
+
+**When to open.** T11, via the committed measurement harness (not ad-hoc).
 
 ### TD-5 — Chunked map-reduce summarization deferred from v1
 

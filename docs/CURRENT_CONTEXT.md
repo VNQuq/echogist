@@ -63,13 +63,27 @@ rule dropped). Gate still holds: every push to `main` passes ruff + mypy + tests
   int8_float16 GPU smoke **both re-verified on the 4060** before the bump landed on `main`.
   All other deps were already latest. ruff + mypy + 48 tests green.
 
+- **T3 — transcribe (DONE, closes TD-1).** `echogist/transcribe.py`: pure half
+  (`Segment`/`Transcript`, `format_timecode` → `HH:MM:SS`, `render_transcript` →
+  `[HH:MM:SS] text` lines, `save_transcript` → `output/transcripts/<date>-<stem>.txt`
+  with `-2/-3` dedup) + a lazy-import GPU adapter `transcribe()` (registers DLLs before
+  `import faster_whisper`, `compute_type=int8_float16`, autolang, segment-progress log,
+  fail-loud `TranscribeError`). 13 new unit tests (pure half + missing-file guard).
+  **Gate (c) PASSED end-to-end on the 4060** (WSL, model via `/mnt/c`): large-v3
+  `int8_float16`, autolang `en`, verbatim timecoded segment on the JFK sample. GPU stack
+  (`faster-whisper 1.2.1`/`ctranslate2 4.8`/`imageio-ffmpeg 0.6`/cudnn9/cublas12)
+  installed in the WSL `.venv`. Linux needs the nvidia wheel `lib` dirs on
+  `LD_LIBRARY_PATH` (handled in `scripts/dev-loop`; Windows uses the `win32`
+  `add_dll_directory` shim). ruff + mypy + **61 tests** green. **Not yet committed.**
+
 **Next:**
 
-- **TD-1 gate (c):** a short clip transcribes — this is **T3** (no transcribe code yet);
-  closes TD-1 when T3 lands. Gates (a)+(b) green.
-- **T3 transcribe / T4 extract** — install `ctranslate2`/`faster-whisper`/`imageio-ffmpeg`
-  into the WSL `.venv`. T3 unblocks TD-4 (speed/int8 RU quality, measured in T11).
+- **T4 — extract** — `imageio-ffmpeg` video→mp3 / non-mp3 audio→mp3, dedup naming
+  (F9/F11; the `_dedup_path`/`_sanitize_stem` helpers in `transcribe.py` are the seam
+  to share or mirror). Verify: video + audio inputs.
 - Then T5 guard → T6 summarize → T7 render / T8 cost → T9 menu → T10 eval / T11 measure.
+- **TD-4 (T11):** realtime_factor + int8-vs-float16 RU quality via the committed
+  `scripts/measure_model.py` harness. Now unblocked (model access solved).
 
 ## Relevant SoT
 
@@ -89,11 +103,11 @@ rule dropped). Gate still holds: every push to `main` passes ruff + mypy + tests
 
 ## Open debts
 
-- **TD-1** model distribution → HF auto-fetch; root cause (Xet) fixed, download gate (a)
-  green; closes when gate (b) int8_float16 load + (c) transcribe pass · **TD-3**
-  provisioning (run.bat lock-install proven on cold Windows; GPU preflight still pending
-  the live run) · **TD-4** GPU speed
-  + int8 RU quality unmeasured (T11) · **TD-5** chunked map-reduce deferred. TD-2 closed.
+- **TD-3** provisioning (run.bat lock-install proven on cold Windows; GPU preflight
+  still pending the live Windows run — though the WSL T3 run exercised the cuDNN/cuBLAS
+  load path green) · **TD-4** GPU speed + int8 RU quality unmeasured, now unblocked,
+  measured at T11 via `scripts/measure_model.py` · **TD-5** chunked map-reduce deferred.
+  **TD-1 closed** (T3 gate c) · TD-2 closed.
 
 Details → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 

@@ -11,6 +11,18 @@ VENV="${VENV:-.venv}"
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 
+# WSL/Linux only: ctranslate2 dlopens the nvidia cuBLAS/cuDNN .so files, and
+# ld.so reads LD_LIBRARY_PATH only at process start — so any real-GPU transcribe
+# launched from this shell needs the wheel lib dirs exported here (on Windows the
+# win32 add_dll_directory shim in echogist/gpu.py handles this instead). Harmless
+# for the pure-stage suite below, which imports no CUDA.
+if command -v python >/dev/null 2>&1; then
+  _SP="$(python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])' 2>/dev/null || true)"
+  if [ -n "${_SP:-}" ] && [ -d "$_SP/nvidia" ]; then
+    export LD_LIBRARY_PATH="$_SP/nvidia/cublas/lib:$_SP/nvidia/cudnn/lib:${LD_LIBRARY_PATH:-}"
+  fi
+fi
+
 echo "== ruff =="
 ruff check .
 ruff format --check .
