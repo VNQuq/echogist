@@ -74,7 +74,7 @@ MAIN MENU (loops; explicit exit only)
    output/audio/<date>-<title>.mp3
    output/transcripts/<date>-<title>.txt        ← checkpoint between TRANSCRIBE and SUMMARIZE
    output/summaries/<meaningful-title>.(pdf|md)
-   output/summaries/<meaningful-title>.json      ← raw structured result, written on a
+   output/summaries/raw/<meaningful-title>.json  ← raw structured result, written on a
                                                    SUCCESSFUL paid call BEFORE render
 
  SUMMARIZE→RENDER ordering: on a successful call, persist the raw structured result
