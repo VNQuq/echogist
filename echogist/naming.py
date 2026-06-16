@@ -13,20 +13,70 @@ from datetime import date
 from pathlib import Path
 
 # Windows-illegal filename characters (spec §7). A stem usually comes from a real
-# filename and is already legal, but a typed/odd source path could carry one of
-# these, so strip them before building the artifact name.
+# filename and is already legal, but a typed/odd source path — or an LLM-generated
+# summary title — could carry one of these, so strip them before building the name.
 _ILLEGAL_CHARS = '\\/:*?"<>|'
+# ASCII control chars (0x00–0x1F) are also illegal in Windows filenames; an LLM
+# title could in principle carry a stray tab/newline. Strip them like the above.
+_CONTROL_CHARS = "".join(chr(c) for c in range(0x20))
+
+# Reserved DOS device names. A file named any of these (case-insensitive, with or
+# without an extension) is special on Windows and cannot be created normally. The
+# dated artifacts (T3/T4) carry a date prefix so their stem is never bare, but the
+# summary triplet (T6/T7) has NO date prefix — an LLM title of "CON" would crash
+# the .json write AFTER the paid call, defeating the F13 never-re-pay guarantee.
+_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 def sanitize_stem(stem: str, *, fallback: str) -> str:
-    """Strip Windows-illegal chars; fall back when nothing legal remains.
+    """Make ``stem`` a safe Windows filename base; fall back when nothing remains.
 
-    Trims padding AND the dashes left by leading/trailing illegal chars, so an
-    all-illegal stem (``"///"``) returns ``fallback`` rather than ``"----"``.
+    Strips Windows-illegal punctuation and ASCII control chars, trims padding AND
+    the dashes left by leading/trailing illegal chars (so ``"///"`` -> ``fallback``,
+    not ``"----"``), and removes trailing dots/spaces — Windows silently drops
+    those from filenames, which would otherwise desync the on-disk name from our
+    dedup existence check. Finally, a reserved device name is prefixed with ``_``
+    so it can be written at all.
     """
-    cleaned = "".join("-" if ch in _ILLEGAL_CHARS else ch for ch in stem)
-    cleaned = cleaned.strip().strip("-").strip()
-    return cleaned or fallback
+    cleaned = "".join("-" if ch in _ILLEGAL_CHARS or ch in _CONTROL_CHARS else ch for ch in stem)
+    cleaned = cleaned.strip().strip("-").rstrip(". ").strip()
+    if not cleaned:
+        return fallback
+    if cleaned.split(".", 1)[0].upper() in _RESERVED_NAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned
+
+
+# Max length of a summary artifact stem (before extension / dedup suffix). The
+# title comes from the model, so a runaway one would blow Windows' ~260-char
+# MAX_PATH once the output dir + ".json"/".pdf"/".md" are appended. The .json
+# (T6) and the .pdf/.md (T7) all derive their name from this, so capping here
+# keeps the whole triplet inside the limit and grouped under one base.
+_MAX_SUMMARY_STEM = 100
+
+
+def summary_stem(title: str, *, fallback: str) -> str:
+    """Windows-safe, length-capped stem for the summary triplet (.json/.pdf/.md).
+
+    Sanitizes (F9 illegal-char strip) then truncates to ``_MAX_SUMMARY_STEM``.
+    Prefers to cut on the last word boundary inside the cap (so the name stays
+    readable) and re-strips trailing dashes/spaces so the cut never leaves a
+    dangling separator. An empty/all-illegal title still yields ``fallback``.
+    """
+    stem = sanitize_stem(title, fallback=fallback)
+    if len(stem) <= _MAX_SUMMARY_STEM:
+        return stem
+    cut = stem[:_MAX_SUMMARY_STEM]
+    pivot = cut.rfind(" ")
+    if pivot >= _MAX_SUMMARY_STEM // 2:  # break on a space only if it isn't too early
+        cut = cut[:pivot]
+    # Re-sanitize the cut: truncation can re-expose a trailing dot or land on a
+    # reserved name, both of which sanitize_stem handles in one place.
+    return sanitize_stem(cut, fallback=fallback)
 
 
 def dedup_path(directory: Path, base: str, suffix: str) -> Path:

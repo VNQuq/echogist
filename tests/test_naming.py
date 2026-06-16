@@ -39,6 +39,51 @@ def test_sanitize_stem_trims_dashes_from_edges() -> None:
     assert naming.sanitize_stem(":talk:", fallback="x") == "talk"
 
 
+def test_sanitize_stem_strips_control_chars() -> None:
+    # Tab/newline are illegal in Windows filenames; treated like illegal punctuation.
+    cleaned = naming.sanitize_stem("a\tb\nc", fallback="x")
+    assert "\t" not in cleaned and "\n" not in cleaned
+
+
+def test_sanitize_stem_strips_trailing_dot_and_space() -> None:
+    # Windows silently drops trailing dots/spaces — strip them so the on-disk name
+    # matches our dedup existence check.
+    assert naming.sanitize_stem("Quarterly Review.", fallback="x") == "Quarterly Review"
+    assert naming.sanitize_stem("Report .", fallback="x") == "Report"
+
+
+def test_sanitize_stem_all_dots_falls_back() -> None:
+    assert naming.sanitize_stem("...", fallback="summary") == "summary"
+
+
+def test_sanitize_stem_prefixes_reserved_device_names() -> None:
+    # "CON"/"NUL"/"COM1" etc. cannot be created on Windows; prefix to make them safe.
+    assert naming.sanitize_stem("CON", fallback="x") == "_CON"
+    assert naming.sanitize_stem("nul", fallback="x") == "_nul"
+    assert naming.sanitize_stem("Com1.txt", fallback="x") == "_Com1.txt"
+    # A name merely containing a reserved word is fine — only exact matches.
+    assert naming.sanitize_stem("console", fallback="x") == "console"
+
+
+# --------------------------------------------------------------------------- #
+# summary_stem — sanitize + Windows MAX_PATH truncation (T6/T7 triplet base)
+# --------------------------------------------------------------------------- #
+def test_summary_stem_hard_cuts_a_single_long_word() -> None:
+    # No space to break on -> exact hard cut at the cap.
+    assert naming.summary_stem("x" * 300, fallback="summary") == "x" * 100
+
+
+def test_summary_stem_ignores_a_too_early_space() -> None:
+    # The only space is at index 2 (< cap//2), so it is NOT used as a break point.
+    stem = naming.summary_stem("ab " + "c" * 300, fallback="summary")
+    assert len(stem) == 100
+
+
+def test_summary_stem_reserved_and_trailing_dot_survive_truncation() -> None:
+    assert naming.summary_stem("CON", fallback="summary") == "_CON"
+    assert naming.summary_stem("Talk.", fallback="summary") == "Talk"
+
+
 # --------------------------------------------------------------------------- #
 # dedup_path
 # --------------------------------------------------------------------------- #

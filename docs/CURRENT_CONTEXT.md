@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-15
+**Updated:** 2026-06-16
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -11,83 +11,65 @@
 **Phase 1 — Implementation (v1 per [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md))**
 
 Phase 0 done: design APPROVED, ENG + DEVEX CLEARED; scope + architecture locked.
-Architecture = pure-stage pipeline, artifact-based recovery; single-pass; GUARD/cost
+Architecture = pure-stage pipeline, artifact-based recovery, single-pass; GUARD/cost
 LOCAL; online ingestion dropped (TD-2 closed).
 
-**Workflow:** develop directly on `main` (operator decision 2026-06-15 — branch-first
-rule dropped). Gate holds: every push to `main` passes ruff + mypy + tests.
+**Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds:
+every push to `main` passes ruff + mypy + tests.
 
-**Done — on `main`:**
+**Done — on `main` (detail in git history + the build spec):**
 
-- **T1 — config** (`echogist/config.py` + `config/models.toml`): config-as-data tiers/
-  prices, overflow-guard budget; JSON settings + validation; env-only API key.
-- **T2 — launcher/provisioning**: `run.bat` (idempotent: py3.11 → venv →
-  `--require-hashes` install → provision → app), `gpu.py` (`win32` DLL shim + F8
-  preflight), `model_asset.py` (HF fetch + pre-placed-dir fallback), `provision.py`.
-  `requirements.lock` hash-pinned, **cold-Windows verified**.
-- **TD-1 closed (Xet root cause, not region)**: HF fetch of vanilla
-  `Systran/faster-whisper-large-v3` with `HF_HUB_DISABLE_XET` forcing classic LFS;
-  T3 loads `int8_float16`. Full saga in git + TECHNICAL_DEBT.
-- **T3 — transcribe** (`echogist/transcribe.py`, commit `2748196`): pure half
-  (`Segment`/`Transcript`, `format_timecode`, `render_transcript` → `[HH:MM:SS] text`
-  checkpoint, `save_transcript` → `output/transcripts/<date>-<stem>.txt` with `-2/-3`
-  dedup) + lazy-import GPU adapter `transcribe()` (`int8_float16`, autolang,
-  segment-progress, fail-loud `TranscribeError`). **Gate (c) PASSED on the 4060** (WSL,
-  model via `/mnt/c`): autolang `en`, verbatim timecoded JFK segment.
-- **T4 — extract** (`echogist/extract.py` + `echogist/naming.py`, uncommitted): F9 naming
-  promoted into shared `naming.py` (transcribe now routes through it). `extract_audio()`
-  runs the bundled ffmpeg (`-vn -acodec libmp3lame -q:a 2 -f mp3`) → **atomic** `.part`→
-  `os.replace` into `output/audio/<date>-<stem>.mp3`, deduped; injectable `ffmpeg_exe`+
-  `runner` seams; `is_mp3()` predicate; F11 binary guard; fail-loud `ExtractError`.
-  Multi-agent review applied (3 agents): utf-8 stderr decode (Windows crash), atomic
-  partial-mp3 cleanup, `-nostdin` hang guard, + 5 new T3/T4 failure-path tests (model-load
-  F8, mid-stream, no-speech, int8_float16 default lock). Real-ffmpeg smoke green (cyrillic+`:`
-  mkv→mono mp3, no video, no `.part`). ruff + mypy + **90 tests** (was 63).
-- **T5 — guard** (`echogist/guard.py`, uncommitted): pure offline overflow guard (§4).
-  `estimate_input_tokens()` = per-script tokens/char biased high (Cyrillic 0.60 >
-  default 0.30, ceil + fixed 1000 prompt overhead) — NO `count_tokens`, no network,
-  no anthropic import (killswitch verified). `GuardResult.over_budget` vs
-  `GuardConfig.safe_budget(tier)`; `check_overflow()` + `overflow_message()` (F6).
-  Rates are tunable params w/ defaults. T8 reuses `est_input_tokens`. ruff + mypy +
-  **102 tests** (was 90).
-
-- **T6 — summarize** (`echogist/summarize.py` + `config.SummarizeConfig`, uncommitted): the
-  ONE network stage / killswitch boundary. `/plan-eng-review` ratified 3 decisions (logged):
-  forced anthropic **tool-use** (schema in CODE) → `Summary` (title/overview/key_takeaways/
-  section_timecodes/recurring_themes/core_idea/language); prompt TEXT in `models.toml
-  [summarize]` (data), `{language}` injected — **prompt=data, schema=code**. `max_output_tokens`
-  (4096) is a SEPARATE cap from the ~2K cost projection: truncation (`stop_reason==max_tokens`)
-  fails loud, never a half-summary. Lazy `import anthropic` behind injectable `caller` seam →
-  module imports offline (AST-tested); error map F2/F4/F5 + bad-key; F10 title fallback
-  (source-stem+date); F13 `save_raw_result()` → `output/summaries/<title>.json` (no date prefix)
-  BEFORE render; cost from `response.usage` (no `count_tokens`). ruff+mypy+**128 tests** (was 102).
+- **T1 config** (`config.py` + `models.toml`) — config-as-data tiers/prices, guard
+  budget, JSON settings + validation, env-only API key.
+- **T2 launcher/provisioning** — idempotent `run.bat`, `gpu.py` (win32 DLL shim + F8
+  preflight), `model_asset.py`/`provision.py`, hash-pinned `requirements.lock`,
+  cold-Windows verified.
+- **TD-1 closed** — HF fetch of `Systran/faster-whisper-large-v3` with
+  `HF_HUB_DISABLE_XET` (classic LFS); T3 loads `int8_float16`.
+- **T3 transcribe** (`transcribe.py`) — pure `Transcript`/`[HH:MM:SS]` checkpoint +
+  lazy GPU adapter; gate (c) PASSED on the 4060.
+- **T4 extract** (`extract.py`) — bundled ffmpeg → atomic `.part`→`os.replace` mp3;
+  injectable `ffmpeg_exe`/`runner` seams; F11 guard.
+- **T5 guard** (`guard.py`) — offline language-aware token estimate biased high
+  (Cyrillic 0.60), NO `count_tokens`/network (killswitch AST-tested). T8 reuses it.
+- **T6 summarize** (`summarize.py`) — the ONE network stage. Forced tool-use (schema
+  in CODE) → `Summary`; prompt TEXT in `[summarize]` (data), `{language}` injected.
+  `max_output_tokens` cap separate from the ~2K cost projection; truncation fails
+  loud. Lazy `import anthropic` behind injectable `caller`; F2/F4/F5 + bad-key map;
+  F10 title fallback; F13 `save_raw_result()` → `summaries/<title>.json` BEFORE render.
+- **T7 render** (`render.py` + vendored `assets/fonts/DejaVuSans[-Bold].ttf` +
+  `naming.summary_stem`) — `Summary` → PDF (fpdf2, embedded DejaVuSans, Cyrillic
+  verified no-tofu) or Markdown; localized RU/EN headings. `load_summary()` rebuilds
+  from the `.json` (re-render, never re-pay). `base` = json stem → `.json/.pdf/.md`
+  share one name; `summary_stem` sanitizes + truncates (Windows MAX_PATH). `/review`
+  (4 subagents) hardened it: catch `FPDFException` (subclasses `Exception`, would've
+  crashed); reserved device names (`CON`→`_CON`), trailing dots, control chars stripped
+  in `naming`. ruff + mypy + **154 tests**.
 
 **Next:**
 
-- **T7 render** (pdf default / md, Cyrillic+DejaVu) + **T8 cost** (reuse guard est +
-  `response.usage` actual) → T9 menu → T10 eval / T11 measure.
-- **T7 naming note:** summaries are `<title>` (NO date prefix); need title truncation +
-  base-dedup across `.json`/`.pdf`/`.md` **together** (T6 dedups the `.json` alone). Use
-  `naming.sanitize_stem`/`dedup_path` directly — `dated_artifact_path` is dated-artifacts only.
-  Add the two helpers then (YAGNI now).
-- **T6 has no live-API smoke** (killswitch CI only) — first real call is the operator run /
-  T10 prompt eval; that is the eval gate, not a unit test.
-- **TD-4 (T11)**: realtime_factor + int8-vs-float16 RU quality via committed
-  `scripts/measure_model.py` (now unblocked — model access solved).
+- **T8 cost** — pre-call estimate (reuse `guard.estimate_input_tokens` +
+  `[guard].output_tokens_estimate` + tier prices) with Enter / y-n threshold friction;
+  post-call **actual** from `SummarizeResult` token counts (`response.usage`).
+- Then **T9 menu** (loop, per-source action menus, §12 returns) → **T10 eval**
+  (RU+EN summarization quality — the prompt eval gate) / **T11 measure** (TD-4).
+- **No live-API smoke yet** (killswitch CI only) — first real summarize call is the
+  operator run / T10 prompt eval; that eval is the gate, not a unit test.
 
 ## Dev env
 
-WSL `.venv` (python3.12) with the GPU stack installed; RTX 4060 visible. Linux loads
-cuDNN/cuBLAS via `LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the `win32`
-`add_dll_directory` shim. PyPI + github reachable from WSL; huggingface.co is not (no
-VPN there). Telemetry off, PROACTIVE false.
+WSL `.venv` (python3.12), GPU stack installed, RTX 4060 visible. Linux loads
+cuDNN/cuBLAS via `LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the win32 shim.
+PyPI + GitHub reachable from WSL; huggingface.co is not (no VPN). `ANTHROPIC_API_KEY`
+not set here. Telemetry off, PROACTIVE false. `fpdf2` now installed in `.venv` (matches
+the lock) so the PDF render path runs for real locally.
 
 ## Relevant SoT
 
 - **Build spec (locked):** [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md) —
-  authoritative for stack/pipeline/provisioning/tasks (T1..T13).
-- Spec: [`ТЗ_аудио_резюме_приложение.md`](../ТЗ_аудио_резюме_приложение.md) (local files +
-  saved transcript only).
+  stack/pipeline/provisioning/tasks (T1..T13).
+- Original ТЗ: [`ТЗ_аудио_резюме_приложение.md`](../ТЗ_аудио_резюме_приложение.md)
+  (local files + saved transcript only).
 
 ## Open blockers
 
@@ -95,10 +77,9 @@ VPN there). Telemetry off, PROACTIVE false.
 
 ## Open debts
 
-- **TD-3** provisioning (lock-install proven on cold Windows; GPU preflight still pending
-  the live Windows run — though the WSL T3 run exercised cuDNN/cuBLAS load green) ·
-  **TD-4** GPU speed + int8 RU quality unmeasured (T11) · **TD-5** chunked map-reduce
-  deferred. **TD-1, TD-2 closed.** Details → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
+- **TD-3** GPU preflight pending the live Windows run (WSL T3 exercised cuDNN/cuBLAS
+  green) · **TD-4** GPU speed + int8 RU quality unmeasured (T11) · **TD-5** chunked
+  map-reduce deferred. **TD-1, TD-2 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
 

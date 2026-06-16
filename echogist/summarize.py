@@ -275,14 +275,15 @@ def save_raw_result(summary: Summary, out_dir: Path, *, today: date | None = Non
     """Write the summary to ``out_dir/<title>.json`` (no date prefix, deduped). F13.
 
     Called BEFORE render so a render failure (fpdf2 edge, T7) never costs a re-pay:
-    the menu re-renders from this ``.json``. The title is the filename stem (F9
-    illegal-char strip + ``-2``/``-3`` dedup). Note: cross-extension dedup so the
-    ``.pdf``/``.md`` share this exact base is a T7 concern (carry-forward note); T6
-    dedups the ``.json`` on its own. ``today`` is unused today but kept for a future
-    dated-summary option and signature symmetry with the other artifact saves.
+    the menu re-renders from this ``.json`` (:func:`echogist.render.load_summary`).
+    The title is the filename stem (:func:`naming.summary_stem` — F9 illegal-char
+    strip + Windows MAX_PATH truncation + ``-2``/``-3`` dedup). T7's render reuses
+    THIS file's stem (``json_path.stem``) for the ``.pdf``/``.md``, so the triplet
+    shares one base. ``today`` is unused today but kept for a future dated-summary
+    option and signature symmetry with the other artifact saves.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = naming.sanitize_stem(summary.title, fallback="summary")
+    stem = naming.summary_stem(summary.title, fallback="summary")
     path = naming.dedup_path(out_dir, stem, ".json")
     path.write_text(_summary_json(summary), encoding="utf-8")
     return path

@@ -1,0 +1,308 @@
+"""T7 — render stage (fpdf2 PDF / Markdown, plan §3 / §7).
+
+The last stage. Turns the structured :class:`~echogist.summarize.Summary` into the
+kept artifact the operator actually reads: ``output/summaries/<title>.pdf`` (the
+default) or ``<title>.md``. It is LOCAL and offline — no network, no key — so it
+sits to the left of the killswitch like every stage except summarize.
+
+**Grouping the triplet.** Summarize (T6) already wrote the raw
+``output/summaries/<title>.json`` (F13). Render reuses THAT file's stem for the
+``.pdf``/``.md`` (the ``base`` argument is normally ``saved_json_path.stem``), so
+``.json``/``.pdf``/``.md`` share one base name; only the chosen extension is
+deduped here. The stem itself is the Windows-safe, length-capped
+:func:`naming.summary_stem`.
+
+**Cyrillic, no tofu.** The PDF embeds the **bundled** DejaVuSans (regular + bold)
+shipped under ``echogist/assets/fonts/`` — fpdf2's built-in fonts are Latin-1 only
+and would render Russian as blank boxes. The font travels with the app, so a
+Windows box with no Cyrillic system font still renders correctly offline
+(spike-verified design, plan §6).
+
+**F13 re-render.** :func:`load_summary` reconstructs a :class:`Summary` from the
+saved ``.json`` so the menu can re-render an earlier summary in either format
+WITHOUT a second paid call — a render failure (an fpdf2 edge, a full disk) is
+always recoverable from the artifact.
+
+The two seams that could fail at runtime — the lazily-imported ``fpdf`` package
+and the bundled font files — each raise a recoverable :class:`RenderError` with a
+human message (print it, return to the menu), and the Markdown path needs neither,
+so it is the always-available fallback.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from . import naming
+from .summarize import SectionMarker, Summary
+
+Logger = Callable[[str], object]
+
+# The bundled Unicode font (Cyrillic-capable), resolved relative to the package so
+# it works from a frozen/copied install on Windows, not just the dev checkout.
+_FONT_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
+_FONT_REGULAR = _FONT_DIR / "DejaVuSans.ttf"
+_FONT_BOLD = _FONT_DIR / "DejaVuSans-Bold.ttf"
+_FONT_FAMILY = "DejaVu"
+
+# Display fallback when a reconstructed Summary has an empty title (load_summary can
+# rebuild one from a hand-edited .json). Both renderers use it so PDF and Markdown
+# agree on the same input. Distinct from the lowercase "summary" filename fallback.
+_FALLBACK_TITLE = "Summary"
+
+# Localized section labels. The summary BODY is RU or EN (the model wrote it); the
+# structural headings are ours, so we localize them too — an RU summary under
+# English headings reads wrong. Two languages, the spec §7 structure. Unknown code
+# falls back to English (settings validation already restricts it to ru/en).
+_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "overview": "Overview",
+        "key_takeaways": "Key takeaways",
+        "sections": "Sections",
+        "recurring_themes": "Recurring themes",
+        "core_idea": "Core idea",
+    },
+    "ru": {
+        "overview": "Обзор",
+        "key_takeaways": "Ключевые выводы",
+        "sections": "Разделы",
+        "recurring_themes": "Повторяющиеся темы",
+        "core_idea": "Главная мысль",
+    },
+}
+
+
+class RenderError(Exception):
+    """A recoverable render failure. Print it, return to the menu.
+
+    The raw summary ``.json`` is saved before render (F13), so every failure here
+    is recoverable: re-render from the artifact, or switch to Markdown — never a
+    re-pay, never a crash.
+    """
+
+
+def _labels(language: str) -> dict[str, str]:
+    return _LABELS.get(language, _LABELS["en"])
+
+
+# --------------------------------------------------------------------------- #
+# F13 — reconstruct a Summary from the saved .json (the re-render path)
+# --------------------------------------------------------------------------- #
+def load_summary(json_path: Path) -> Summary:
+    """Reconstruct a :class:`Summary` from a saved F13 ``.json`` (plan §3).
+
+    The reverse of :func:`echogist.summarize.save_raw_result`, so the menu can
+    re-render an earlier summary without a second paid call. Tolerant of a
+    hand-edited file — a missing field falls back to empty rather than crashing,
+    the same defensive stance as the summarize parser — but a file that is not even
+    readable JSON raises a recoverable :class:`RenderError`.
+    """
+    try:
+        raw = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RenderError(
+            f"Could not read the saved summary {json_path}: {exc}. "
+            "Re-summarize from the transcript, or check the file."
+        ) from exc
+    if not isinstance(raw, dict):
+        raise RenderError(f"{json_path}: expected a JSON object (a saved summary).")
+
+    markers = tuple(
+        SectionMarker(timecode=str(m.get("timecode", "")), title=str(m.get("title", "")))
+        for m in raw.get("section_timecodes", [])
+        if isinstance(m, dict)
+    )
+    return Summary(
+        title=str(raw.get("title", "")),
+        overview=str(raw.get("overview", "")),
+        key_takeaways=_str_tuple(raw.get("key_takeaways")),
+        section_timecodes=markers,
+        recurring_themes=_str_tuple(raw.get("recurring_themes")),
+        core_idea=str(raw.get("core_idea", "")),
+        language=str(raw.get("language", "")),
+    )
+
+
+def _str_tuple(value: Any) -> tuple[str, ...]:
+    """Coerce a saved array field back to a tuple of strings (defensive).
+
+    Deliberately looser than :func:`summarize._str_list` (which trims and drops
+    empties): the ``.json`` was written from an already-parsed Summary, so its
+    arrays are clean — load_summary preserves them verbatim rather than re-filtering
+    content the operator might have hand-edited in on purpose.
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+# --------------------------------------------------------------------------- #
+# Render dispatch
+# --------------------------------------------------------------------------- #
+def render(
+    summary: Summary,
+    out_dir: Path,
+    fmt: str,
+    *,
+    base: str | None = None,
+    log: Logger = print,
+) -> Path:
+    """Write ``summary`` to ``out_dir/<base>.<fmt>`` (deduped); return the path.
+
+    ``fmt`` is ``"pdf"`` (default) or ``"md"`` — the validated
+    ``settings.output_format``. ``base`` is normally the stem of the saved F13
+    ``.json`` (``saved_json_path.stem``) so the ``.json``/``.pdf``/``.md`` share one
+    name; when omitted it is derived from the title. Either way the name runs
+    through :func:`naming.summary_stem` (Windows-safe, length-capped) — idempotent
+    for an already-safe json stem, but it means a raw ``base`` from any caller can
+    never reintroduce a path-traversal/reserved-name hole. Only the chosen
+    extension is deduped here. Offline; the PDF path embeds DejaVuSans for Cyrillic.
+    """
+    fmt = fmt.lower()
+    if fmt not in ("pdf", "md"):
+        raise RenderError(f"Unknown output format '{fmt}'; expected 'pdf' or 'md'.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = naming.summary_stem(base if base is not None else summary.title, fallback="summary")
+    suffix = ".pdf" if fmt == "pdf" else ".md"
+    out_path = naming.dedup_path(out_dir, stem, suffix)
+    log(f"Rendering {fmt.upper()} summary -> {out_path.name}")
+
+    if fmt == "md":
+        out_path.write_text(_markdown(summary), encoding="utf-8")
+    else:
+        _render_pdf(summary, out_path)
+    return out_path
+
+
+# --------------------------------------------------------------------------- #
+# Markdown (pure, no dependency — the always-available fallback)
+# --------------------------------------------------------------------------- #
+def _markdown(summary: Summary) -> str:
+    """Render the summary as GitHub-flavored Markdown (UTF-8, Cyrillic literal)."""
+    lab = _labels(summary.language)
+    out: list[str] = [f"# {summary.title or _FALLBACK_TITLE}".rstrip(), ""]
+    if summary.overview:
+        out += [f"## {lab['overview']}", "", summary.overview, ""]
+    if summary.key_takeaways:
+        out += [f"## {lab['key_takeaways']}", "", *(f"- {t}" for t in summary.key_takeaways), ""]
+    if summary.section_timecodes:
+        out += [f"## {lab['sections']}", ""]
+        out += [f"- `{m.timecode}` {m.title}".rstrip() for m in summary.section_timecodes]
+        out += [""]
+    if summary.recurring_themes:
+        out += [f"## {lab['recurring_themes']}", "", *(f"- {t}" for t in summary.recurring_themes)]
+        out += [""]
+    if summary.core_idea:
+        out += [f"## {lab['core_idea']}", "", summary.core_idea, ""]
+    return "\n".join(out).rstrip() + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# PDF (fpdf2 + bundled DejaVuSans; lazily imported, like the other native seams)
+# --------------------------------------------------------------------------- #
+def _font_file(path: Path) -> str:
+    """Return ``path`` if the bundled font is present, else a recoverable error."""
+    if not path.is_file():
+        raise RenderError(
+            f"The bundled PDF font is missing ({path.name}); reinstall EchoGist. "
+            "Markdown output (Settings) renders without it."
+        )
+    return str(path)
+
+
+def _render_pdf(summary: Summary, out_path: Path) -> None:
+    """Render the summary to a PDF at ``out_path`` with the embedded Unicode font.
+
+    ``fpdf`` is imported lazily (the module stays import-clean if the wheel is
+    absent, matching the extract/summarize seams). Both font weights are embedded
+    so Cyrillic renders as real glyphs; auto page-break flows a long summary across
+    pages. Any fpdf2/IO failure becomes a recoverable :class:`RenderError`.
+    """
+    try:
+        from fpdf import FPDF
+        from fpdf.errors import FPDFException
+    except ImportError as exc:  # installed by run.bat from requirements.lock
+        raise RenderError(
+            "fpdf2 is not installed — run.bat installs it from requirements.lock. "
+            "Switch output to Markdown in Settings to render without it."
+        ) from exc
+
+    lab = _labels(summary.language)
+    try:
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_margins(left=18, top=18, right=18)
+        pdf.add_page()
+        # add_font with an explicit file per weight — fpdf2 does NOT synthesize bold
+        # for a TTF, so the bold face needs its own embedded file.
+        pdf.add_font(_FONT_FAMILY, "", _font_file(_FONT_REGULAR))
+        pdf.add_font(_FONT_FAMILY, "B", _font_file(_FONT_BOLD))
+
+        _title(pdf, summary.title)
+        if summary.overview:
+            _heading(pdf, lab["overview"])
+            _body(pdf, summary.overview)
+        if summary.key_takeaways:
+            _heading(pdf, lab["key_takeaways"])
+            for item in summary.key_takeaways:
+                _bullet(pdf, item)
+        if summary.section_timecodes:
+            _heading(pdf, lab["sections"])
+            for marker in summary.section_timecodes:
+                _bullet(pdf, f"{marker.timecode}  {marker.title}".rstrip())
+        if summary.recurring_themes:
+            _heading(pdf, lab["recurring_themes"])
+            for item in summary.recurring_themes:
+                _bullet(pdf, item)
+        if summary.core_idea:
+            _heading(pdf, lab["core_idea"])
+            _body(pdf, summary.core_idea)
+
+        pdf.output(str(out_path))
+    except RenderError:
+        raise
+    except (OSError, RuntimeError, ValueError, FPDFException) as exc:  # fpdf2 layout/IO edge cases
+        # FPDFException subclasses Exception directly (not OSError/ValueError), so it
+        # MUST be named explicitly — fpdf2 raises it for unrenderable layouts (e.g. an
+        # unbreakable token wider than the line). Without it, a pathological summary
+        # would crash past the menu, violating "fail loud, return to menu — no crash".
+        out_path.unlink(missing_ok=True)  # never leave a half-written PDF behind
+        raise RenderError(
+            f"Could not write the PDF ({exc}). Your summary is saved as .json — "
+            "re-render, or switch output to Markdown in Settings."
+        ) from exc
+
+
+# Every line is a full-width multi_cell that returns the cursor to the left margin
+# on the next line (new_x/new_y) — fpdf2 otherwise parks x at the right margin, so a
+# following multi_cell(w=0) would see ~zero width and raise "not enough horizontal
+# space". Strings are coerced to XPos/YPos by fpdf2, so the enum import stays lazy.
+def _line(pdf: Any, height: float, text: str) -> None:
+    pdf.multi_cell(0, height, text, new_x="LMARGIN", new_y="NEXT")
+
+
+def _title(pdf: Any, text: str) -> None:
+    pdf.set_font(_FONT_FAMILY, "B", 18)
+    _line(pdf, 9, text or _FALLBACK_TITLE)
+    pdf.ln(3)
+
+
+def _heading(pdf: Any, text: str) -> None:
+    pdf.ln(2)
+    pdf.set_font(_FONT_FAMILY, "B", 13)
+    _line(pdf, 7, text)
+    pdf.ln(1)
+
+
+def _body(pdf: Any, text: str) -> None:
+    pdf.set_font(_FONT_FAMILY, "", 11)
+    _line(pdf, 6, text)
+
+
+def _bullet(pdf: Any, text: str) -> None:
+    pdf.set_font(_FONT_FAMILY, "", 11)
+    _line(pdf, 6, f"•  {text}")  # DejaVuSans carries U+2022, so no tofu bullet
