@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-16 (T11 harness)
+**Updated:** 2026-06-16 (T13 dev/ship loop)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -73,15 +73,33 @@ every push to `main` passes ruff + mypy + tests.
   the 4060. `--bar` optional: the report ALWAYS surfaces the measured realtime_factor; the
   operator sets the bar from it. mypy now covers the script. ruff + mypy + **209 tests, 2 skipped**.
 
+- **T13 dev/ship loop** (`scripts/smoke_run.py` + `tests/test_smoke.py` + completed
+  `scripts/win-smoke.bat` + `scripts/dev-loop --gpu` + `run.bat --provision-only`) — the
+  GPU-free half, finished + CI-tested in WSL (same GPU-split as T11). The win32 platform
+  shim (`gpu.register_cuda_libraries`) and the base `dev-loop` already landed with T2.
+  `smoke_run.py` drives one clip through the REAL pipeline (extract→mp3, transcribe→
+  transcript, then summary) mirroring the menu's order; its pure core (killswitch gate,
+  artifact check, clip resolution) is unit-tested. **Killswitch:** extract+transcribe always
+  run (offline, the Windows-only validation); the paid SUMMARIZE runs only with
+  `ECHOGIST_LIVE_SMOKE` + a key (the `ECHOGIST_LIVE_EVAL` shape). `win-smoke.bat` now
+  provisions via `run.bat --provision-only` (no menu block) then drives the clip + asserts
+  artifacts; `dev-loop --gpu` reuses the one driver for the WSL fixture transcribe. mypy
+  covers the driver. ruff + mypy + **222 tests, 2 skipped**.
+
 **Next:**
 
 - **T11 operator run (closes TD-4)** — run `python scripts/measure_model.py` on the Windows
   4060 (place the RU/EN clips per `tests/fixtures/audio/README.md`), read the measured
   realtime_factor + int8-vs-float16 RU quality, set `--bar`, and commit the produced
   `docs/measurements/<model>-<date>.md` with the manual keep-int8/switch-to-float16 verdict.
-- **T13 devex** — `win32` platform shim + `scripts/dev-loop`/`win-smoke` (loop scaffolding).
+- **T13 win-smoke operator pass (closes TD-3)** — on the Windows 4060, place a clip at
+  `tests/fixtures/audio/smoke.*` (or pass `--clip`) and run `scripts\win-smoke.bat`; it
+  provisions + drives extract→transcribe and asserts the mp3 + transcript. That is the
+  scripted cold-Windows acceptance TD-3 was waiting on. Optional: `ECHOGIST_LIVE_SMOKE=1`
+  + a key to also exercise the paid summary end-to-end.
 - **First live-API run still pending** — `ECHOGIST_LIVE_EVAL=1 pytest -m live` is the
   operator's first real summarize call (the T10 prompt-quality gate); not in CI.
+- **T12 docs** — document final first-run steps post-build.
 
 ## Dev env
 
@@ -104,8 +122,9 @@ the lock) so the PDF render path runs for real locally.
 
 ## Open debts
 
-- **TD-3** GPU preflight pending the live Windows run (WSL T3 exercised cuDNN/cuBLAS
-  green) · **TD-4** harness landed; awaits the operator's 4060 run + verdict · **TD-5** chunked
+- **TD-3** GPU preflight now scripted by `win-smoke.bat` (provision + clip acceptance);
+  awaits the operator's one Windows win-smoke pass · **TD-4** harness landed; awaits the
+  operator's 4060 run + verdict · **TD-5** chunked
   map-reduce deferred. **TD-1, TD-2 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)

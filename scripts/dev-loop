@@ -4,8 +4,19 @@
 # The fast inner loop runs in WSL with the real GPU: lint + types + the pure-stage
 # test suite against the STUB summarizer (killswitch-safe — no live API, no key).
 # Cold Windows runs are reserved for scripts/win-smoke.bat.
+#
+#   scripts/dev-loop          ruff + mypy + pytest (the default fast loop)
+#   scripts/dev-loop --gpu    ... then the optional real-GPU transcribe of a
+#                             fixture clip (extract + transcribe in WSL; offline —
+#                             the paid summary stays killswitch-gated). Needs a clip
+#                             at tests/fixtures/audio/ (see the README there).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+GPU_SMOKE=0
+if [ "${1:-}" = "--gpu" ]; then
+  GPU_SMOKE=1
+fi
 
 VENV="${VENV:-.venv}"
 # shellcheck disable=SC1091
@@ -32,5 +43,13 @@ mypy
 
 echo "== pytest =="
 pytest
+
+if [ "$GPU_SMOKE" -eq 1 ]; then
+  echo "== gpu transcribe smoke (fixture) =="
+  # Offline by default: ECHOGIST_LIVE_SMOKE is left unset, so smoke_run drives
+  # extract + transcribe only and skips the paid summary. Reuses the one ship
+  # driver so WSL and Windows exercise the same code path.
+  python scripts/smoke_run.py
+fi
 
 echo "dev-loop: all gates green."

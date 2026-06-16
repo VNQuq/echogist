@@ -52,7 +52,14 @@ REM --- 4-6. provisioning: output dirs, model fetch (TD-1), GPU preflight (F8) -
 "%VPY%" -m echogist.provision
 if errorlevel 1 ( echo [EchoGist] Provisioning failed. See the diagnostic above. & goto :fail )
 
-REM --- launch the app (menu lands in T9) ---
+REM --- provision-only mode: scripts\win-smoke.bat provisions then drives the clip
+REM     itself, so it must NOT block on the interactive menu. ---
+if /i "%~1"=="--provision-only" (
+  echo [EchoGist] Provision-only mode: skipping the interactive menu.
+  goto :end
+)
+
+REM --- launch the app (the interactive menu) ---
 "%VPY%" -m echogist
 goto :end
 

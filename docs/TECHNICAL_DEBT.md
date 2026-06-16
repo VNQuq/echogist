@@ -51,7 +51,14 @@ re-runs lock-deps + Windows cold run + GPU smoke first (done for 4.5→4.8, drop
 **Remaining.** The cuDNN/cuBLAS load path is proven green on the 4060 (T3 gate b/c, in
 WSL). The Windows `run.bat` GPU **preflight** live-run is still unverified.
 
-**When to open.** Now (first-run-contract spec); close on the next Windows cold run.
+**Update (2026-06-16, T13).** The cold-run acceptance is now scripted, not manual:
+`scripts/win-smoke.bat` calls `run.bat --provision-only` (venv + `--require-hashes` install +
+model fetch + GPU preflight/DLL load, no menu block) then drives one clip through
+extract→transcribe and asserts the artifacts. So TD-3 closes on the operator running one
+`win-smoke.bat` pass on Windows — no longer an ad-hoc check.
+
+**When to open.** Now (first-run-contract spec); close on the operator's first `win-smoke.bat`
+pass on Windows.
 
 ### TD-4 — GPU transcription speed unmeasured
 
