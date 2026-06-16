@@ -34,58 +34,6 @@ has a **deadline** or **trigger** for closure.
 > online/link ingestion was dropped from scope, so TD-2 is now obsolete (see Closed
 > debts) and TD-3 no longer provisions deno.**
 
-### TD-3 — GPU provisioning the launcher must automate
-
-Severity: MEDIUM · Created 2026-06-14 · Trigger: resolve in `/plan-eng-review` (impl) · SoT: this file
-
-**What.** `faster-whisper` 1.2 / `ctranslate2` 4.x do **not** auto-install cuDNN/cuBLAS.
-Fix: pip wheels `nvidia-cudnn-cu12` + `nvidia-cublas-cu12`, loaded before
-`import faster_whisper` — on Windows via `os.add_dll_directory(...)` of `nvidia\*\bin`
-(`gpu.register_cuda_libraries`), on WSL/Linux via `LD_LIBRARY_PATH` of the wheel
-`lib` dirs (`scripts/dev-loop`). `run.bat` provisions DLLs + model idempotently;
-cmd-only (`.ps1` is execution-policy-blocked). cuDNN-major↔ctranslate2 skew is the #1
-silent failure — `requirements.in` carries the tripwire comment; bumping ctranslate2
-re-runs lock-deps + Windows cold run + GPU smoke first (done for 4.5→4.8, dropping the
-`setuptools<81` shim). Full skew history in git.
-
-**Remaining.** The cuDNN/cuBLAS load path is proven green on the 4060 (T3 gate b/c, in
-WSL). The Windows `run.bat` GPU **preflight** live-run is still unverified.
-
-**Update (2026-06-16, T13).** The cold-run acceptance is now scripted, not manual:
-`scripts/win-smoke.bat` calls `run.bat --provision-only` (venv + `--require-hashes` install +
-model fetch + GPU preflight/DLL load, no menu block) then drives one clip through
-extract→transcribe and asserts the artifacts. So TD-3 closes on the operator running one
-`win-smoke.bat` pass on Windows — no longer an ad-hoc check.
-
-**When to open.** Now (first-run-contract spec); close on the operator's first `win-smoke.bat`
-pass on Windows.
-
-### TD-4 — GPU transcription speed unmeasured
-
-Severity: LOW · Created 2026-06-14 · Trigger: once TD-1 unblocks model access · SoT: this file
-
-**What.** `realtime_factor` on the RTX 4060 (8 GB) for `large-v3` float16 was never
-measured — blocked purely by TD-1 (no model bytes). The GPU env itself is proven
-(CUDA visible, cuDNN DLLs load). Sizes the core UX (how long a 2 h video takes).
-
-**Why deferred.** Not architecture-blocking; needs a warm, fixtured measurement.
-
-**Update (2026-06-15, T3).** Unblocked (model access solved, T3 runs on the 4060). An
-11 s clip showed `realtime_factor` ≈ 0.35, but that is warmup/model-load dominated
-(`/mnt/c` 9p read, cold first inference) — **not** the measurement.
-
-**When to open.** T11, via the committed `scripts/measure_model.py` harness (warm,
-RU+EN fixtures, peak-VRAM, int8-vs-float16 A/B) — not ad-hoc.
-
-**Update (2026-06-16, T11).** Harness landed on `main`: `scripts/measure_model.py`
-(warm timing — model load + a warmup pass excluded; `int8_float16`-vs-`float16` A/B as a
-`compute_type` flip on the one HF `model.bin`; peak-VRAM sampler; writes
-`docs/measurements/<model>-<date>.md`) + `tests/test_measure.py` (pure core in CI) +
-`tests/fixtures/audio/README.md` (clip placement). `--bar` is optional and the report
-always surfaces the measured `realtime_factor` (operator sets the bar from it, not blind).
-**Closes when** the operator runs it on the 4060 and commits the measurements doc with
-real numbers + the manual keep-int8/switch-to-float16 RU quality verdict.
-
 ### TD-5 — Chunked map-reduce summarization deferred from v1
 
 Severity: LOW · Created 2026-06-14 (eng-review) · Trigger: first real transcript that exceeds the single-pass context budget · SoT: this file
@@ -109,6 +57,33 @@ a clean seam to add a summarization sub-stage without reshaping the pipeline.
 ---
 
 ## Closed debts
+
+### TD-3 — GPU provisioning the launcher must automate ✓ CLOSED
+
+Severity (was): MEDIUM · Created 2026-06-14 → Closed 2026-06-16 (T13, win-smoke)
+
+The fork was how to make cold-Windows GPU provisioning automated + verifiable rather
+than a manual check. Decision: `run.bat` provisions DLLs + model idempotently;
+`gpu.register_cuda_libraries` loads the cuDNN/cuBLAS wheels before `import faster_whisper`;
+`scripts/win-smoke.bat` scripts the cold-run acceptance (provision → drive one clip →
+assert artifacts). The operator's first `win-smoke.bat` pass on the 4060 closed it — and
+caught a real bug the WSL path never hit: ctranslate2 lazily loads cuBLAS by bare name at
+the first GEMM, a search that ignores `os.add_dll_directory`. Fixed by also prepending the
+wheel `bin` dirs to `PATH` and pinning the entry DLLs resident via `ctypes.WinDLL`
+(173541d). cuDNN-major↔ctranslate2 skew tripwire stays in `requirements.in`. Commits:
+b024368 (win-smoke), 173541d (cuBLAS fix), e9a9cfb. Full skew history in git.
+
+### TD-4 — GPU transcription speed unmeasured ✓ CLOSED
+
+Severity (was): LOW · Created 2026-06-14 → Closed 2026-06-16 (T11, 4060 run)
+
+The fork was whether `large-v3` on the 4060 is fast enough and whether int8 quantization
+costs RU quality. Measured warm on the 4060 via `scripts/measure_model.py`:
+`int8_float16` = **10.11x realtime, 3.46 GB VRAM** (bar 3.0x → PASS), `float16` = 10.27x,
+5.39 GB. Decision (operator): **keep int8_float16** — same speed, ~2 GB less VRAM, and on
+this run int8 RU quality beat the float16 control (float16 garbled the opening; int8 clean).
+Report committed at `docs/measurements/large-v3-int8_float16-2026-06-16.md`. Commits:
+b93fd72 (harness), 6bbb1fe (measurement + verdict).
 
 ### TD-1 — Whisper model runtime download ✓ CLOSED (root cause: Xet, not region)
 

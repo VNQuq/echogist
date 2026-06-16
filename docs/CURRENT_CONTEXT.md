@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-16 (T13 dev/ship loop)
+**Updated:** 2026-06-16 (operator runs complete — TD-3 + TD-4 closed, live gate green)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -90,20 +90,28 @@ every push to `main` passes ruff + mypy + tests.
 remains is operator-only — the three 4060/Windows runs below — plus the T12 docs pass. No
 WSL-side implementation work is outstanding.
 
+**Operator runs — ALL DONE (2026-06-16).** The three 4060/Windows acceptance runs passed,
+closing TD-3 + TD-4 and exercising the live gate (playbook: `docs/OPERATOR_TESTING_PLAYBOOK.md`):
+
+- **Run 1 — win-smoke (closes TD-3).** Cold-Windows `scripts\win-smoke.bat` passed: provision
+  → extract → real-GPU transcribe → artifacts, plus the live-summary variant (full pipeline
+  incl. the paid call + PDF render). It caught + fixed a real cuBLAS lazy-load bug (173541d).
+- **Run 2 — measurement (closes TD-4).** `int8_float16` = 10.11x realtime, 3.46 GB VRAM on the
+  4060; verdict **keep int8_float16** (beat the float16 control on RU quality). Report at
+  `docs/measurements/large-v3-int8_float16-2026-06-16.md`.
+- **Run 3 — T10 live gate.** `ECHOGIST_LIVE_EVAL=1 pytest -m live` → 2 passed (real Sonnet call;
+  RU+EN summaries clear the golden bar). Runs in the WSL dev env (the ship venv has no pytest).
+
+**Default model tier is now `economy` (Haiku)** for everyday use (1e45bdf); `balanced`/`flagship`
+remain selectable in Settings. The T10 live gate stays pinned to `balanced` (Sonnet).
+
 **Next:**
 
-- **T11 operator run (closes TD-4)** — run `python scripts/measure_model.py` on the Windows
-  4060 (place the RU/EN clips per `tests/fixtures/audio/README.md`), read the measured
-  realtime_factor + int8-vs-float16 RU quality, set `--bar`, and commit the produced
-  `docs/measurements/<model>-<date>.md` with the manual keep-int8/switch-to-float16 verdict.
-- **T13 win-smoke operator pass (closes TD-3)** — on the Windows 4060, place a clip at
-  `tests/fixtures/audio/smoke.*` (or pass `--clip`) and run `scripts\win-smoke.bat`; it
-  provisions + drives extract→transcribe and asserts the mp3 + transcript. That is the
-  scripted cold-Windows acceptance TD-3 was waiting on. Optional: `ECHOGIST_LIVE_SMOKE=1`
-  + a key to also exercise the paid summary end-to-end.
-- **First live-API run still pending** — `ECHOGIST_LIVE_EVAL=1 pytest -m live` is the
-  operator's first real summarize call (the T10 prompt-quality gate); not in CI.
-- **T12 docs** — document final first-run steps post-build.
+- **T12 docs** — document final first-run steps post-build (last remaining build task).
+- **Title-language prompt tweak (optional, minor).** On a German-source clip, Haiku produced a
+  German *title* on a Russian summary (body was correctly Russian). Real RU→RU / EN→EN are fine;
+  the gap is cross-language (source≠target). Candidate: harden the `[summarize]` title instruction
+  to force the target `{language}`. LLM-prompt change → wants a live re-validation if done.
 
 ## Dev env
 
@@ -126,10 +134,8 @@ the lock) so the PDF render path runs for real locally.
 
 ## Open debts
 
-- **TD-3** GPU preflight now scripted by `win-smoke.bat` (provision + clip acceptance);
-  awaits the operator's one Windows win-smoke pass · **TD-4** harness landed; awaits the
-  operator's 4060 run + verdict · **TD-5** chunked
-  map-reduce deferred. **TD-1, TD-2 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
+- **TD-5** chunked map-reduce deferred (opens on the first transcript that trips the overflow
+  guard). **TD-1, TD-2, TD-3, TD-4 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
 
