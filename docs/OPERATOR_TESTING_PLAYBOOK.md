@@ -81,10 +81,14 @@ set ECHOGIST_LIVE_SMOKE=
 переключает `compute_type` на одном `model.bin`, без повторной загрузки) и
 измеренный realtime_factor на твоей 4060.
 
+> **Важно:** запускай через `scripts\measure.bat`, а НЕ `python scripts\measure_model.py`.
+> faster-whisper стоит в `.venv`, а не в глобальном python — иначе будет
+> «faster-whisper is not installed». Лаунчер сам берёт `.venv\Scripts\python.exe`.
+
 **Шаг 2a — первый прогон, БЕЗ `--bar`** (отчёт всегда печатает измеренный
 realtime_factor; порог ты выставляешь по нему уже после):
 ```bat
-python scripts\measure_model.py --host "RTX 4060"
+scripts\measure.bat --host "RTX 4060"
 ```
 
 Он пишет отчёт в `docs\measurements\`. Из этого отчёта прочитай две вещи:
@@ -97,7 +101,7 @@ python scripts\measure_model.py --host "RTX 4060"
 
 **Шаг 2b — зафиксируй порог** и впиши свой вердикт:
 ```bat
-python scripts\measure_model.py --host "RTX 4060" --bar 1.5
+scripts\measure.bat --host "RTX 4060" --bar 1.5
 ```
 (подставь своё реальное число). Затем впиши свой вердикт оставить-int8/перейти-на-float16
 в файл отчёта в `docs\measurements\`.
@@ -117,11 +121,25 @@ int8/float16 (вставь отчёт или нужные строки).
 
 **Что доказывает:** единственный реальный вызов суммаризации Anthropic — гейт
 качества промпта, который пропускается в CI. Это те самые 2 теста, что сейчас
-показаны как skipped.
+показаны как skipped. **GPU не нужен** — тест гоняет `summarize()` на готовых
+RU/EN-транскриптах из `tests/fixtures/`, это чистый вызов API.
 
+> **Важно:** `pytest` НЕ ставится в ship-venv (`run.bat` ставит только
+> `requirements.lock` — рантайм). Поэтому Запуск 3 запускается в dev-среде,
+> а не на ship-боксе. Два пути:
+
+**Путь A (рекомендую) — из WSL** (там стоит весь dev-инструментарий):
+```bash
+cd ~/projects/echogist
+ANTHROPIC_API_KEY=sk-ant-... ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live
+```
+
+**Путь B — на Windows**, если не хочешь идти в WSL: сначала поставь pytest в venv,
+потом запусти его явно:
 ```bat
+.venv\Scripts\python.exe -m pip install pytest
 set ECHOGIST_LIVE_EVAL=1
-pytest -m live
+.venv\Scripts\python.exe -m pytest -m live
 set ECHOGIST_LIVE_EVAL=
 ```
 
@@ -147,11 +165,11 @@ set ECHOGIST_LIVE_EVAL=
 
 ## Быстрая справка — что что закрывает
 
-| Запуск | Команда                                              | Закрывает     |
-|--------|------------------------------------------------------|---------------|
-| 1      | `scripts\win-smoke.bat`                              | TD-3          |
-| 2      | `python scripts\measure_model.py --host "RTX 4060"`  | TD-4          |
-| 3      | `set ECHOGIST_LIVE_EVAL=1 && pytest -m live`          | live-гейт T10 |
+| Запуск | Команда                                              | Где      | Закрывает     |
+|--------|------------------------------------------------------|----------|---------------|
+| 1      | `scripts\win-smoke.bat`                              | Windows  | TD-3          |
+| 2      | `scripts\measure.bat --host "RTX 4060"`              | Windows  | TD-4          |
+| 3      | `ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live`      | WSL      | live-гейт T10 |
 
 ---
 
