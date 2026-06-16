@@ -44,15 +44,23 @@ every push to `main` passes ruff + mypy + tests.
   share one name; `summary_stem` sanitizes + truncates (Windows MAX_PATH). `/review`
   (4 subagents) hardened it: catch `FPDFException` (subclasses `Exception`, would've
   crashed); reserved device names (`CON`→`_CON`), trailing dots, control chars stripped
-  in `naming`. ruff + mypy + **154 tests**.
+  in `naming`.
+- **T8 cost** (`cost.py`) — `CostEstimate` (input/output × tier per-MTok prices);
+  pre-call **estimate** reuses the GUARD's `est_input_tokens` + fixed `output_tokens_estimate`,
+  post-call **actual** from `SummarizeResult` usage. `confirm_proceed` = Enter for cheap /
+  explicit y-N past `confirm_threshold_usd` (injectable reader). Pure, offline (killswitch AST-tested).
+- **T9 menu** (`menu.py`) — `run_menu()` loop: local file {summary·MP3·both} · saved
+  transcript (recovery path, re-summarize w/o re-transcribe) · Settings · Exit. Shared
+  `_run_summary`: GUARD(F6)→cost/threshold→one paid call→save `.json` BEFORE render(F13)→render.
+  Fail-loud return-to-menu for F1/F2/F3/F4/F5/F13 + broad backstop; EOF exits clean. Every
+  GPU/wire/ffmpeg collaborator injected via frozen `Deps` → offline-testable (killswitch AST-tested).
+  ruff + mypy + **188 tests**. On `main` @ `b55f18c`.
 
 **Next:**
 
-- **T8 cost** — pre-call estimate (reuse `guard.estimate_input_tokens` +
-  `[guard].output_tokens_estimate` + tier prices) with Enter / y-n threshold friction;
-  post-call **actual** from `SummarizeResult` token counts (`response.usage`).
-- Then **T9 menu** (loop, per-source action menus, §12 returns) → **T10 eval**
-  (RU+EN summarization quality — the prompt eval gate) / **T11 measure** (TD-4).
+- **T10 eval** — RU+EN summarization quality (overview/takeaways/timecodes/themes/core-idea
+  present, plausible timecodes). The prompt eval gate — first real API call lives here.
+- **T11 measure** (TD-4) — realtime_factor + int8-vs-float16 RU quality on the 4060.
 - **No live-API smoke yet** (killswitch CI only) — first real summarize call is the
   operator run / T10 prompt eval; that eval is the gate, not a unit test.
 
