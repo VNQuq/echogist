@@ -128,14 +128,16 @@ class Settings:
 def default_settings() -> Settings:
     """The seeded defaults used when no ``settings.json`` exists yet.
 
-    PDF + RU by default (the operator's primary language); ``balanced`` is a safe
-    middle tier; the threshold is high enough that typical cheap material runs on
-    a bare Enter and only unusually long/costly inputs prompt for y/n.
+    PDF + RU by default (the operator's primary language); ``economy`` is the
+    cheapest tier (Haiku) — the operator's chosen default for everyday use, with
+    ``balanced``/``flagship`` available via Settings; the threshold is high enough
+    that typical cheap material runs on a bare Enter and only unusually
+    long/costly inputs prompt for y/n.
     """
     return Settings(
         summary_language="ru",
         output_format="pdf",
-        model_tier="balanced",
+        model_tier="economy",
         confirm_threshold_usd=0.50,
     )
 
