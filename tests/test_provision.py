@@ -11,9 +11,15 @@ from echogist import gpu, model_asset, provision
 
 def test_ensure_output_dirs(tmp_path: Path) -> None:
     dirs = provision.ensure_output_dirs(tmp_path)
-    assert {d.name for d in dirs} == {"audio", "transcripts", "summaries"}
-    for sub in ("audio", "transcripts", "summaries"):
-        assert (tmp_path / "output" / sub).is_dir()
+    output = tmp_path / "output"
+    assert {d.relative_to(output).as_posix() for d in dirs} == {
+        "audio",
+        "transcripts",
+        "summaries",
+        "summaries/raw",
+    }
+    for sub in ("audio", "transcripts", "summaries", "summaries/raw"):
+        assert (output / sub).is_dir()
 
 
 def test_ensure_output_dirs_idempotent(tmp_path: Path) -> None:

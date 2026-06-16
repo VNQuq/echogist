@@ -171,7 +171,7 @@ def run_smoke(
         log=emit,
     )
     summaries_dir = base / "output" / "summaries"
-    json_path = summarize.save_raw_result(result.summary, summaries_dir)  # before render (F13)
+    json_path = summarize.save_raw_result(result.summary, summaries_dir / "raw")  # F13
     out_path = render.render(
         result.summary, summaries_dir, settings.output_format, base=json_path.stem, log=emit
     )

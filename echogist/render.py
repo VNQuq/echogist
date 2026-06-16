@@ -6,9 +6,10 @@ default) or ``<title>.md``. It is LOCAL and offline — no network, no key — s
 sits to the left of the killswitch like every stage except summarize.
 
 **Grouping the triplet.** Summarize (T6) already wrote the raw
-``output/summaries/<title>.json`` (F13). Render reuses THAT file's stem for the
-``.pdf``/``.md`` (the ``base`` argument is normally ``saved_json_path.stem``), so
-``.json``/``.pdf``/``.md`` share one base name; only the chosen extension is
+``output/summaries/raw/<title>.json`` (F13). Render reuses THAT file's stem for the
+``.pdf``/``.md`` it writes to ``output/summaries/`` (the ``base`` argument is
+normally ``saved_json_path.stem``), so ``.json``/``.pdf``/``.md`` share one base
+name (the .json one level down); only the chosen extension is
 deduped here. The stem itself is the Windows-safe, length-capped
 :func:`naming.summary_stem`.
 

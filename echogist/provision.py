@@ -19,7 +19,9 @@ from pathlib import Path
 from . import gpu, model_asset
 from .config import ConfigError, load_model_config
 
-OUTPUT_SUBDIRS: tuple[str, ...] = ("audio", "transcripts", "summaries")
+# ``summaries/raw`` holds the F13 recovery .json out of the operator's eye-line;
+# the readable .pdf/.md stay directly under ``summaries``.
+OUTPUT_SUBDIRS: tuple[str, ...] = ("audio", "transcripts", "summaries", "summaries/raw")
 
 Logger = Callable[[str], object]
 
@@ -35,7 +37,7 @@ def app_root() -> Path:
 
 
 def ensure_output_dirs(base: Path) -> list[Path]:
-    """Create ``output/{audio,transcripts,summaries}`` (the recovery artifacts)."""
+    """Create ``output/{audio,transcripts,summaries,summaries/raw}`` (the recovery artifacts)."""
     dirs = [base / "output" / sub for sub in OUTPUT_SUBDIRS]
     for directory in dirs:
         directory.mkdir(parents=True, exist_ok=True)

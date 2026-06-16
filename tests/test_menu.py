@@ -280,7 +280,7 @@ def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F
     assert calls["summarize"] == 1  # the call was paid
     assert "re-render it later" in _log_text(log)
     # The raw result was persisted BEFORE render, so no re-pay is needed.
-    assert list((tmp_path / "output" / "summaries").glob("*.json"))
+    assert list((tmp_path / "output" / "summaries" / "raw").glob("*.json"))
 
 
 def test_summarize_error_returns_to_menu(tmp_path: Path) -> None:  # F2/F4/F5

@@ -29,7 +29,7 @@ that still hits the cap (``stop_reason == "max_tokens"``) yields truncated, inva
 tool JSON, so it is caught and surfaced rather than parsed into a half-summary.
 
 **F13 ordering.** :func:`save_raw_result` persists the raw structured result as
-``output/summaries/<title>.json`` (no date prefix, plan §3) and is meant to run
+``output/summaries/raw/<title>.json`` (no date prefix, plan §3) and is meant to run
 BEFORE render — a render failure then never costs a re-pay (re-render from the
 ``.json``). Exact cost comes from :class:`SummarizeResult` usage (``response.usage``),
 never ``count_tokens`` (that is a network call — see the guard).

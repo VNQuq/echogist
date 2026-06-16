@@ -170,7 +170,9 @@ def _run_summary(
     deps.log(cost.actual_message(cost.actual_cost(result, tier)))
 
     summaries_dir = deps.base / "output" / "summaries"
-    json_path = summarize.save_raw_result(result.summary, summaries_dir)  # F13: BEFORE render
+    # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
+    # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
+    json_path = summarize.save_raw_result(result.summary, summaries_dir / "raw")  # BEFORE render
     try:
         out_path = deps.render(
             result.summary,
