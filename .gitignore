@@ -41,6 +41,9 @@ models/
 *.part
 # Operator's runtime settings — written by the Settings menu, not source
 config/settings.json
+# Operator test clips — placed locally per tests/fixtures/audio/README.md, never committed
+tests/fixtures/audio/*
+!tests/fixtures/audio/README.md
 
 # Data / logs / dumps
 data/
