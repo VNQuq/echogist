@@ -24,11 +24,20 @@ from __future__ import annotations
 import os
 import sys
 import sysconfig
+from collections.abc import Iterable
 from pathlib import Path
 
 # The bundled NVIDIA wheels lay their libraries under
 # site-packages/nvidia/<lib>/bin (Windows DLLs) or .../lib (Linux .so).
 _NVIDIA_LIBS: tuple[str, ...] = ("cudnn", "cublas")
+
+# The "entry" DLLs ctranslate2 lazily loads by bare name at the first GPU op.
+# We pin them resident by absolute path (see register_cuda_libraries) so the
+# later by-name load returns the already-loaded module. The glob deliberately
+# matches the version-suffixed entry point only (cublas64_12.dll, cudnn64_9.dll)
+# and NOT its same-dir helpers (cublasLt64_12.dll, cudnn_graph64_9.dll, ...),
+# which Windows resolves from the entry DLL's own directory.
+_ENTRY_DLL_GLOBS: tuple[str, ...] = ("cublas64_*.dll", "cudnn64_*.dll")
 
 
 def _site_packages() -> Path:
@@ -45,12 +54,54 @@ def _nvidia_lib_dirs(site_packages: Path, subdir: str) -> list[Path]:
     return found
 
 
+def _prepend_to_path(lib_dirs: Iterable[Path]) -> None:
+    """Prepend each dir to ``PATH`` (idempotent), in front of any existing entry.
+
+    ``os.add_dll_directory`` alone is not enough on Windows: ctranslate2 lazily
+    loads cuBLAS/cuDNN by bare name at the first GPU op, and that search honors
+    ``PATH`` but not the directories added via ``add_dll_directory`` (TD-3). Pure
+    over ``os.environ`` so it is unit-testable off Windows.
+    """
+    for lib_dir in lib_dirs:
+        entry = str(lib_dir)
+        current = os.environ.get("PATH", "")
+        parts = current.split(os.pathsep) if current else []
+        if entry not in parts:
+            os.environ["PATH"] = entry + os.pathsep + current if current else entry
+
+
+def _preload_entry_dlls(lib_dirs: Iterable[Path]) -> list[str]:
+    """Pin the cuBLAS/cuDNN entry DLLs resident by absolute path (Windows only).
+
+    Once a module is loaded by absolute path, a later bare-name ``LoadLibrary``
+    from ctranslate2 returns the already-loaded handle regardless of its search
+    order — the deterministic belt to the PATH suspenders. Best-effort: a DLL
+    that fails to preload here surfaces a friendly diagnostic at transcribe time
+    via :func:`diagnose_import_error`, never a crash. Returns the names pinned.
+    """
+    import ctypes
+
+    pinned: list[str] = []
+    for lib_dir in lib_dirs:
+        for pattern in _ENTRY_DLL_GLOBS:
+            for dll in sorted(lib_dir.glob(pattern)):
+                try:
+                    ctypes.WinDLL(str(dll))  # type: ignore[attr-defined]  # win32-only
+                    pinned.append(dll.name)
+                except OSError:
+                    pass
+    return pinned
+
+
 def register_cuda_libraries(site_packages: Path | None = None) -> list[Path]:
     """Register the bundled cuDNN/cuBLAS DLL dirs so faster-whisper can load them.
 
-    MUST be called before importing ``faster_whisper`` on Windows. Returns the
-    dirs registered — empty off Windows (the linker handles it on WSL/Linux) or
-    when the wheels are absent.
+    MUST be called before importing ``faster_whisper`` on Windows. Three layers,
+    because ctranslate2 lazily loads cuBLAS/cuDNN by bare name at the first GPU
+    op and that search ignores ``add_dll_directory`` (TD-3): register the dirs,
+    prepend them to ``PATH``, and pin the entry DLLs resident by absolute path.
+    Returns the dirs registered — empty off Windows (the linker handles it on
+    WSL/Linux) or when the wheels are absent.
     """
     if sys.platform != "win32":
         return []
@@ -59,6 +110,8 @@ def register_cuda_libraries(site_packages: Path | None = None) -> list[Path]:
     for lib_dir in _nvidia_lib_dirs(base, "bin"):
         os.add_dll_directory(str(lib_dir))
         registered.append(lib_dir)
+    _prepend_to_path(registered)
+    _preload_entry_dlls(registered)
     return registered
 
 
