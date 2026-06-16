@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-16
+**Updated:** 2026-06-16 (T11 harness)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -65,10 +65,20 @@ every push to `main` passes ruff + mypy + tests.
   `ECHOGIST_LIVE_EVAL` + a key — that gate IS the killswitch. ruff + mypy + **197 tests,
   2 live skipped**. On `main` @ `2e0da3c`.
 
+- **T11 harness** (`scripts/measure_model.py` + `tests/test_measure.py` +
+  `tests/fixtures/audio/README.md`) — the GPU-free half of TD-4, finished + CI-tested in
+  WSL (operator steer: split by GPU dependency). Pure core (`realtime_factor`,
+  `speed_verdict`, `render_report`) unit-tested; warm GPU A/B (`int8_float16` vs `float16`
+  via a `compute_type` flip on the one HF `model.bin`, no re-download) runs operator-side on
+  the 4060. `--bar` optional: the report ALWAYS surfaces the measured realtime_factor; the
+  operator sets the bar from it. mypy now covers the script. ruff + mypy + **209 tests, 2 skipped**.
+
 **Next:**
 
-- **T11 measure** (TD-4) — realtime_factor + int8-vs-float16 RU quality on the 4060,
-  via the committed harness (§12.3). Closes TD-4 with `docs/measurements/<model>-<date>.md`.
+- **T11 operator run (closes TD-4)** — run `python scripts/measure_model.py` on the Windows
+  4060 (place the RU/EN clips per `tests/fixtures/audio/README.md`), read the measured
+  realtime_factor + int8-vs-float16 RU quality, set `--bar`, and commit the produced
+  `docs/measurements/<model>-<date>.md` with the manual keep-int8/switch-to-float16 verdict.
 - **T13 devex** — `win32` platform shim + `scripts/dev-loop`/`win-smoke` (loop scaffolding).
 - **First live-API run still pending** — `ECHOGIST_LIVE_EVAL=1 pytest -m live` is the
   operator's first real summarize call (the T10 prompt-quality gate); not in CI.
@@ -95,7 +105,7 @@ the lock) so the PDF render path runs for real locally.
 ## Open debts
 
 - **TD-3** GPU preflight pending the live Windows run (WSL T3 exercised cuDNN/cuBLAS
-  green) · **TD-4** GPU speed + int8 RU quality unmeasured (T11) · **TD-5** chunked
+  green) · **TD-4** harness landed; awaits the operator's 4060 run + verdict · **TD-5** chunked
   map-reduce deferred. **TD-1, TD-2 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)

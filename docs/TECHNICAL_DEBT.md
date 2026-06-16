@@ -70,6 +70,15 @@ measured — blocked purely by TD-1 (no model bytes). The GPU env itself is prov
 **When to open.** T11, via the committed `scripts/measure_model.py` harness (warm,
 RU+EN fixtures, peak-VRAM, int8-vs-float16 A/B) — not ad-hoc.
 
+**Update (2026-06-16, T11).** Harness landed on `main`: `scripts/measure_model.py`
+(warm timing — model load + a warmup pass excluded; `int8_float16`-vs-`float16` A/B as a
+`compute_type` flip on the one HF `model.bin`; peak-VRAM sampler; writes
+`docs/measurements/<model>-<date>.md`) + `tests/test_measure.py` (pure core in CI) +
+`tests/fixtures/audio/README.md` (clip placement). `--bar` is optional and the report
+always surfaces the measured `realtime_factor` (operator sets the bar from it, not blind).
+**Closes when** the operator runs it on the 4060 and commits the measurements doc with
+real numbers + the manual keep-int8/switch-to-float16 RU quality verdict.
+
 ### TD-5 — Chunked map-reduce summarization deferred from v1
 
 Severity: LOW · Created 2026-06-14 (eng-review) · Trigger: first real transcript that exceeds the single-pass context budget · SoT: this file
