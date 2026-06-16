@@ -91,7 +91,7 @@ remains is operator-only — the three 4060/Windows runs below — plus the T12 
 WSL-side implementation work is outstanding.
 
 **Operator runs — ALL DONE (2026-06-16).** The three 4060/Windows acceptance runs passed,
-closing TD-3 + TD-4 and exercising the live gate (playbook: `docs/OPERATOR_TESTING_PLAYBOOK.md`):
+closing TD-3 + TD-4 and exercising the live gate (playbook: `docs/archive/OPERATOR_TESTING_PLAYBOOK.md`):
 
 - **Run 1 — win-smoke (closes TD-3).** Cold-Windows `scripts\win-smoke.bat` passed: provision
   → extract → real-GPU transcribe → artifacts, plus the live-summary variant (full pipeline
@@ -124,7 +124,7 @@ the lock) so the PDF render path runs for real locally.
 
 - **Build spec (locked):** [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md) —
   stack/pipeline/provisioning/tasks (T1..T13).
-- Original ТЗ: [`ТЗ_аудио_резюме_приложение.md`](../ТЗ_аудио_резюме_приложение.md)
+- Original ТЗ: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md)
   (local files + saved transcript only).
 
 ## Open blockers
