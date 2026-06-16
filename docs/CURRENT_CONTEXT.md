@@ -84,7 +84,11 @@ every push to `main` passes ruff + mypy + tests.
   `ECHOGIST_LIVE_SMOKE` + a key (the `ECHOGIST_LIVE_EVAL` shape). `win-smoke.bat` now
   provisions via `run.bat --provision-only` (no menu block) then drives the clip + asserts
   artifacts; `dev-loop --gpu` reuses the one driver for the WSL fixture transcribe. mypy
-  covers the driver. ruff + mypy + **222 tests, 2 skipped**.
+  covers the driver. ruff + mypy + **222 tests, 2 skipped**. On `main` @ `b024368`.
+
+**Build status:** all WSL-side build tasks (T1–T11, T13) are code-complete on `main`. What
+remains is operator-only — the three 4060/Windows runs below — plus the T12 docs pass. No
+WSL-side implementation work is outstanding.
 
 **Next:**
 
