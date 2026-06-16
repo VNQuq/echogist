@@ -56,13 +56,22 @@ every push to `main` passes ruff + mypy + tests.
   GPU/wire/ffmpeg collaborator injected via frozen `Deps` → offline-testable (killswitch AST-tested).
   ruff + mypy + **188 tests**. On `main` @ `b55f18c`.
 
+- **T10 eval** (`tests/eval_quality.py` + `tests/fixtures/` RU+EN transcripts/golden
+  summaries + `tests/test_eval.py`) — pure offline scorer: structure present +
+  timecodes plausible (each `[HH:MM:SS]` appears in the transcript) + language
+  plausible (RU Cyrillic / EN none). Offline gate runs in CI (golden refs clear the
+  bar; scorer shown to REJECT broken/hallucinated/wrong-lang; real `summarize()` driven
+  via stub caller). Live gate (`test_live_*`, the ONE real call) is skipped unless
+  `ECHOGIST_LIVE_EVAL` + a key — that gate IS the killswitch. ruff + mypy + **197 tests,
+  2 live skipped**. On `main` @ `2e0da3c`.
+
 **Next:**
 
-- **T10 eval** — RU+EN summarization quality (overview/takeaways/timecodes/themes/core-idea
-  present, plausible timecodes). The prompt eval gate — first real API call lives here.
-- **T11 measure** (TD-4) — realtime_factor + int8-vs-float16 RU quality on the 4060.
-- **No live-API smoke yet** (killswitch CI only) — first real summarize call is the
-  operator run / T10 prompt eval; that eval is the gate, not a unit test.
+- **T11 measure** (TD-4) — realtime_factor + int8-vs-float16 RU quality on the 4060,
+  via the committed harness (§12.3). Closes TD-4 with `docs/measurements/<model>-<date>.md`.
+- **T13 devex** — `win32` platform shim + `scripts/dev-loop`/`win-smoke` (loop scaffolding).
+- **First live-API run still pending** — `ECHOGIST_LIVE_EVAL=1 pytest -m live` is the
+  operator's first real summarize call (the T10 prompt-quality gate); not in CI.
 
 ## Dev env
 
