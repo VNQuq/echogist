@@ -31,5 +31,5 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [win-smoke] PASS — ship target works.
+echo [win-smoke] PASS - ship target works.
 endlocal
