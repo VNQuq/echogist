@@ -108,10 +108,9 @@ remain selectable in Settings. The T10 live gate stays pinned to `balanced` (Son
 **Next:**
 
 - **T12 docs** — document final first-run steps post-build (last remaining build task).
-- **Title-language prompt tweak (optional, minor).** On a German-source clip, Haiku produced a
-  German *title* on a Russian summary (body was correctly Russian). Real RU→RU / EN→EN are fine;
-  the gap is cross-language (source≠target). Candidate: harden the `[summarize]` title instruction
-  to force the target `{language}`. LLM-prompt change → wants a live re-validation if done.
+- **TD-6 (logged, not actioned)** — summary title can leak the source language on cross-language
+  input (German clip → German title on a Russian summary). LOW; opens when cross-language
+  summarizing becomes normal. → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Dev env
 
@@ -135,7 +134,8 @@ the lock) so the PDF render path runs for real locally.
 ## Open debts
 
 - **TD-5** chunked map-reduce deferred (opens on the first transcript that trips the overflow
-  guard). **TD-1, TD-2, TD-3, TD-4 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
+  guard) · **TD-6** title can leak source language on cross-language input (LOW, logged).
+  **TD-1, TD-2, TD-3, TD-4 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
 

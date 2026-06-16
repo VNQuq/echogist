@@ -54,6 +54,27 @@ exercises; cost of a single 40K-token call is ~$0.12, so "never re-pay" is penni
 material becomes a regular input. The coarse-stage job-state engine already leaves
 a clean seam to add a summarization sub-stage without reshaping the pipeline.
 
+### TD-6 — Summary title can leak the source language (not the target)
+
+Severity: LOW · Created 2026-06-16 · Trigger: cross-language summarizing becomes a regular case · SoT: this file
+
+**What.** The `[summarize]` prompt asks for the `title` field "in {language}", but on a
+**German** smoke clip summarized to Russian, `claude-haiku-4-5` returned a German title
+("Wenn es morgen nichts mehr gäbe") while the body was correctly Russian. The title field
+anchors to the source language when source ≠ target. Observed once, on the economy tier,
+via the T13 live-smoke path.
+
+**Why deferred.** The supported summary languages are RU + EN; same-language cases (RU→RU,
+EN→EN) are unaffected and the T10 live gate passes clean on both. Only cross-language
+(e.g. EN audio → RU summary) is exposed, and only the title, not the content. Candidate fix
+is a one-line prompt hardening ("the title MUST be in {language} even when the transcript is
+in another language"), but it is an LLM-prompt change that wants a paid live re-validation,
+not worth churning for an edge case yet.
+
+**When to open.** When summarizing content whose audio language differs from the chosen
+summary language becomes a normal input — then harden the title instruction and re-run the
+live gate.
+
 ---
 
 ## Closed debts
