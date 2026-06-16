@@ -41,3 +41,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "live: opt-in test that makes a real Anthropic API call (T10 eval). Skipped unless ECHOGIST_LIVE_EVAL is set and a key is present — the killswitch.",
+]

@@ -1,0 +1,24 @@
+{
+  "title": "Artificial Intelligence as Infrastructure in 2026",
+  "overview": "A talk about how artificial intelligence has changed over the past year. It covers the falling cost of models, local inference on your own hardware, and questions of access and ethics.",
+  "key_takeaways": [
+    "The price per million tokens has dropped several times over, changing which tasks are worth automating.",
+    "Large models now run on a single consumer graphics card.",
+    "Local inference matters first for the privacy of personal data, not only for speed.",
+    "The cost drop carries risks for the labor market and raises the question of who benefits."
+  ],
+  "section_timecodes": [
+    {"timecode": "[00:00:00]", "title": "Intro: what changed this year"},
+    {"timecode": "[00:02:10]", "title": "The falling cost of models"},
+    {"timecode": "[00:06:30]", "title": "Local inference on your own hardware"},
+    {"timecode": "[00:10:50]", "title": "Access and ethics"},
+    {"timecode": "[00:13:40]", "title": "Wrap-up: AI as infrastructure"}
+  ],
+  "recurring_themes": [
+    "cost reduction",
+    "privacy",
+    "access"
+  ],
+  "core_idea": "Artificial intelligence is ceasing to be a separate product and is becoming infrastructure, like electricity or connectivity.",
+  "language": "en"
+}

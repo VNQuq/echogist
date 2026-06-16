@@ -1,0 +1,5 @@
+[00:00:00] Good afternoon. Today we will talk about the state of artificial intelligence in 2026 and what has changed over the past year.
+[00:02:10] The first major theme is the falling cost of models. The price per million tokens has dropped several times over, and that changes which tasks are even worth automating.
+[00:06:30] The second theme is local inference on your own hardware. Large models now run on a single consumer graphics card, and for personal data that is a question of privacy, not only speed.
+[00:10:50] Next we discuss access and ethics: who benefits from the cost drop, and what risks it carries for the labor market.
+[00:13:40] To wrap up. The core point is simple: artificial intelligence is ceasing to be a separate product and is becoming infrastructure, like electricity or connectivity.
