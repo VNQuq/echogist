@@ -12,11 +12,12 @@ Two numbers bracket the one paid SUMMARIZE call:
   counts carried on :class:`echogist.summarize.SummarizeResult`. The exact,
   billable number.
 
-**Threshold friction (plan §3).** Cheap material proceeds on a bare Enter; only
-an estimate above the operator's ``confirm_threshold_usd`` demands an explicit
-y/n. :func:`confirm_proceed` owns that policy with an injectable ``reader`` so
-both sides are unit-testable without stdin (same seam idiom as the summarize
-``caller`` / extract ``runner``).
+**Threshold friction (plan §3 / v1.1 §5).** Cheap material proceeds with no gate
+(the menu shows the estimate as the acknowledgment); only an estimate above the
+operator's ``confirm_threshold_usd`` demands an explicit yes. :func:`confirm_proceed`
+owns that policy via an injectable ``confirm(prompt, default) -> bool`` callable, so
+``cost.py`` stays decoupled from the full :class:`~echogist.ui.UI` Protocol and both
+sides are unit-testable without a TTY (the menu wires ``ui.confirm``).
 
 **Killswitch (CLAUDE.md):** this is a LOCAL stage. It computes cost from prices
 in the config and token counts handed to it — no ``count_tokens``, no network,
@@ -33,15 +34,13 @@ from dataclasses import dataclass
 from .config import GuardConfig, ModelTier
 from .summarize import SummarizeResult
 
-# A reader takes a prompt and returns the operator's typed line. Injectable so
-# the confirmation policy is driven offline in tests. Default: the builtin input.
-Reader = Callable[[str], str]
+# A confirm widget: takes a prompt + a default and returns the operator's yes/no.
+# Injectable so the confirmation policy is driven offline in tests; the menu wires
+# the UI's arrow-key/confirm prompt. Narrow on purpose — cost stays decoupled from
+# the full UI Protocol (v1.1 §5).
+Confirm = Callable[[str, bool], bool]
 
 _USD_PER_MTOK = 1_000_000  # prices are quoted per million tokens (plan §3)
-
-# Affirmative replies past the threshold. Anything else (incl. a bare Enter)
-# means "no" — above the threshold the safe default is NOT to spend.
-_YES = frozenset({"y", "yes"})
 
 
 @dataclass(frozen=True)
@@ -142,22 +141,23 @@ def confirm_proceed(
     estimate: CostEstimate,
     threshold_usd: float,
     *,
-    reader: Reader = input,
+    confirm: Confirm,
 ) -> bool:
     """Decide whether to make the paid call, applying the §3 threshold friction.
 
-    Cheap material (estimate ≤ threshold): acknowledge with a bare Enter and
-    proceed. Above the threshold: an explicit ``y``/``yes`` is required; anything
-    else (including a bare Enter) declines — above budget the safe default is not
-    to spend. The transcript is already saved, so declining loses nothing.
+    Cheap material (estimate ≤ threshold): proceeds with no gate — the estimate the
+    menu already showed is the acknowledgment, faithful to today's unconditional
+    proceed (v1.1 §5; a y/N widget here would let the operator decline a cheap call
+    that always ran). Above the threshold: ``confirm`` is asked with ``default=False``,
+    so a bare Enter declines — above budget the safe default is not to spend. The
+    transcript is already saved, so declining loses nothing.
 
-    ``reader`` is injectable for tests; it defaults to the builtin ``input``.
+    ``confirm`` is injectable for tests; the menu wires the UI's confirm prompt.
     """
     if not requires_explicit_confirmation(estimate, threshold_usd):
-        reader(f"Press Enter to summarize ({_format_usd(estimate.total_usd)})... ")
         return True
-    answer = reader(
+    return confirm(
         f"Estimated cost {_format_usd(estimate.total_usd)} exceeds your "
-        f"{_format_usd(threshold_usd)} threshold. Summarize anyway? [y/N] "
+        f"{_format_usd(threshold_usd)} threshold. Summarize anyway?",
+        False,
     )
-    return answer.strip().lower() in _YES

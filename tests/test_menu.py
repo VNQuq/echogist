@@ -1,18 +1,24 @@
-"""Menu-loop tests (T9).
+"""Menu-loop tests (T9), migrated to the UI seam (v1.1 T6).
 
-The menu orchestrates the one network stage but is itself offline: every seam that
-touches the GPU, the wire, or ffmpeg is injected, so these run with no model, no
-key, no network (killswitch). Coverage: loop navigation + clean exit, each
-source×action path returning cleanly, the cost/threshold flow (Enter vs y/N),
-settings edit + persistence, the §12 return-to-menu failure modes (F1 bad path,
-F3 missing key, F6 overflow, F13 render-after-pay, plus a SummarizeError surface),
-and the killswitch (no network import at module top level).
+The menu orchestrates the one network stage but is itself offline: the UI is a scripted
+:class:`~echogist.ui.StubUI` (no TTY, no rich, no network) and every heavy seam is
+injected, so these run with no model, no key, no network (killswitch). Coverage: loop
+navigation + clean exit, each source×action path returning cleanly, the cost/threshold
+flow (cheap proceeds with no gate / above-threshold confirm), settings edit + persistence,
+the §12 return-to-menu failure modes (F1 bad path, F3 missing key, F6 overflow, F13
+render-after-pay, plus a SummarizeError surface), and the killswitch (no network import
+at module top level).
+
+Arrow-key surfaces are now ``select``: the main menu, the action, the transcript pick,
+and the settings enums return a value the operator chose from a list, so an invalid
+choice is structurally impossible (no reprompt test). ``StubUI`` pops queued answers in
+order — a string for ``select``/``text``, a bool for ``confirm`` — and EOFs (clean exit)
+when the queue empties.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,23 +26,12 @@ from echogist import config, menu
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary
 from echogist.transcribe import Segment, Transcript
+from echogist.ui import StubUI
 
 
 # --------------------------------------------------------------------------- #
 # Harness
 # --------------------------------------------------------------------------- #
-def _reader(answers: list[str]) -> Callable[[str], str]:
-    """A stdin stub: hands back queued answers, then EOFs (the loop exits on EOF)."""
-    queue = list(answers)
-
-    def read(_prompt: str) -> str:
-        if not queue:
-            raise EOFError
-        return queue.pop(0)
-
-    return read
-
-
 def _summary() -> Summary:
     return Summary(
         title="Test Summary",
@@ -55,13 +50,12 @@ def _transcript() -> Transcript:
 
 def _make_deps(
     tmp_path: Path,
-    answers: list[str],
+    answers: list[Any],
     *,
     api_key: str | None = "sk-test",
     render_error: bool = False,
     summarize_error: str | None = None,
-) -> tuple[menu.Deps, list[str], dict[str, int]]:
-    log: list[str] = []
+) -> tuple[menu.Deps, StubUI, dict[str, int]]:
     calls: dict[str, int] = {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
     def extract_audio(source: Path, out_dir: Path, *, log: Any = print, **_kw: Any) -> Path:
@@ -102,9 +96,9 @@ def _make_deps(
             raise RenderError("layout blew up")
         return Path(out_dir) / f"{base}.{fmt}"
 
+    stub = StubUI(answers)
     deps = menu.Deps(
-        reader=_reader(answers),
-        log=log.append,
+        ui=stub,
         extract_audio=extract_audio,
         transcribe=transcribe,
         summarize=summarize,
@@ -113,11 +107,7 @@ def _make_deps(
         base=tmp_path,
         settings_path=tmp_path / "settings.json",
     )
-    return deps, log, calls
-
-
-def _log_text(log: list[str]) -> str:
-    return "\n".join(log)
+    return deps, stub, calls
 
 
 def _write_settings(tmp_path: Path, **overrides: Any) -> None:
@@ -131,19 +121,13 @@ def _write_settings(tmp_path: Path, **overrides: Any) -> None:
 # Loop + navigation
 # --------------------------------------------------------------------------- #
 def test_exit_returns_zero(tmp_path: Path) -> None:
-    deps, log, _ = _make_deps(tmp_path, ["4"])
+    deps, stub, _ = _make_deps(tmp_path, ["4"])
     assert menu.run_menu(deps) == 0
-    assert "Goodbye." in _log_text(log)
-
-
-def test_invalid_choice_reprompts(tmp_path: Path) -> None:
-    deps, log, _ = _make_deps(tmp_path, ["9", "4"])
-    assert menu.run_menu(deps) == 0
-    assert "Please enter 1, 2, 3, or 4." in _log_text(log)
+    assert "Goodbye." in stub.log_text
 
 
 def test_eof_exits_cleanly(tmp_path: Path) -> None:
-    # No answers at all -> the first prompt EOFs -> clean exit, no crash.
+    # No answers at all -> the first menu select EOFs -> clean exit, no crash.
     deps, _, _ = _make_deps(tmp_path, [])
     assert menu.run_menu(deps) == 0
 
@@ -154,13 +138,13 @@ def test_eof_exits_cleanly(tmp_path: Path) -> None:
 def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, log, calls = _make_deps(tmp_path, ["1", str(src), "1", "", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 1
     assert calls["render"] == 1
     assert calls["extract"] == 0  # summary-only never produced an mp3
-    assert "Done — summary written to" in _log_text(log)
+    assert "Done — summary written to" in stub.log_text
     # The transcript checkpoint was saved (the recovery artifact).
     assert list((tmp_path / "output" / "transcripts").glob("*.txt"))
 
@@ -168,18 +152,18 @@ def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
 def test_local_file_mp3_only_skips_transcribe(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, log, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 0
     assert calls["summarize"] == 0
-    assert "Saved MP3:" in _log_text(log)
+    assert "Saved MP3:" in stub.log_text
 
 
 def test_local_file_both_extracts_and_summarizes(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "3", "", "4"])
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "3", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 1
@@ -189,16 +173,23 @@ def test_local_file_both_extracts_and_summarizes(tmp_path: Path) -> None:
 def test_mp3_source_not_re_extracted(tmp_path: Path) -> None:
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, log, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0  # already an mp3
-    assert "already an MP3" in _log_text(log)
+    assert "already an MP3" in stub.log_text
 
 
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path) -> None:
-    deps, log, calls = _make_deps(tmp_path, ["1", str(tmp_path / "nope.wav"), "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(tmp_path / "nope.wav"), "4"])
     assert menu.run_menu(deps) == 0
-    assert "File not found" in _log_text(log)
+    assert "File not found" in stub.log_text
+    assert calls["transcribe"] == 0
+
+
+def test_local_file_blank_path_returns_to_menu(tmp_path: Path) -> None:
+    deps, stub, calls = _make_deps(tmp_path, ["1", "", "4"])
+    assert menu.run_menu(deps) == 0
+    assert "No path entered" in stub.log_text
     assert calls["transcribe"] == 0
 
 
@@ -213,20 +204,28 @@ def _seed_transcript(tmp_path: Path, text: str = "hello world") -> Path:
     return path
 
 
-def test_saved_transcript_pick_by_number(tmp_path: Path) -> None:
+def test_saved_transcript_pick_by_arrow(tmp_path: Path) -> None:
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "", "4"])
+    # The first saved transcript is select value "0" (the list index).
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 0  # re-summarize, never re-transcribe
     assert calls["summarize"] == 1
-    assert "Done — summary written to" in _log_text(log)
+    assert "Done — summary written to" in stub.log_text
+
+
+def test_saved_transcript_cancel_returns_to_menu(tmp_path: Path) -> None:
+    _seed_transcript(tmp_path)
+    deps, _, calls = _make_deps(tmp_path, ["2", "__cancel__", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 0
 
 
 def test_saved_transcript_empty_file(tmp_path: Path) -> None:
     _seed_transcript(tmp_path, text="   ")
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
-    assert "nothing to summarize" in _log_text(log)
+    assert "nothing to summarize" in stub.log_text
     assert calls["summarize"] == 0
 
 
@@ -234,22 +233,32 @@ def test_saved_transcript_empty_file(tmp_path: Path) -> None:
 # Cost / threshold flow (T8 wired through the menu)
 # --------------------------------------------------------------------------- #
 def test_over_threshold_decline_skips_call(tmp_path: Path) -> None:
-    _write_settings(tmp_path, confirm_threshold_usd=0.0)  # any cost needs explicit y/N
+    _write_settings(tmp_path, confirm_threshold_usd=0.0)  # any cost needs explicit confirm
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "n", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", False, "4"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 0
-    assert "cancelled" in _log_text(log).lower()
+    assert "cancelled" in stub.log_text.lower()
 
 
 def test_over_threshold_yes_makes_call(tmp_path: Path) -> None:
     _write_settings(tmp_path, confirm_threshold_usd=0.0)
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "y", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", True, "4"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
-    assert "Estimated cost" in _log_text(log)
-    assert "Actual cost" in _log_text(log)
+    assert "Estimated cost" in stub.log_text
+    assert "Actual cost" in stub.log_text
+
+
+def test_below_threshold_proceeds_without_confirm(tmp_path: Path) -> None:
+    # A cheap call must NOT consume a confirm answer — the shown estimate is the
+    # acknowledgment (v1.1 §5). Queue has no confirm bool between pick and exit.
+    _write_settings(tmp_path, confirm_threshold_usd=100.0)  # everything is "cheap"
+    _seed_transcript(tmp_path)
+    deps, _, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -257,9 +266,9 @@ def test_over_threshold_yes_makes_call(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 def test_missing_api_key_guides_and_skips_call(tmp_path: Path) -> None:  # F3
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "4"], api_key=None)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"], api_key=None)
     assert menu.run_menu(deps) == 0
-    assert "ANTHROPIC_API_KEY is not set" in _log_text(log)
+    assert "ANTHROPIC_API_KEY is not set" in stub.log_text
     assert calls["summarize"] == 0
 
 
@@ -267,27 +276,27 @@ def test_overflow_guard_stops_before_call(tmp_path: Path) -> None:  # F6
     _write_settings(tmp_path, model_tier="economy")  # smallest context window
     big = "a" * 600_000  # est tokens > economy safe budget, all local
     _seed_transcript(tmp_path, text=big)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
-    assert "too long" in _log_text(log)
+    assert "too long" in stub.log_text
     assert calls["summarize"] == 0  # never reached the wire
 
 
 def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F13
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "", "4"], render_error=True)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"], render_error=True)
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1  # the call was paid
-    assert "re-render it later" in _log_text(log)
+    assert "re-render it later" in stub.log_text
     # The raw result was persisted BEFORE render, so no re-pay is needed.
     assert list((tmp_path / "output" / "summaries" / "raw").glob("*.json"))
 
 
 def test_summarize_error_returns_to_menu(tmp_path: Path) -> None:  # F2/F4/F5
     _seed_transcript(tmp_path)
-    deps, log, calls = _make_deps(tmp_path, ["2", "1", "", "4"], summarize_error="no internet")
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"], summarize_error="no internet")
     assert menu.run_menu(deps) == 0
-    assert "no internet" in _log_text(log)
+    assert "no internet" in stub.log_text
     assert calls["render"] == 0
 
 
@@ -295,24 +304,24 @@ def test_summarize_error_returns_to_menu(tmp_path: Path) -> None:  # F2/F4/F5
 # Settings
 # --------------------------------------------------------------------------- #
 def test_settings_change_language_persists(tmp_path: Path) -> None:
-    deps, log, _ = _make_deps(tmp_path, ["3", "1", "en", "4"])
+    # menu -> settings -> field "language" -> value "en".
+    deps, stub, _ = _make_deps(tmp_path, ["3", "1", "en", "4"])
     assert menu.run_menu(deps) == 0
-    assert "Saved." in _log_text(log)
+    assert "Saved." in stub.log_text
     assert config.load_settings(tmp_path / "settings.json").summary_language == "en"
 
 
-def test_settings_invalid_value_unchanged(tmp_path: Path) -> None:
-    deps, log, _ = _make_deps(tmp_path, ["3", "2", "docx", "4"])
+def test_settings_back_makes_no_change(tmp_path: Path) -> None:
+    deps, stub, _ = _make_deps(tmp_path, ["3", "__back__", "4"])
     assert menu.run_menu(deps) == 0
-    assert "Unknown format" in _log_text(log)
-    # Nothing was written; load falls back to defaults (pdf).
-    assert config.load_settings(tmp_path / "settings.json").output_format == "pdf"
+    assert "Saved." not in stub.log_text
 
 
 def test_settings_bad_threshold_unchanged(tmp_path: Path) -> None:
-    deps, log, _ = _make_deps(tmp_path, ["3", "4", "abc", "4"])
+    # menu -> settings -> field "threshold" -> a non-numeric text value.
+    deps, stub, _ = _make_deps(tmp_path, ["3", "4", "abc", "4"])
     assert menu.run_menu(deps) == 0
-    assert "isn't a number" in _log_text(log)
+    assert "isn't a number" in stub.log_text
 
 
 # --------------------------------------------------------------------------- #

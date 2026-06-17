@@ -95,6 +95,47 @@ fallback already covers — that is separate from a full non-TTY input path.)
 The `UI` Protocol seam already leaves a clean place to add a `PlainUI` implementation without
 touching the flows.
 
+### TD-8 — `setuptools<81` pin in the v1.1 plan does not exist in the lockfile
+
+Severity: LOW · Created 2026-06-17 (v1.1 build) · Trigger: next `scripts/lock-deps` re-lock, or any ctranslate2 `pkg_resources` import failure on Windows · SoT: this file
+
+**What.** The v1.1 plan §2 (and the saved checkpoint) instruct "PRESERVE the existing
+`setuptools<81` pin" through the re-lock. There is no such pin: `requirements.in` never
+constrained setuptools, and `requirements.lock` carries `setuptools==82.0.1` — which the
+operator's 2026-06-16 Windows acceptance runs passed on. The T7 re-lock therefore preserved
+82.0.1 (no downgrade introduced); the plan's premise was stale. The cuDNN↔ctranslate2 skew
+tripwire (the real pin that matters) is untouched.
+
+**Why deferred.** Introducing a `setuptools<81` pin now would be an unrequested downgrade
+against a lock that already ships and passes on the 4060. ctranslate2 4.8 imports cleanly with
+setuptools 82 on the target box (the live runs prove it), so there is nothing to fix — only a
+doc/reality divergence to reconcile.
+
+**When to open.** At the next re-lock: either confirm setuptools 82.x still imports clean and
+strike the "<81" wording from the plan, or, if a real `pkg_resources` failure surfaces on a
+future ctranslate2/setuptools combo, add the pin to `requirements.in` deliberately and re-run
+the §12.2 Windows cold-run verify.
+
+### TD-9 — Cheap-call "press Enter to summarize" beat dropped in v1.1
+
+Severity: LOW · Created 2026-06-17 (v1.1 build) · Trigger: operator review of the v1.1 confirm UX · SoT: this file
+
+**What.** v1.1 plan §5 says the below-threshold cost path should keep "a plain 'press Enter to
+continue' beat that ALWAYS proceeds." The build instead shows the estimate via `ui.info` and
+proceeds with **no** blocking keypress (`cost.confirm_proceed` returns `True` for cheap calls
+without calling the confirm widget). The above-threshold gate (explicit confirm, default No)
+and the exact `$0.50` threshold policy are preserved unchanged.
+
+**Why deferred.** The narrow `confirm(prompt, default) -> bool` seam (the eng-reviewed shape)
+cannot express a non-decision "acknowledge" beat without either a Y/n widget (which the plan
+explicitly rejects, since `N` could decline a cheap call that always runs) or leaking a second
+callable into `cost.py`. Dropping the forced keypress on every cheap summary is also less
+friction in an arrow-key UI, where the displayed estimate is itself the acknowledgment.
+
+**When to open.** If the operator wants the explicit pause-and-acknowledge on cheap calls back,
+add a one-line `ui.text("Press Enter to summarize…")` beat in `menu._run_summary` before the
+cheap-path proceed — no change to `cost.py` or the threshold policy.
+
 ---
 
 ## Closed debts

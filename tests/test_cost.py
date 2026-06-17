@@ -129,30 +129,38 @@ def test_requires_confirmation_below_at_and_above_threshold() -> None:
     assert cost.requires_explicit_confirmation(at, 0.0) is False
 
 
-def test_confirm_cheap_proceeds_on_enter() -> None:
+def test_confirm_cheap_proceeds_without_gate() -> None:
     cheap = cost.CostEstimate(10_000, 2_000, 3.0, 15.0)  # $0.06 < $0.50
-    prompts: list[str] = []
+    calls: list[tuple[str, bool]] = []
 
-    def reader(prompt: str) -> str:
-        prompts.append(prompt)
-        return ""  # a bare Enter
+    def confirm(prompt: str, default: bool) -> bool:
+        calls.append((prompt, default))
+        return False  # would decline if asked — but cheap material must never ask
 
-    assert cost.confirm_proceed(cheap, 0.50, reader=reader) is True
-    assert prompts and "Press Enter" in prompts[0]
+    assert cost.confirm_proceed(cheap, 0.50, confirm=confirm) is True
+    assert calls == []  # no gate on a cheap call; the shown estimate is the acknowledgment
 
 
-def test_confirm_above_threshold_requires_explicit_yes() -> None:
+def test_confirm_above_threshold_asks_with_default_false() -> None:
     pricey = cost.CostEstimate(1_000_000, 2_000, 3.0, 15.0)  # ~$3.03 > $0.50
-    assert cost.confirm_proceed(pricey, 0.50, reader=lambda _p: "y") is True
-    assert cost.confirm_proceed(pricey, 0.50, reader=lambda _p: " YES ") is True
+    seen: list[tuple[str, bool]] = []
+
+    def confirm(prompt: str, default: bool) -> bool:
+        seen.append((prompt, default))
+        return True
+
+    assert cost.confirm_proceed(pricey, 0.50, confirm=confirm) is True
+    # The gate is asked exactly once, defaulting to No (safe-not-to-spend above budget).
+    assert len(seen) == 1
+    assert seen[0][1] is False
+    assert "exceeds your" in seen[0][0]
 
 
-def test_confirm_above_threshold_declines_on_enter_or_no() -> None:
+def test_confirm_above_threshold_declines_returns_callable_result() -> None:
     pricey = cost.CostEstimate(1_000_000, 2_000, 3.0, 15.0)
-    # Above the threshold, a bare Enter is NOT consent — the safe default is no.
-    assert cost.confirm_proceed(pricey, 0.50, reader=lambda _p: "") is False
-    assert cost.confirm_proceed(pricey, 0.50, reader=lambda _p: "n") is False
-    assert cost.confirm_proceed(pricey, 0.50, reader=lambda _p: "nope") is False
+    # Above the threshold, the operator's decline flows straight through.
+    assert cost.confirm_proceed(pricey, 0.50, confirm=lambda _p, _d: False) is False
+    assert cost.confirm_proceed(pricey, 0.50, confirm=lambda _p, _d: True) is True
 
 
 # --------------------------------------------------------------------------- #

@@ -120,6 +120,57 @@ def test_save_transcript_blank_stem_falls_back(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# _collect_segments — pure stream → Segment assembly + progress (T1)
+# --------------------------------------------------------------------------- #
+class _RawSeg:
+    def __init__(self, start: float, end: float, text: str) -> None:
+        self.start = start
+        self.end = end
+        self.text = text
+
+
+def test_collect_segments_emits_fractions_when_total_known() -> None:
+    stream = [_RawSeg(0.0, 2.5, " a "), _RawSeg(2.5, 5.0, "b"), _RawSeg(5.0, 10.0, "c")]
+    seen: list[float] = []
+    segs = transcribe._collect_segments(stream, total=10.0, progress=seen.append)
+    # text is stripped, order + timecodes preserved.
+    assert [s.text for s in segs] == ["a", "b", "c"]
+    # progress is the running completion fraction raw.end / total.
+    assert seen == [0.25, 0.5, 1.0]
+
+
+def test_collect_segments_clamps_fraction_at_one() -> None:
+    # A segment ending past the probed duration must not report > 100%.
+    stream = [_RawSeg(0.0, 12.0, "x")]
+    seen: list[float] = []
+    transcribe._collect_segments(stream, total=10.0, progress=seen.append)
+    assert seen == [1.0]
+
+
+def test_collect_segments_total_zero_reports_segment_count() -> None:
+    # Zero/unprobeable duration: no fraction is knowable, so the running segment count
+    # is reported instead (a no-ETA readout) — never a div-by-zero, never a fake %.
+    stream = [_RawSeg(0.0, 0.0, "a"), _RawSeg(0.0, 0.0, "b"), _RawSeg(0.0, 0.0, "c")]
+    seen: list[float] = []
+    segs = transcribe._collect_segments(stream, total=0.0, progress=seen.append)
+    assert len(segs) == 3
+    assert seen == [1.0, 2.0, 3.0]
+
+
+def test_collect_segments_empty_stream() -> None:
+    seen: list[float] = []
+    segs = transcribe._collect_segments([], total=10.0, progress=seen.append)
+    assert segs == ()
+    assert seen == []
+
+
+def test_collect_segments_no_progress_callback_is_fine() -> None:
+    # progress is optional — assembling the tuple must not require a reporter.
+    segs = transcribe._collect_segments([_RawSeg(0.0, 1.0, "a")], total=10.0)
+    assert [s.text for s in segs] == ["a"]
+
+
+# --------------------------------------------------------------------------- #
 # transcribe() — the off-GPU guard
 # --------------------------------------------------------------------------- #
 def test_transcribe_missing_audio_fails_loud(tmp_path: Path) -> None:

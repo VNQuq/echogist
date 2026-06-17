@@ -15,6 +15,13 @@ imageio-ffmpeg==0.6.*
 fpdf2==2.*
 anthropic>=0.109
 
+# --- v1.1 menu/UX overhaul (plan §2): interactive console layer ------------------
+# Both pure-Python, no native/ABI component — they do NOT touch the ctranslate2 <->
+# cuDNN skew the GPU pins below guard. questionary pulls prompt_toolkit + wcwidth;
+# rich was already resolved transitively (typer) and is now a first-class dep.
+questionary==2.*
+rich>=13
+
 # --- The one pin that matters: cuDNN MAJOR <-> ctranslate2 build ------------------
 # ctranslate2's GPU binary is built against a specific cuDNN MAJOR (4.4+ -> cuDNN 9).
 # The nvidia-cudnn-cu12 / nvidia-cublas-cu12 wheel majors MUST match the ctranslate2

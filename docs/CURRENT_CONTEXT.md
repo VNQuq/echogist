@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-17 (v1.1 menu/UX overhaul planned: office-hours APPROVED + eng-review CLEARED)
+**Updated:** 2026-06-17 (v1.1 menu/UX overhaul BUILT T1–T9: WSL gate green, Windows acceptance pending)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -8,13 +8,20 @@
 
 ## Active scope
 
-**v1.1 — menu/UX overhaul (planned, not yet built) — [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md)**
+**v1.1 — menu/UX overhaul (BUILT T1–T9, WSL gate green) — [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md)**
 
-Replace the bare `input()`/numeric menu with **questionary + rich** (arrow-key nav,
-styled output, a `%/ETA` transcription bar). UX-layer only — transcribe/summarize/render
-logic frozen. Office-hours design APPROVED + `/plan-eng-review` ENG CLEARED (2026-06-17);
-9 tasks T1–T9 ready. Load-bearing decision: a `UI` Protocol injected via `Deps` (production
-= questionary+rich adapter, tests = scripted `StubUI`) keeps the killswitch CI offline/no-TTY.
+Replaced the bare `input()`/numeric menu with **questionary + rich** (arrow-key nav, styled
+output, a `%/ETA` transcription bar). UX-layer only — transcribe/summarize/render logic frozen.
+All 9 tasks built on `main`; `bash scripts/dev-loop` = **251 passed, 2 skipped** (was 225).
+Load-bearing decision held: a `UI` Protocol injected via `Deps` (production `RichQuestionaryUI`,
+tests scripted `StubUI`) keeps the killswitch CI offline/no-TTY. New source: `echogist/ui.py`
+(UI/ProgressHandle/SpinnerHandle Protocols + RichQuestionaryUI + StubUI), `echogist/theme.py`
+(rich.Theme + questionary.Style + fancy/ASCII glyphs + `detect_caps`); `transcribe._collect_segments`
+extracted; `cost.confirm_proceed` reshaped to a narrow `confirm` callable; `menu.py` rewired to the
+seam. **Pending (operator/Windows-side):** T7 `--require-hashes` cold-install verify + the
+interactive acceptance run (arrow nav, emoji-vs-ASCII fallback, %/ETA bar, Ctrl-C clean exit,
+confirm defaults). Two deliberate plan divergences logged: **TD-8** (stale `setuptools<81`) and
+**TD-9** (dropped cheap-call Enter beat).
 
 **v1 — complete (per [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md))**
 
@@ -33,7 +40,7 @@ the target hardware. Per-task detail lives in git history + the build spec; the 
 
 - **Pipeline stages** T1 config · T2 launcher/provisioning · T3 transcribe · T4 extract ·
   T5 guard · T6 summarize (the ONE network stage) · T7 render (PDF/MD) · T8 cost ·
-  T9 menu · T10 eval · T11 measure harness · T13 dev/ship loop. Gate: **225 passed,
+  T9 menu · T10 eval · T11 measure harness · T13 dev/ship loop. Gate after v1.1: **251 passed,
   2 skipped** (the 2 live tests).
 - **Operator runs (2026-06-16):** Run 1 win-smoke closed **TD-3** (caught + fixed a real
   cuBLAS lazy-load bug, 173541d); Run 2 measurement closed **TD-4** (`int8_float16` =
@@ -48,11 +55,13 @@ the target hardware. Per-task detail lives in git history + the build spec; the 
 
 ## Next
 
-- **v1.1 build (T1–T9)** — per [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md).
-  Lanes: T7 deps + T3 theme + T1 transcribe-helper in parallel → T2 ui → T5 cost → T4 menu →
-  T8/T9 → T6 test migration. T7 lock-verify + the interactive render are operator/Windows-side.
-- **T12 docs** — document final first-run steps post-build (last v1 build task, deferred
-  2026-06-16); fold the new arrow-key menu in once v1.1 lands.
+- **v1.1 Windows acceptance (operator-side)** — T7 `pip install --require-hashes -r
+  requirements.lock` cold-run verify, then the interactive run: arrow-key menu + settings,
+  emoji-vs-ASCII glyph fallback, the `%/ETA` transcription bar, Ctrl-C clean exit, confirm
+  defaults (No above threshold, proceed below), result/error panels. The WSL dev loop is blind
+  to `isatty`/`legacy_windows`/key handling — only this gate exercises them.
+- **T12 docs** — document final first-run steps; fold in the new arrow-key menu now that v1.1
+  is built (last v1 build task, deferred 2026-06-16).
 - **TD-6 (logged, not actioned)** — summary title can leak the source language on
   cross-language input. LOW; opens when cross-language summarizing becomes normal.
 
@@ -63,7 +72,8 @@ cuDNN/cuBLAS via `LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the win32 s
 PyPI + GitHub reachable from WSL; huggingface.co is not (no VPN). `ANTHROPIC_API_KEY`
 not set here (live gate needs it: `ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live`).
 `anthropic` + `fpdf2` installed in `.venv` (match the lock); both lazy-imported so the
-killswitch invariant holds. Telemetry off, PROACTIVE false.
+killswitch invariant holds. v1.1 adds `questionary==2.1.1` + `rich==15.0.0` (+ `prompt_toolkit`,
+`wcwidth`) — pure-Python, offline, no ABI tie to the GPU pins. Telemetry off, PROACTIVE false.
 
 ## Relevant SoT
 
@@ -84,7 +94,9 @@ killswitch invariant holds. Telemetry off, PROACTIVE false.
 - **TD-5** chunked map-reduce deferred (opens on the first transcript that trips the
   overflow guard) · **TD-6** title can leak source language on cross-language input (LOW,
   logged) · **TD-7** plain-input/non-TTY fallback UI deferred from v1.1 (LOW; opens if a
-  non-interactive run is ever needed). **TD-1, TD-2, TD-3, TD-4 closed.**
+  non-interactive run is ever needed) · **TD-8** stale `setuptools<81` plan wording vs the
+  82.0.1 lock (LOW; reconcile at next re-lock) · **TD-9** cheap-call "press Enter" beat dropped
+  in v1.1 (LOW; restore on operator request). **TD-1, TD-2, TD-3, TD-4 closed.**
   → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)

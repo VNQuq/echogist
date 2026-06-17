@@ -20,14 +20,21 @@ quotes real timecodes instead of hallucinating them (plan §3).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 from . import gpu, naming
 
 Logger = Callable[[str], object]
+
+# Progress reporter (v1.1 plan §5). Additive, killswitch-safe — the ONE pipeline-stage
+# signature this overhaul touches. The value is a 0.0..1.0 completion *fraction* when the
+# audio duration is known (drives the %/ETA bar); when the duration is unknown it is a
+# running segment *count* (1.0, 2.0, …) which the UI renders as a no-ETA readout.
+Progress = Callable[[float], None]
 
 
 class TranscribeError(Exception):
@@ -107,6 +114,48 @@ def save_transcript(
 
 
 # --------------------------------------------------------------------------- #
+# Pure stream → Segment assembly + progress (T1; unit-tested without a GPU)
+# --------------------------------------------------------------------------- #
+class _RawSegment(Protocol):
+    """The shape faster-whisper yields per segment — ``start``/``end`` seconds + ``text``.
+
+    Structural so :func:`_collect_segments` is testable with a plain fake (no GPU, no
+    faster-whisper import).
+    """
+
+    start: float
+    end: float
+    text: str
+
+
+def _collect_segments(
+    stream: Iterable[_RawSegment],
+    total: float,
+    progress: Progress | None = None,
+) -> tuple[Segment, ...]:
+    """Drain the raw segment ``stream`` into a pure :class:`Segment` tuple, emitting
+    progress (plan §5). This is where the actual GPU decode happens (the stream is lazy).
+
+    * ``total > 0`` → ``progress(min(raw.end / total, 1.0))`` per segment: a 0.0..1.0
+      completion fraction the UI turns into a ``%/elapsed/ETA`` bar. Clamped so a segment
+      ending past the probed duration never reports > 100%.
+    * ``total == 0`` (zero-duration / unprobeable audio) → no fraction is knowable, so
+      ``progress(float(count))`` reports the running segment count instead: an honest
+      no-ETA readout, never a fake percentage and never a div-by-zero.
+    * empty stream → no progress calls, returns ``()``.
+
+    Keep it scoped to assembling the tuple + emitting progress — no model, no I/O — so
+    the fraction math and the ``total == 0`` branch are unit-testable with fake segments.
+    """
+    segments: list[Segment] = []
+    for raw in stream:
+        segments.append(Segment(start=raw.start, end=raw.end, text=raw.text.strip()))
+        if progress is not None:
+            progress(min(raw.end / total, 1.0) if total > 0 else float(len(segments)))
+    return tuple(segments)
+
+
+# --------------------------------------------------------------------------- #
 # GPU adapter (lazy import; covered by the §12.3 real-GPU smoke, not unit tests)
 # --------------------------------------------------------------------------- #
 def transcribe(
@@ -116,6 +165,7 @@ def transcribe(
     device: str = "cuda",
     compute_type: str = "int8_float16",
     language: str | None = None,
+    progress: Progress | None = None,
     log: Logger = print,
 ) -> Transcript:
     """Transcribe ``audio_path`` with the CT2 large-v3 model in ``model_dir``.
@@ -124,8 +174,10 @@ def transcribe(
     importing ``faster_whisper``, loads the model at ``compute_type`` (default
     ``int8_float16`` — int8 speed/VRAM on the full large-v3, plan §6 / TD-4), and
     streams segments into a pure :class:`Transcript`. ``language=None`` lets Whisper
-    auto-detect (autolang RU/EN). Progress is logged per segment against the audio
-    duration. Any load/transcribe failure becomes a recoverable :class:`TranscribeError`.
+    auto-detect (autolang RU/EN). The detected language + duration are logged once,
+    before the loop; per-segment progress goes through the optional ``progress`` callback
+    (plan §5 — the %/ETA bar replaces the old per-segment log spam). Any load/transcribe
+    failure becomes a recoverable :class:`TranscribeError`.
     """
     if not audio_path.is_file():
         raise TranscribeError(f"Audio file not found: {audio_path}.")
@@ -152,15 +204,10 @@ def transcribe(
         total = float(getattr(info, "duration", 0.0) or 0.0)
         detected = str(getattr(info, "language", "") or "")
         log(f"Detected language: {detected or 'unknown'}; audio {format_timecode(total)}.")
-
-        segments: list[Segment] = []
-        for raw in segment_stream:  # lazily decoded — the actual GPU work happens here
-            segments.append(Segment(start=raw.start, end=raw.end, text=raw.text.strip()))
-            if total > 0:
-                log(f"  [{format_timecode(raw.end)} / {format_timecode(total)}]")
+        segments = _collect_segments(segment_stream, total, progress)
     except TranscribeError:
         raise
     except Exception as exc:  # noqa: BLE001 - fail loud, return to menu
         raise TranscribeError(f"Transcription failed: {exc}.") from exc
 
-    return Transcript(language=detected, duration=total, segments=tuple(segments))
+    return Transcript(language=detected, duration=total, segments=segments)
