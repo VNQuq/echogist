@@ -136,6 +136,35 @@ friction in an arrow-key UI, where the displayed estimate is itself the acknowle
 add a one-line `ui.text("Press Enter to summarize…")` beat in `menu._run_summary` before the
 cheap-path proceed — no change to `cost.py` or the threshold policy.
 
+### TD-10 — File input forces manual path typing (no picker / browse) — UX BLOCKER
+
+Severity: HIGH · Created 2026-06-17 (v1.1 operator feedback) · Trigger: NEXT — before the tool is comfortable for daily use · SoT: this file
+
+**What.** v1.1's "Local file" flow prompts `ui.text("Path to the audio/video file:")` — the
+operator must type or paste an absolute path by hand. For the tool's single most-used action
+that is unacceptable friction (operator feedback, 2026-06-17: "did you think I will type the
+path manually?"). The arrow-key overhaul modernized every surface *except* the one where the
+input is a file on disk.
+
+**Why deferred.** Logged immediately after the v1.1 build; not yet designed/approved. Belongs
+in a focused follow-up, not bolted onto the just-shipped seam without an office-hours/eng pass.
+
+**Design sketch (for the follow-up — pick at office-hours).**
+- **Primary — native OS "Open File" dialog** via `tkinter.filedialog.askopenfilename`
+  (Tcl/Tk ships with the python.org Windows installer). Familiar Explorer picker, audio/video
+  `filetypes` filter, Cancel → return to menu. Lazy-import; offline; killswitch-safe. Caveat:
+  needs a display — fine on the Windows ship target, unavailable on headless WSL/CI (so it must
+  fall back, and stays behind the UI seam + StubUI for tests).
+- **Fallback / in-console — `questionary.path()`** (already a dep): Tab-completion path entry
+  in the terminal, no GUI. Good when the dialog is unavailable or cancelled. Drag-and-drop onto
+  the console window also pastes a path into this prompt for free.
+- **Seam shape:** add `UI.pick_file(prompt, *, filetypes) -> str | None`. `RichQuestionaryUI`
+  → tkinter dialog with the `questionary.path()` fallback; `StubUI` → pops a queued path. Keeps
+  CI offline/no-TTY/no-GUI. Nice-to-haves: remember the last-used directory; a "recent files" list.
+
+**When to open.** Now — it is the next build after v1.1 acceptance. Run `/office-hours` (or
+straight `/plan-eng-review`) on the picker design, then implement behind `UI.pick_file`.
+
 ---
 
 ## Closed debts

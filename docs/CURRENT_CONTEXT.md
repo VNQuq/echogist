@@ -55,6 +55,11 @@ the target hardware. Per-task detail lives in git history + the build spec; the 
 
 ## Next
 
+- **TD-10 — file picker (NEXT build, HIGH).** v1.1 still makes the operator type the audio/video
+  path by hand — a UX blocker on the primary flow (operator feedback 2026-06-17). Add a native
+  `tkinter` "Open File" dialog (primary) with a `questionary.path()` Tab-complete fallback, behind
+  a new `UI.pick_file` seam member. Design sketch + caveats in [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
+  Run `/office-hours` or `/plan-eng-review` on the picker before building.
 - **v1.1 Windows acceptance (operator-side)** — T7 `pip install --require-hashes -r
   requirements.lock` cold-run verify, then the interactive run: arrow-key menu + settings,
   emoji-vs-ASCII glyph fallback, the `%/ETA` transcription bar, Ctrl-C clean exit, confirm
@@ -96,7 +101,8 @@ killswitch invariant holds. v1.1 adds `questionary==2.1.1` + `rich==15.0.0` (+ `
   logged) · **TD-7** plain-input/non-TTY fallback UI deferred from v1.1 (LOW; opens if a
   non-interactive run is ever needed) · **TD-8** stale `setuptools<81` plan wording vs the
   82.0.1 lock (LOW; reconcile at next re-lock) · **TD-9** cheap-call "press Enter" beat dropped
-  in v1.1 (LOW; restore on operator request). **TD-1, TD-2, TD-3, TD-4 closed.**
+  in v1.1 (LOW; restore on operator request) · **TD-10** file input forces manual path typing —
+  needs a picker/browse (**HIGH**, next build). **TD-1, TD-2, TD-3, TD-4 closed.**
   → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
