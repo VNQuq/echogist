@@ -62,7 +62,8 @@ The File Map below is a routing table, not a preload list.
 | Task | Read |
 |------|------|
 | Current priorities / blockers | `docs/CURRENT_CONTEXT.md` |
-| Implementation (architecture, stack, tasks, tests) | `docs/V1_ENGINEERING_PLAN.md` |
+| Implementation — v1 (architecture, stack, tasks, tests) | `docs/V1_ENGINEERING_PLAN.md` |
+| Implementation — v1.1 menu/UX overhaul (UI seam, theme, progress, tasks) | `docs/V1.1_ENGINEERING_PLAN.md` |
 | Active technical debt | `docs/TECHNICAL_DEBT.md` |
 
 ## State Update Protocol

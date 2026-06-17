@@ -75,6 +75,26 @@ not worth churning for an edge case yet.
 summary language becomes a normal input — then harden the title instruction and re-run the
 live gate.
 
+### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.1
+
+Severity: LOW · Created 2026-06-17 (v1.1 eng-review) · Trigger: a non-interactive (piped /
+redirected) run of EchoGist is ever genuinely needed · SoT: this file
+
+**What.** v1.1 replaces the input layer with questionary + rich, which require an interactive
+TTY. The adapter detects a non-TTY at startup and exits cleanly with a clear message (v1.1
+plan §6), rather than carrying a second `input()`/`print`-based UI implementation that would
+let piped runs work numerically.
+
+**Why deferred.** EchoGist is a single-operator interactive console tool; there is no piped /
+CI-driven invocation in its real use. A full second adapter (build + test surface) to serve a
+case that never occurs is over-engineering. Fail-loud is the right v1.1 behavior. (Outside
+voice flagged the WSL-dev/Windows-ship rendering gap, which the capability-detected glyph
+fallback already covers — that is separate from a full non-TTY input path.)
+
+**When to open.** If a batch / scripted / headless invocation of the menu becomes a real need.
+The `UI` Protocol seam already leaves a clean place to add a `PlainUI` implementation without
+touching the flows.
+
 ---
 
 ## Closed debts

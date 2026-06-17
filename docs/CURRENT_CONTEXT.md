@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-17 (output layout cleaned: recovery .json → `output/summaries/raw/`)
+**Updated:** 2026-06-17 (v1.1 menu/UX overhaul planned: office-hours APPROVED + eng-review CLEARED)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -8,9 +8,17 @@
 
 ## Active scope
 
-**Phase 1 — Implementation (v1 per [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md))**
+**v1.1 — menu/UX overhaul (planned, not yet built) — [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md)**
 
-Phase 0 done: design APPROVED, ENG + DEVEX CLEARED; scope + architecture locked.
+Replace the bare `input()`/numeric menu with **questionary + rich** (arrow-key nav,
+styled output, a `%/ETA` transcription bar). UX-layer only — transcribe/summarize/render
+logic frozen. Office-hours design APPROVED + `/plan-eng-review` ENG CLEARED (2026-06-17);
+9 tasks T1–T9 ready. Load-bearing decision: a `UI` Protocol injected via `Deps` (production
+= questionary+rich adapter, tests = scripted `StubUI`) keeps the killswitch CI offline/no-TTY.
+
+**v1 — complete (per [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md))**
+
+Phase 0 done; design APPROVED, ENG + DEVEX CLEARED; scope + architecture locked.
 Architecture = pure-stage pipeline, artifact-based recovery, single-pass; GUARD/cost
 LOCAL; online ingestion dropped (TD-2 closed).
 
@@ -40,8 +48,11 @@ the target hardware. Per-task detail lives in git history + the build spec; the 
 
 ## Next
 
-- **T12 docs** — document final first-run steps post-build (last remaining build task,
-  operator deferred it 2026-06-16).
+- **v1.1 build (T1–T9)** — per [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md).
+  Lanes: T7 deps + T3 theme + T1 transcribe-helper in parallel → T2 ui → T5 cost → T4 menu →
+  T8/T9 → T6 test migration. T7 lock-verify + the interactive render are operator/Windows-side.
+- **T12 docs** — document final first-run steps post-build (last v1 build task, deferred
+  2026-06-16); fold the new arrow-key menu in once v1.1 lands.
 - **TD-6 (logged, not actioned)** — summary title can leak the source language on
   cross-language input. LOW; opens when cross-language summarizing becomes normal.
 
@@ -56,7 +67,9 @@ killswitch invariant holds. Telemetry off, PROACTIVE false.
 
 ## Relevant SoT
 
-- **Build spec (locked):** [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md) —
+- **v1.1 build spec (locked):** [`docs/V1.1_ENGINEERING_PLAN.md`](./V1.1_ENGINEERING_PLAN.md) —
+  menu/UX overhaul (UI seam, theme, progress bar, tasks T1..T9).
+- **v1 build spec (locked):** [`docs/V1_ENGINEERING_PLAN.md`](./V1_ENGINEERING_PLAN.md) —
   stack/pipeline/provisioning/tasks (T1..T13).
 - Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md)
   (local files + saved transcript only).
@@ -70,7 +83,9 @@ killswitch invariant holds. Telemetry off, PROACTIVE false.
 
 - **TD-5** chunked map-reduce deferred (opens on the first transcript that trips the
   overflow guard) · **TD-6** title can leak source language on cross-language input (LOW,
-  logged). **TD-1, TD-2, TD-3, TD-4 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
+  logged) · **TD-7** plain-input/non-TTY fallback UI deferred from v1.1 (LOW; opens if a
+  non-interactive run is ever needed). **TD-1, TD-2, TD-3, TD-4 closed.**
+  → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
 
