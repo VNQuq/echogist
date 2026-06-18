@@ -146,24 +146,107 @@ that is unacceptable friction (operator feedback, 2026-06-17: "did you think I w
 path manually?"). The arrow-key overhaul modernized every surface *except* the one where the
 input is a file on disk.
 
-**Why deferred.** Logged immediately after the v1.1 build; not yet designed/approved. Belongs
-in a focused follow-up, not bolted onto the just-shipped seam without an office-hours/eng pass.
+**Why deferred.** Logged immediately after the v1.1 build; designed/ratified at office-hours
+2026-06-18 (below). Not yet built — `/plan-eng-review` turns this into tasks/tests next.
 
-**Design sketch (for the follow-up — pick at office-hours).**
+**Ratified design (office-hours 2026-06-18).**
 - **Primary — native OS "Open File" dialog** via `tkinter.filedialog.askopenfilename`
-  (Tcl/Tk ships with the python.org Windows installer). Familiar Explorer picker, audio/video
-  `filetypes` filter, Cancel → return to menu. Lazy-import; offline; killswitch-safe. Caveat:
-  needs a display — fine on the Windows ship target, unavailable on headless WSL/CI (so it must
-  fall back, and stays behind the UI seam + StubUI for tests).
-- **Fallback / in-console — `questionary.path()`** (already a dep): Tab-completion path entry
-  in the terminal, no GUI. Good when the dialog is unavailable or cancelled. Drag-and-drop onto
-  the console window also pastes a path into this prompt for free.
+  (Tcl/Tk ships with the python.org Windows installer). Familiar Explorer picker opened at the
+  resolved `initialdir`, audio/video `filetypes` filter, Cancel → return to menu. Killswitch-safe
+  (offline stdlib). **Import must be lazy AND dual-guarded:** `tkinter` is absent from the WSL dev
+  venv (verified — `ModuleNotFoundError`), so the adapter catches `ImportError` (tk not installed,
+  the whole WSL/CI path) **and** `TclError` (tk present, no display) and falls back. Lazy import
+  keeps the no-TTY/killswitch import purity; mypy still type-checks (typeshed bundles tk stubs).
+- **Fallback / in-console — `questionary.path()`** (already a dep): Tab-completion path entry in
+  the terminal, no GUI. Fires whenever the dialog is unavailable (tk-absent or no-display) or
+  cancelled into the fallback. Drag-and-drop onto the console pastes a path into this prompt for free.
 - **Seam shape:** add `UI.pick_file(prompt, *, filetypes) -> str | None`. `RichQuestionaryUI`
-  → tkinter dialog with the `questionary.path()` fallback; `StubUI` → pops a queued path. Keeps
-  CI offline/no-TTY/no-GUI. Nice-to-haves: remember the last-used directory; a "recent files" list.
+  → tkinter dialog with the `questionary.path()` fallback; `StubUI` → pops a queued path (CI stays
+  offline/no-TTY/no-GUI). Cancel returns `None` at every level → clean return to menu, reusing the
+  existing T9 cancel/EOF contract. No new interrupt contract. Rewire `_flow_local_file` (menu.py)
+  to call `ui.pick_file` in place of `ui.text("Path to the audio/video file:")`; keep the existing
+  `is_file()` F1 reject as the post-check.
+- **Last-used directory (open Q1 — resolved A):** persisted to a **separate `config/state.json`**
+  (single field `last_input_dir`), NOT added to `Settings`. Keeps `Settings` = operator choices
+  only (no new field through `_validate_settings`, nothing in the Settings menu). Honors
+  `$ECHOGIST_CONFIG_DIR` like `settings.json`; add `config/state.json` to `.gitignore` (only
+  `settings.json` is ignored today). Read best-effort; write the chosen file's parent dir after a
+  successful pick. This is a single-field UX convenience, not a job/history layer (CLAUDE.md intact).
+- **First-run + stale default (open Q2 — resolved):** resolution ladder for `initialdir` —
+  `last_input_dir` (if it still exists) → `~/Downloads` (if it exists) → `~` (home, always exists).
+  Never cwd. The same ladder absorbs the stale-stored-dir edge (a vanished `last_input_dir` falls
+  through, no crash).
+- **Scope:** remember last-used directory is **IN**; a recent-files list is **OUT** (cut).
+- **Dependencies:** no new locked deps (§12.2 untouched) — `tkinter` is stdlib on the python.org
+  Windows install, `questionary` is already pinned.
 
-**When to open.** Now — it is the next build after v1.1 acceptance. Run `/office-hours` (or
-straight `/plan-eng-review`) on the picker design, then implement behind `UI.pick_file`.
+**Verification split (WSL-dev / Windows-ship).** CI + the WSL dev loop exercise only the
+`questionary.path()` fallback and the `StubUI` queued-path flows (tk is absent in WSL, so the dialog
+branch never runs there). The live native dialog — Explorer picker, `initialdir`, `filetypes`
+filter, Cancel-to-menu, glyph-free OS chrome — is verifiable **only at the Windows acceptance gate**,
+the same split as the v1.1 menu adapter.
+
+**When to open.** Now — it is the next build after v1.1 acceptance. Run `/plan-eng-review` on this
+ratified section, then implement behind `UI.pick_file`.
+
+**Implementation plan (eng-review 2026-06-18).** 5 findings resolved + 5 outside-voice hardening
+points folded. Scope: ~6-7 files, 0 new classes, no new locked deps.
+
+*Resolved design decisions:*
+- **Seam:** `UI.pick_file(prompt, *, filetypes, initialdir=None) -> str | None` (added `initialdir`;
+  the menu passes the resolved dir, `ui.py` stays stateless — StubUI needs no config/state).
+- **IO + ladder live in `config.py`** (reuse `config_dir()` + the `save_settings`/`load_settings`
+  json idiom): `STATE_FILENAME="state.json"`, `load_last_dir()`, `save_last_dir(dir)`,
+  `resolve_initial_dir(last)`. `config/state.json` added to `.gitignore`. Reads AND writes
+  best-effort: corrupt/missing → `None`; `save_last_dir` swallows `OSError` (a state-write failure
+  must never mask a completed transcribe+summarize — `OSError` is in `menu._RECOVERABLE`).
+- **Ladder (pure):** `last_input_dir` if it still exists → `~/Downloads` if it exists → `~`. Never
+  cwd. `exists()` guarded against `OSError` (dead UNC/network path) and resolved at call time.
+- **Cancel split:** dialog Cancel / empty `questionary.path()` → `None` → `_flow_local_file` prints
+  "returning to the menu" and loops; Ctrl-C/Ctrl-D → `EOFError` → app exit (the existing contract).
+  `pick_file` BYPASSES `_ask` and hand-rolls the per-backend map: tkinter `""` → `None`,
+  questionary `None`/`""` → `None`, `KeyboardInterrupt`/`EOFError` propagates.
+- **filetypes:** `[("Audio/Video", "*.mp3 *.m4a *.wav *.flac *.aac *.ogg *.opus *.mp4 *.mkv *.mov
+  *.webm *.ts"), ("All files", "*.*")]` — advisory; the "All files" entry prevents silently hiding a
+  valid odd-extension input (the pipeline transcodes anything ffmpeg reads). Fallback ignores it.
+- **tkinter root lifecycle (OV #3):** explicit `root = Tk(); root.withdraw();
+  root.wm_attributes("-topmost", True); askopenfilename(...); root.destroy()` in a `finally` — avoids
+  the ghost/flashing window, focus-behind-console, and stale 2nd-call state on Windows.
+- **StubUI 3-state rule (documented):** queued `None` = soft cancel; empty queue = `EOFError`; no
+  third state (a deliberate interrupt is not separately queueable). `pick_file` is the first StubUI
+  method to legitimately return `None`.
+- **DRY:** the picked path and the `questionary.path()` fallback both funnel through the existing
+  `menu._resolve_typed_path` (fold "Check the path and try again" into its message).
+
+*Tasks (sequence: seam before menu, per OV):*
+- **T1 (P1) — `config.py` state + ladder.** `state.json` IO (best-effort) + `resolve_initial_dir`
+  + `.gitignore` line. Tests in `test_config.py` (absent/valid/corrupt load; save round-trip +
+  dir-create + `OSError` swallow; ladder: last-exists / Downloads / home; `OSError` on exists).
+- **T2 (P1) — `ui.py` seam.** `pick_file` on `UI` Protocol + `StubUI` + `RichQuestionaryUI`
+  (lazy dual-guard `ImportError`/`TclError` → `questionary.path()`; explicit Tk root mgmt; cancel
+  map; bypass `_ask`). Tests `test_ui.py` (stub queued path / None / empty; monkeypatched
+  ImportError + TclError → fallback; dialog path / "" cancel; Ctrl-C → EOFError).
+- **T3 (P1) — `menu._flow_local_file` rewire.** resolve initialdir → `ui.pick_file` → `None`→menu;
+  else `_resolve_typed_path`; on success `save_last_dir(source.parent)`. Tests `test_menu.py`
+  (pick→transcribe→save called; cancel→menu, no transcribe/save; fallback bad path→F1). Depends T1+T2.
+- **T4 (P2) — mypy gate.** Confirm `tkinter`/`filedialog` typeshed stubs resolve under `--strict` in
+  the dev loop (don't assume). Depends T2.
+- **T5 (P3, Windows acceptance gate only) — live dialog.** Real Explorer dialog, `initialdir`
+  honored, filetypes dropdown, native Cancel→menu, Ctrl-C→exit, no ghost window, focus over the
+  console, clean 2nd invocation. Not CI-testable. Depends T3.
+
+*Parallelization:* Lane A = T1 (`config.py`), Lane B = T2 (`ui.py`) — independent, run in parallel
+worktrees. Merge both, then T3 (`menu.py`, depends A+B). T4 after B. T5 manual after T3.
+
+*NOT in scope:* recent-files list (cut, no TODO — low value for a single-operator tool);
+`PlainUI`/non-TTY input (TD-7); converting the saved-transcript prompt to the picker (the existing
+select-list + type fallback stays; `pick_file` reuse there is a later option); drag-and-drop (free
+terminal paste into the fallback, no code).
+
+*Failure modes — none silent-and-unhandled:* tk absent → `ImportError`→fallback (tested); no display
+→ `TclError`→fallback (tested); ghost/focus on Windows → explicit root mgmt (live gate); corrupt
+`state.json` → `None`→ladder (tested, silent-but-correct); read-only `config/` on save → swallowed
+(tested, run already done); dead UNC initialdir → `OSError`-guarded→home (tested).
 
 ---
 

@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-17 (v1.1 menu/UX overhaul BUILT T1–T9: WSL gate green, Windows acceptance pending)
+**Updated:** 2026-06-18 (TD-10 picker: design ratified + eng-review CLEARED; T1/T2 BUILT, T3 next)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -55,11 +55,19 @@ the target hardware. Per-task detail lives in git history + the build spec; the 
 
 ## Next
 
-- **TD-10 — file picker (NEXT build, HIGH).** v1.1 still makes the operator type the audio/video
-  path by hand — a UX blocker on the primary flow (operator feedback 2026-06-17). Add a native
-  `tkinter` "Open File" dialog (primary) with a `questionary.path()` Tab-complete fallback, behind
-  a new `UI.pick_file` seam member. Design sketch + caveats in [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
-  Run `/office-hours` or `/plan-eng-review` on the picker before building.
+- **TD-10 — file picker (IN PROGRESS, HIGH; ratified + eng-CLEARED 2026-06-18; T1/T2 built).** v1.1
+  still makes the operator type the audio/video path by hand — a UX blocker on the primary flow.
+  Seam: `UI.pick_file(prompt, *, filetypes, initialdir=None) -> str | None` (eng-review added
+  `initialdir` so the ladder stays a pure `config` fn and `ui.py` stays stateless). **T1 DONE** —
+  `config.load_last_dir`/`save_last_dir` (fail-soft `config/state.json`, swallows `OSError`) +
+  pure `resolve_initial_dir` ladder `last → ~/Downloads → ~` (never cwd, `OSError`-guarded).
+  **T2 DONE** — `pick_file` on `UI`/`RichQuestionaryUI`/`StubUI`: native `tkinter` dialog, lazy +
+  dual-guarded (`ImportError` tk-absent / `TclError` no-display) → `questionary.path()` fallback;
+  explicit Tk root lifecycle (withdraw/topmost/destroy-in-finally); cancel split (dialog/blank → menu,
+  Ctrl-C → exit). Gate green: **274 passed, 2 skipped** (was 251). **T3 NEXT** — rewire
+  `menu._flow_local_file` (resolve initialdir → `pick_file` → reuse `_resolve_typed_path`;
+  `save_last_dir(source.parent)` on success). Then T4 mypy-stub note, T5 Windows live-dialog gate.
+  Full plan + 5 findings + 5 outside-voice points in [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) TD-10.
 - **v1.1 Windows acceptance (operator-side)** — T7 `pip install --require-hashes -r
   requirements.lock` cold-run verify, then the interactive run: arrow-key menu + settings,
   emoji-vs-ASCII glyph fallback, the `%/ETA` transcription bar, Ctrl-C clean exit, confirm
