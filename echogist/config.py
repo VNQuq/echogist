@@ -31,6 +31,8 @@ _ENV_API_KEY = "ANTHROPIC_API_KEY"
 _ENV_CONFIG_DIR = "ECHOGIST_CONFIG_DIR"
 _MODELS_FILENAME = "models.toml"
 _SETTINGS_FILENAME = "settings.json"
+_STATE_FILENAME = "state.json"
+_LAST_DIR_KEY = "last_input_dir"
 
 
 class ConfigError(Exception):
@@ -333,3 +335,75 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(asdict(settings), indent=2, ensure_ascii=False) + "\n"
     path.write_text(payload, encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Picker state (TD-10) — the last-used input directory.
+#
+# Accumulated UX state, NOT an operator choice, so it lives in its own
+# ``state.json`` beside ``settings.json`` (and is gitignored) rather than in
+# Settings. Unlike settings, state is fail-SOFT: a missing or corrupt file
+# never raises — it just means "no remembered directory". The file picker is a
+# convenience; a broken state file must not break the menu.
+#
+#   pick a file ──► save_last_dir(parent)         (best-effort; OSError swallowed)
+#   open picker ──► resolve_initial_dir(load_last_dir())
+#                       last_input_dir (if dir) ─► ~/Downloads (if dir) ─► ~ (home)
+# --------------------------------------------------------------------------- #
+def _state_path(path: Path | None = None) -> Path:
+    return path or (config_dir() / _STATE_FILENAME)
+
+
+def _dir_exists(path: Path) -> bool:
+    """``is_dir`` guarded against OSError (a dead UNC / network path can raise
+    rather than return False) so the ladder always falls through cleanly."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def load_last_dir(path: Path | None = None) -> Path | None:
+    """The operator's last-used input directory, or None.
+
+    Fail-soft by design (contrast :func:`load_settings`): a missing, unreadable,
+    or corrupt ``state.json`` returns None so the picker just opens at its
+    default. State is a UX convenience, not config — a bad file never raises.
+    """
+    state = _state_path(path)
+    try:
+        data = json.loads(state.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = data.get(_LAST_DIR_KEY)
+    if not isinstance(raw, str) or not raw:
+        return None
+    return Path(raw)
+
+
+def save_last_dir(directory: Path, path: Path | None = None) -> None:
+    """Remember the last-used input directory (best-effort).
+
+    Swallows OSError: a state-write failure (e.g. a read-only config dir) must
+    never mask an already-completed transcribe+summarize run, since ``OSError``
+    is one of the menu's recoverable errors.
+    """
+    state = _state_path(path)
+    try:
+        state.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({_LAST_DIR_KEY: str(directory)}, indent=2, ensure_ascii=False) + "\n"
+        state.write_text(payload, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def resolve_initial_dir(last: Path | None) -> Path:
+    """Where the file picker should open: the last-used dir if it still exists,
+    else ``~/Downloads`` if it exists, else home. Never cwd. Resolved at call
+    time so a directory that vanished since last run falls through cleanly."""
+    for candidate in (last, Path.home() / "Downloads"):
+        if candidate is not None and _dir_exists(candidate):
+            return candidate
+    return Path.home()

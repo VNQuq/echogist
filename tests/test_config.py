@@ -248,3 +248,73 @@ def test_get_api_key_absent(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_get_api_key_blank_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
     assert config.get_api_key() is None
+
+
+# --------------------------------------------------------------------------- #
+# Picker state (TD-10) — last-used dir IO (fail-soft) + the initialdir ladder
+# --------------------------------------------------------------------------- #
+def test_load_last_dir_absent_is_none(tmp_path: Path) -> None:
+    assert config.load_last_dir(tmp_path / "state.json") is None
+
+
+def test_save_then_load_last_dir_round_trips(tmp_path: Path) -> None:
+    state = tmp_path / "sub" / "state.json"  # parent does not exist yet
+    config.save_last_dir(Path("/media/clips"), state)
+    assert state.is_file()  # save created the dir
+    assert config.load_last_dir(state) == Path("/media/clips")
+
+
+def test_load_last_dir_corrupt_json_is_none(tmp_path: Path) -> None:
+    state = _write(tmp_path / "state.json", "{not json")
+    assert config.load_last_dir(state) is None  # fail-soft, no raise
+
+
+def test_load_last_dir_wrong_shape_is_none(tmp_path: Path) -> None:
+    _write(tmp_path / "a.json", '["not", "a", "dict"]')
+    _write(tmp_path / "b.json", '{"last_input_dir": 42}')
+    _write(tmp_path / "c.json", '{"last_input_dir": ""}')
+    assert config.load_last_dir(tmp_path / "a.json") is None
+    assert config.load_last_dir(tmp_path / "b.json") is None
+    assert config.load_last_dir(tmp_path / "c.json") is None
+
+
+def test_save_last_dir_swallows_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A read-only config dir must not surface after a completed run.
+    def _boom(*_a: object, **_k: object) -> None:
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    config.save_last_dir(Path("/media/clips"), tmp_path / "state.json")  # no raise
+
+
+def test_resolve_initial_dir_prefers_existing_last(tmp_path: Path) -> None:
+    assert config.resolve_initial_dir(tmp_path) == tmp_path
+
+
+def test_resolve_initial_dir_falls_to_downloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    downloads = home / "Downloads"
+    downloads.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    # last is None / gone → Downloads (exists)
+    assert config.resolve_initial_dir(None) == downloads
+    assert config.resolve_initial_dir(tmp_path / "gone") == downloads
+
+
+def test_resolve_initial_dir_falls_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()  # no Downloads under it
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    assert config.resolve_initial_dir(None) == home
+
+
+def test_resolve_initial_dir_guards_oserror_on_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A dead UNC / network path can raise on is_dir() — must fall through, not crash.
+    def _raise(_self: Path) -> bool:
+        raise OSError("network path is unreachable")
+
+    monkeypatch.setattr(Path, "is_dir", _raise)
+    result = config.resolve_initial_dir(Path("//dead-host/share"))
+    assert result == Path.home()  # fell through to the floor

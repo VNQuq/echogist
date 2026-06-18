@@ -27,6 +27,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
+from pathlib import Path
 from typing import IO, Protocol, runtime_checkable
 
 import questionary
@@ -89,6 +90,9 @@ class UI(Protocol):
     def select(self, prompt: str, choices: Sequence[Choice]) -> str: ...
     def text(self, prompt: str, *, default: str = "") -> str: ...
     def confirm(self, prompt: str, *, default: bool = False) -> bool: ...
+    def pick_file(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> str | None: ...
     def info(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
     def warn(self, message: str) -> None: ...
@@ -164,6 +168,72 @@ class RichQuestionaryUI:
             questionary.confirm(prompt, default=default, style=QUESTIONARY_STYLE, auto_enter=False)
         )
         return bool(answer)
+
+    # -- file picker (TD-10) ------------------------------------------------- #
+    # Cancel semantics SPLIT from the rest of the seam (which routes through
+    # ``_ask``: any None → EOFError → app-exit). The picker instead distinguishes
+    # two gestures:
+    #
+    #   dialog Cancel / empty path entry ─► None     (soft cancel → return to menu)
+    #   Ctrl-C / Ctrl-D                  ─► EOFError  (the loop's clean app-exit)
+    #
+    # so ``pick_file`` does NOT call ``_ask``; it hand-rolls per-backend handling.
+    def pick_file(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> str | None:
+        """A chosen file path, or None on a soft cancel (return to menu).
+
+        Native OS "Open File" dialog first (tkinter); a Tab-completing in-console
+        prompt when tkinter is unavailable — absent (WSL/CI) or no display.
+        ``initialdir`` seeds only the native dialog; the fallback ignores it.
+        """
+        try:
+            chosen = self._native_open(prompt, filetypes, initialdir)
+        except KeyboardInterrupt as exc:  # rare: Ctrl-C through the Tk modal loop
+            raise EOFError from exc
+        if chosen is None:  # tkinter unavailable → in-console fallback
+            return self._path_fallback(prompt)
+        return chosen or None  # "" = native Cancel → return to menu
+
+    @staticmethod
+    def _native_open(
+        prompt: str, filetypes: Sequence[tuple[str, str]], initialdir: Path | None
+    ) -> str | None:
+        """The native dialog's result (``""`` on cancel), or None when tkinter is
+        unavailable. Imports lazily and dual-guards ``ImportError`` (Tk absent, as
+        in the WSL dev venv) and ``TclError`` (present but no display). Manages an
+        explicit withdrawn root so a ``.bat`` console gets no ghost window, the
+        dialog floats on top, and a second invocation starts clean (plan TD-10)."""
+        try:
+            import tkinter
+            from tkinter import filedialog
+        except ImportError:
+            return None
+        try:
+            root = tkinter.Tk()
+        except tkinter.TclError:  # no usable display
+            return None
+        try:
+            root.withdraw()
+            root.wm_attributes("-topmost", True)
+            return filedialog.askopenfilename(
+                title=prompt,
+                filetypes=list(filetypes),
+                initialdir=str(initialdir) if initialdir else "",
+            )
+        finally:
+            root.destroy()  # never leak the hidden root
+
+    def _path_fallback(self, prompt: str) -> str | None:
+        """In-console Tab-completing path entry (no GUI). Empty / ESC → None (menu);
+        Ctrl-C / Ctrl-D → EOFError (app-exit). Uses ``unsafe_ask`` so an interrupt
+        propagates (→ EOFError) instead of being swallowed to None like a soft cancel."""
+        question = questionary.path(prompt, style=QUESTIONARY_STYLE)
+        try:
+            answer = question.unsafe_ask()
+        except (KeyboardInterrupt, EOFError) as exc:
+            raise EOFError from exc
+        return str(answer) if answer else None
 
     # -- output -------------------------------------------------------------- #
     def info(self, message: str) -> None:
@@ -318,6 +388,17 @@ class StubUI:
     def confirm(self, prompt: str, *, default: bool = False) -> bool:
         self.messages.append(("confirm", prompt))
         return bool(self._pop())
+
+    def pick_file(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> str | None:
+        """Pops the next queued answer. Three states, the only ones: a path string
+        → that path; a queued ``None`` → soft cancel (return to menu); empty queue
+        → ``EOFError`` (clean exit). A deliberate interrupt is not separately
+        queueable — it collapses into the empty-queue EOFError."""
+        self.messages.append(("pick_file", prompt))
+        answer = self._pop()
+        return None if answer is None else str(answer)
 
     def info(self, message: str) -> None:
         self.messages.append(("info", message))

@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import io
 import sys
+import types
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import questionary
 
 from echogist.ui import (
     UI,
@@ -21,6 +24,8 @@ from echogist.ui import (
     StubUI,
     build_default_ui,
 )
+
+_AV_FILETYPES = [("Audio/Video", "*.mp3 *.mp4"), ("All files", "*.*")]
 
 
 class _TTY(io.StringIO):
@@ -135,3 +140,154 @@ def test_build_default_ui_raises_without_tty(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     with pytest.raises(NotInteractiveError):
         build_default_ui()
+
+
+# --------------------------------------------------------------------------- #
+# StubUI.pick_file (TD-10) — the three queue states, the only ones
+# --------------------------------------------------------------------------- #
+def test_stub_pick_file_returns_queued_path() -> None:
+    stub = StubUI(["/clips/lecture.mp4"])
+    assert stub.pick_file("Pick a file", filetypes=_AV_FILETYPES) == "/clips/lecture.mp4"
+    assert ("pick_file", "Pick a file") in stub.messages
+
+
+def test_stub_pick_file_none_is_soft_cancel() -> None:
+    # queued None = the user cancelled the dialog → return to menu (NOT an exit).
+    stub = StubUI([None])
+    assert stub.pick_file("Pick a file", filetypes=_AV_FILETYPES) is None
+
+
+def test_stub_pick_file_empty_queue_raises_eof() -> None:
+    stub = StubUI([])
+    with pytest.raises(EOFError):
+        stub.pick_file("Pick a file", filetypes=_AV_FILETYPES)
+
+
+# --------------------------------------------------------------------------- #
+# RichQuestionaryUI.pick_file (TD-10) — native dialog + fallback routing.
+# The live dialog is Windows-gate-verified; here we drive the branches with a
+# fake tkinter module and a fake questionary prompt (killswitch-safe, no GUI).
+# --------------------------------------------------------------------------- #
+class _FakeTclError(Exception):
+    """Stand-in for tkinter.TclError — both what Tk() raises and what code catches."""
+
+
+class _FakeRoot:
+    """A withdrawn Tk root; records that destroy() ran (the lifecycle guarantee)."""
+
+    def __init__(self, destroyed: list[bool]) -> None:
+        self._destroyed = destroyed
+
+    def withdraw(self) -> None: ...
+    def wm_attributes(self, *args: object) -> None: ...
+    def destroy(self) -> None:
+        self._destroyed.append(True)
+
+
+def _install_fake_tk(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    picked: str,
+    destroyed: list[bool],
+    raise_tcl: bool = False,
+) -> None:
+    """Inject a fake ``tkinter`` (+ filedialog) so _native_open runs without a GUI."""
+
+    def _tk() -> _FakeRoot:
+        if raise_tcl:
+            raise _FakeTclError("no display")
+        return _FakeRoot(destroyed)
+
+    fd = types.SimpleNamespace(askopenfilename=lambda **_kw: picked)
+    fake = types.SimpleNamespace(TclError=_FakeTclError, Tk=_tk, filedialog=fd)
+    monkeypatch.setitem(sys.modules, "tkinter", cast(Any, fake))
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", cast(Any, fd))
+
+
+def test_pick_file_native_returns_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="/clips/lecture.mp4", destroyed=destroyed)
+    ui_ = _tty_ui()
+    got = ui_.pick_file("Pick", filetypes=_AV_FILETYPES, initialdir=Path("/start"))
+    assert got == "/clips/lecture.mp4"
+    assert destroyed == [True]  # the hidden root was always destroyed
+
+
+def test_pick_file_native_cancel_returns_none_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Native Cancel returns "" — a soft cancel (→ menu), NOT a drop into the
+    # in-console fallback. Make the fallback explode so we prove it isn't hit.
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="", destroyed=destroyed)
+    ui_ = _tty_ui()
+
+    def _no_fallback(_p: str) -> str | None:
+        pytest.fail("fallback must not run after a native cancel")
+
+    monkeypatch.setattr(ui_, "_path_fallback", _no_fallback)
+    assert ui_.pick_file("Pick", filetypes=_AV_FILETYPES) is None
+    assert destroyed == [True]
+
+
+def test_native_open_importerror_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # tkinter absent (the real WSL/CI state) → guard returns None → caller falls back.
+    monkeypatch.setitem(sys.modules, "tkinter", cast(Any, None))
+    assert RichQuestionaryUI._native_open("Pick", _AV_FILETYPES, None) is None
+
+
+def test_native_open_tclerror_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # tkinter present but no display → TclError on Tk() → guard returns None.
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="x", destroyed=destroyed, raise_tcl=True)
+    assert RichQuestionaryUI._native_open("Pick", _AV_FILETYPES, None) is None
+    assert destroyed == []  # root was never created → nothing to destroy
+
+
+def test_pick_file_falls_back_when_tk_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    ui_ = _tty_ui()
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(ui_, "_path_fallback", lambda _p: "/typed/path.wav")
+    assert ui_.pick_file("Pick", filetypes=_AV_FILETYPES) == "/typed/path.wav"
+
+
+def test_pick_file_native_keyboardinterrupt_becomes_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    ui_ = _tty_ui()
+
+    def _boom(*_a: object) -> str | None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open", staticmethod(_boom))
+    with pytest.raises(EOFError):
+        ui_.pick_file("Pick", filetypes=_AV_FILETYPES)
+
+
+class _FakePathQ:
+    """Stands in for questionary.path(...). unsafe_ask returns the answer or raises."""
+
+    def __init__(self, answer: Any = None, *, raises: BaseException | None = None) -> None:
+        self._answer = answer
+        self._raises = raises
+
+    def unsafe_ask(self) -> Any:
+        if self._raises is not None:
+            raise self._raises
+        return self._answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [("/typed/clip.mp3", "/typed/clip.mp3"), ("", None), (None, None)],
+)
+def test_path_fallback_cancel_and_value(
+    monkeypatch: pytest.MonkeyPatch, answer: Any, expected: str | None
+) -> None:
+    monkeypatch.setattr(questionary, "path", lambda *_a, **_k: _FakePathQ(answer))
+    assert _tty_ui()._path_fallback("Type a path") == expected
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt(), EOFError()])
+def test_path_fallback_interrupt_becomes_eof(
+    monkeypatch: pytest.MonkeyPatch, interrupt: BaseException
+) -> None:
+    monkeypatch.setattr(questionary, "path", lambda *_a, **_k: _FakePathQ(raises=interrupt))
+    with pytest.raises(EOFError):
+        _tty_ui()._path_fallback("Type a path")
