@@ -33,6 +33,8 @@ _MODELS_FILENAME = "models.toml"
 _SETTINGS_FILENAME = "settings.json"
 _STATE_FILENAME = "state.json"
 _LAST_DIR_KEY = "last_input_dir"
+_SECRETS_FILENAME = "secrets.toml"
+_SECRETS_API_KEY = "anthropic_api_key"
 
 
 class ConfigError(Exception):
@@ -156,14 +158,34 @@ def config_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "config"
 
 
-def get_api_key() -> str | None:
-    """The Anthropic key from the environment, or None.
+def _api_key_from_secrets(path: Path | None = None) -> str | None:
+    """The Anthropic key from ``config/secrets.toml`` (key ``anthropic_api_key``), or
+    None. Fail-soft like the other local state: a missing, unreadable, or malformed
+    file — or a missing/blank/non-string value — degrades to None (→ F3 at the menu),
+    never a crash. The file is gitignored; see ``config/secrets.toml.example``."""
+    secrets = path or (config_dir() / _SECRETS_FILENAME)
+    try:
+        data = tomllib.loads(secrets.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
+        return None
+    raw = data.get(_SECRETS_API_KEY)
+    if not isinstance(raw, str):
+        return None
+    return raw.strip() or None
 
-    Validated only before a summarization action (plan §5.7) — MP3-only extraction
-    and the local GUARD run key-free. Never read from code; never logged.
+
+def get_api_key(secrets_path: Path | None = None) -> str | None:
+    """The Anthropic key: ``ANTHROPIC_API_KEY`` env first, then ``config/secrets.toml``.
+
+    The environment ALWAYS wins — an operator (or CI) can override the file ad hoc,
+    and a stray secrets file can never shadow an explicit env key. Validated only
+    before a summarization action (plan §5.7); MP3-only extraction and the local GUARD
+    run key-free. Never read from code; never logged; the file is gitignored.
     """
-    key = os.environ.get(_ENV_API_KEY, "").strip()
-    return key or None
+    env = os.environ.get(_ENV_API_KEY, "").strip()
+    if env:
+        return env
+    return _api_key_from_secrets(secrets_path)
 
 
 # --------------------------------------------------------------------------- #

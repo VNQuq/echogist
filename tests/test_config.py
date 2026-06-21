@@ -233,21 +233,76 @@ def test_config_dir_default(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# API key
+# API key — env wins, then config/secrets.toml (fail-soft)
 # --------------------------------------------------------------------------- #
-def test_get_api_key_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_api_key_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "  sk-abc  ")
-    assert config.get_api_key() == "sk-abc"
+    assert config.get_api_key(secrets_path=tmp_path / "none.toml") == "sk-abc"
 
 
-def test_get_api_key_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_api_key_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert config.get_api_key() is None
+    assert config.get_api_key(secrets_path=tmp_path / "none.toml") is None
 
 
-def test_get_api_key_blank_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_api_key_blank_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
-    assert config.get_api_key() is None
+    assert config.get_api_key(secrets_path=tmp_path / "none.toml") is None
+
+
+def _write_secrets(tmp_path: Path, body: str) -> Path:
+    secrets = tmp_path / "secrets.toml"
+    secrets.write_text(body, encoding="utf-8")
+    return secrets
+
+
+def test_env_wins_over_secrets_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    secrets = _write_secrets(tmp_path, 'anthropic_api_key = "sk-file"\n')
+    assert config.get_api_key(secrets_path=secrets) == "sk-env"
+
+
+def test_secrets_file_used_when_env_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secrets = _write_secrets(tmp_path, 'anthropic_api_key = "  sk-file  "\n')
+    assert config.get_api_key(secrets_path=secrets) == "sk-file"  # stripped
+
+
+def test_secrets_file_used_when_env_blank(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")  # blank env = not set → fall through
+    secrets = _write_secrets(tmp_path, 'anthropic_api_key = "sk-file"\n')
+    assert config.get_api_key(secrets_path=secrets) == "sk-file"
+
+
+def test_secrets_file_missing_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert config.get_api_key(secrets_path=tmp_path / "absent.toml") is None
+
+
+def test_secrets_file_corrupt_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secrets = _write_secrets(tmp_path, "this is not = valid toml [[[\n")
+    assert config.get_api_key(secrets_path=secrets) is None
+
+
+def test_secrets_file_missing_key_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secrets = _write_secrets(tmp_path, 'other_key = "x"\n')
+    assert config.get_api_key(secrets_path=secrets) is None
+
+
+def test_secrets_file_blank_value_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secrets = _write_secrets(tmp_path, 'anthropic_api_key = "   "\n')
+    assert config.get_api_key(secrets_path=secrets) is None
+
+
+def test_secrets_file_non_string_value_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    secrets = _write_secrets(tmp_path, "anthropic_api_key = 12345\n")
+    assert config.get_api_key(secrets_path=secrets) is None
 
 
 # --------------------------------------------------------------------------- #

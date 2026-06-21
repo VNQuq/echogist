@@ -297,7 +297,8 @@ def test_missing_api_key_guides_and_skips_call(tmp_path: Path) -> None:  # F3
     _seed_transcript(tmp_path)
     deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"], api_key=None)
     assert menu.run_menu(deps) == 0
-    assert "ANTHROPIC_API_KEY is not set" in stub.log_text
+    assert "No Anthropic API key found" in stub.log_text
+    assert "config/secrets.toml" in stub.log_text  # F3 guides to both key sources
     assert calls["summarize"] == 0
 
 

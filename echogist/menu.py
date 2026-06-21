@@ -72,9 +72,10 @@ _RECOVERABLE = (
 )
 
 _API_KEY_HELP = (
-    "ANTHROPIC_API_KEY is not set, so the summarization step can't run (F3). Set it "
-    "in your environment and re-launch; MP3 extraction works without a key. Your "
-    "transcript is saved — re-summarize it from menu option 2 once the key is set."
+    "No Anthropic API key found, so the summarization step can't run (F3). Set the "
+    "ANTHROPIC_API_KEY environment variable, or put it in config/secrets.toml (copy "
+    "config/secrets.toml.example), then re-launch; MP3 extraction works without a key. "
+    "Your transcript is saved — re-summarize it from menu option 2 once the key is set."
 )
 
 

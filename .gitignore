@@ -6,6 +6,9 @@
 secrets/
 *.key
 *.pem
+# EchoGist API key file — env ANTHROPIC_API_KEY always wins; this is the fallback.
+# The committed .example template documents the format.
+config/secrets.toml
 
 # Python
 __pycache__/
