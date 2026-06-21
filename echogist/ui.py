@@ -204,6 +204,10 @@ class RichQuestionaryUI:
         in the WSL dev venv) and ``TclError`` (present but no display). Manages an
         explicit withdrawn root so a ``.bat`` console gets no ghost window, the
         dialog floats on top, and a second invocation starts clean (plan TD-10)."""
+        # tkinter's typeshed stubs ship with mypy and resolve under --strict (verified
+        # TD-10 T4: Tk / askopenfilename type-check as real signatures, not Any), so the
+        # lazy import below is fully checked even though tkinter is absent at runtime in
+        # the WSL dev venv. No `type: ignore` needed.
         try:
             import tkinter
             from tkinter import filedialog
