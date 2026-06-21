@@ -88,6 +88,24 @@ def test_ask_keyboard_interrupt_becomes_eof() -> None:
         ui_._ask(cast(Any, _FakeQuestion(raises=KeyboardInterrupt())))
 
 
+def test_select_styles_control_choices_subtly(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A dunder-wrapped control value (← Back) renders with the muted ``control`` style;
+    # a functional choice keeps a plain string title (the normal palette).
+    captured: dict[str, Any] = {}
+
+    def fake_select(prompt: str, *, choices: Any, **_kw: Any) -> Any:
+        captured["choices"] = choices
+        return _FakeQuestion("1")
+
+    monkeypatch.setattr(questionary, "select", fake_select)
+    ui_ = _tty_ui()
+    assert ui_.select("pick", [("1", "Summary"), ("__back__", "← Back")]) == "1"
+
+    by_value = {c.value: c.title for c in captured["choices"]}
+    assert by_value["1"] == "Summary"  # functional → plain title
+    assert by_value["__back__"] == [("class:control", "← Back")]  # control → muted style
+
+
 # --------------------------------------------------------------------------- #
 # StubUI — the offline double
 # --------------------------------------------------------------------------- #

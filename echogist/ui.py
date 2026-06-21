@@ -117,6 +117,13 @@ def _is_tty(stream: IO[str] | None) -> bool:
         return False
 
 
+def _is_control_value(value: str) -> bool:
+    """True for a navigation control choice — a dunder-wrapped value such as
+    ``__back__`` or ``__cancel__``. Content choices (``"1"``, a file path, a settings
+    value) never match, so they keep the normal style; controls render muted."""
+    return value.startswith("__") and value.endswith("__")
+
+
 class RichQuestionaryUI:
     """The production UI: rich for output, questionary for arrow-key input.
 
@@ -163,7 +170,17 @@ class RichQuestionaryUI:
         self.console.clear()
 
     def select(self, prompt: str, choices: Sequence[Choice]) -> str:
-        options = [questionary.Choice(title=label, value=value) for value, label in choices]
+        # A dunder-wrapped value (``__back__`` / ``__cancel__``) is a navigation control,
+        # not a content option: render its label with the muted ``control`` style so it
+        # reads as subtle chrome. questionary takes a formatted-text title verbatim, so
+        # the grey survives the arrow pointer landing on the row.
+        options = [
+            questionary.Choice(
+                title=[("class:control", label)] if _is_control_value(value) else label,
+                value=value,
+            )
+            for value, label in choices
+        ]
         answer = self._ask(
             questionary.select(
                 prompt, choices=options, style=QUESTIONARY_STYLE, qmark=self.glyphs.arrow

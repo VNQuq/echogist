@@ -50,6 +50,10 @@ QUESTIONARY_STYLE = questionary.Style(
         ("selected", "fg:#5fd7ff"),
         ("answer", "fg:#5fd7ff bold"),
         ("instruction", "fg:#808080"),
+        # Navigation controls (← Back / cancel). Muted grey + italic so they read as
+        # subtle chrome, distinct from the functional choices — the style is applied to
+        # the row's text verbatim, so Back stays grey even when the arrow rests on it.
+        ("control", "fg:#6c6c6c italic"),
     ]
 )
 
