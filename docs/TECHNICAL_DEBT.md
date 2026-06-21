@@ -138,7 +138,7 @@ cheap-path proceed — no change to `cost.py` or the threshold policy.
 
 ### TD-10 — File input forces manual path typing (no picker / browse) — UX BLOCKER
 
-Severity: HIGH · Created 2026-06-17 (v1.1 operator feedback) · Trigger: NEXT — before the tool is comfortable for daily use · SoT: this file
+Severity: HIGH · Created 2026-06-17 (v1.1 operator feedback) · **Status: T1–T4 BUILT on `main` (2026-06-21); only the T5 Windows live-dialog gate remains (operator-side).** · SoT: this file
 
 **What.** v1.1's "Local file" flow prompts `ui.text("Path to the audio/video file:")` — the
 operator must type or paste an absolute path by hand. For the tool's single most-used action
@@ -219,21 +219,28 @@ points folded. Scope: ~6-7 files, 0 new classes, no new locked deps.
   `menu._resolve_typed_path` (fold "Check the path and try again" into its message).
 
 *Tasks (sequence: seam before menu, per OV):*
-- **T1 (P1) — `config.py` state + ladder.** `state.json` IO (best-effort) + `resolve_initial_dir`
-  + `.gitignore` line. Tests in `test_config.py` (absent/valid/corrupt load; save round-trip +
-  dir-create + `OSError` swallow; ladder: last-exists / Downloads / home; `OSError` on exists).
-- **T2 (P1) — `ui.py` seam.** `pick_file` on `UI` Protocol + `StubUI` + `RichQuestionaryUI`
-  (lazy dual-guard `ImportError`/`TclError` → `questionary.path()`; explicit Tk root mgmt; cancel
-  map; bypass `_ask`). Tests `test_ui.py` (stub queued path / None / empty; monkeypatched
-  ImportError + TclError → fallback; dialog path / "" cancel; Ctrl-C → EOFError).
-- **T3 (P1) — `menu._flow_local_file` rewire.** resolve initialdir → `ui.pick_file` → `None`→menu;
-  else `_resolve_typed_path`; on success `save_last_dir(source.parent)`. Tests `test_menu.py`
-  (pick→transcribe→save called; cancel→menu, no transcribe/save; fallback bad path→F1). Depends T1+T2.
-- **T4 (P2) — mypy gate.** Confirm `tkinter`/`filedialog` typeshed stubs resolve under `--strict` in
-  the dev loop (don't assume). Depends T2.
-- **T5 (P3, Windows acceptance gate only) — live dialog.** Real Explorer dialog, `initialdir`
-  honored, filetypes dropdown, native Cancel→menu, Ctrl-C→exit, no ghost window, focus over the
-  console, clean 2nd invocation. Not CI-testable. Depends T3.
+- **T1 ✓ DONE (`8629ec2`) — `config.py` state + ladder.** `state.json` IO (best-effort) +
+  `resolve_initial_dir` + `.gitignore` line. Tests in `test_config.py` (absent/valid/corrupt load;
+  save round-trip + dir-create + `OSError` swallow; ladder: last-exists / Downloads / home; `OSError`
+  on exists).
+- **T2 ✓ DONE (`8629ec2`) — `ui.py` seam.** `pick_file` on `UI` Protocol + `StubUI` +
+  `RichQuestionaryUI` (lazy dual-guard `ImportError`/`TclError` → `questionary.path()`; explicit Tk
+  root mgmt; cancel map; bypass `_ask`). Tests `test_ui.py` (stub queued path / None / empty;
+  monkeypatched ImportError + TclError → fallback; dialog path / "" cancel; Ctrl-C → EOFError).
+- **T3 ✓ DONE (`8c67b68`) — `menu._flow_local_file` rewire.** resolve initialdir → `ui.pick_file` →
+  `None`→menu; else `_resolve_typed_path` (F1) → `save_last_dir(source.parent)` after a valid pick
+  (covers all 3 actions, not just transcribe). `_AV_FILETYPES` constant at the call site;
+  "Check the path…" folded into `_resolve_typed_path`. Autouse `isolate_last_dir` test fixture keeps
+  state IO off the real `config/state.json`. Tests `test_menu.py` (pick→transcribe→save called;
+  cancel→menu, no transcribe/save; bad path→F1, no save).
+- **T4 ✓ DONE (`9e8d768`) — mypy gate.** Verified via `reveal_type` that `tkinter.Tk` /
+  `filedialog.askopenfilename` resolve as real signatures (not `Any`) under `--strict` — the
+  per-module `ignore_missing_imports` overrides don't touch tkinter, its typeshed stubs ship with
+  mypy. Documented at the lazy import (no `type: ignore` needed, by design).
+- **T5 (P3, Windows acceptance gate only — operator-side, NEXT) — live dialog.** Real Explorer
+  dialog, `initialdir` honored, filetypes dropdown, native Cancel→menu, Ctrl-C→exit, no ghost
+  window, focus over the console, clean 2nd invocation. Not CI-testable (tk absent in WSL). Depends
+  T3 — folds into the same v1.1 Windows acceptance pass.
 
 *Parallelization:* Lane A = T1 (`config.py`), Lane B = T2 (`ui.py`) — independent, run in parallel
 worktrees. Merge both, then T3 (`menu.py`, depends A+B). T4 after B. T5 manual after T3.

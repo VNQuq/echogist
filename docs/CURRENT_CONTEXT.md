@@ -115,8 +115,8 @@ killswitch invariant holds. v1.1 adds `questionary==2.1.1` + `rich==15.0.0` (+ `
   logged) · **TD-7** plain-input/non-TTY fallback UI deferred from v1.1 (LOW; opens if a
   non-interactive run is ever needed) · **TD-8** stale `setuptools<81` plan wording vs the
   82.0.1 lock (LOW; reconcile at next re-lock) · **TD-9** cheap-call "press Enter" beat dropped
-  in v1.1 (LOW; restore on operator request) · **TD-10** file input forces manual path typing —
-  needs a picker/browse (**HIGH**, next build). **TD-1, TD-2, TD-3, TD-4 closed.**
+  in v1.1 (LOW; restore on operator request) · **TD-10** file picker — T1–T4 BUILT on `main`,
+  only the T5 Windows live-dialog gate left (**HIGH**, operator-side). **TD-1, TD-2, TD-3, TD-4 closed.**
   → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
