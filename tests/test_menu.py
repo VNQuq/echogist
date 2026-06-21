@@ -185,13 +185,61 @@ def test_local_file_both_extracts_and_summarizes(tmp_path: Path) -> None:
     assert calls["summarize"] == 1
 
 
-def test_mp3_source_not_re_extracted(tmp_path: Path) -> None:
+def test_mp3_source_skips_action_menu(tmp_path: Path) -> None:
+    # TD-12: an mp3 input skips the Summary/MP3/Both prompt and goes straight to
+    # summary — no action answer is queued (just file pick, then exit).
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "4"])
     assert menu.run_menu(deps) == 0
-    assert calls["extract"] == 0  # already an mp3
+    assert calls["extract"] == 0  # already an mp3 — nothing to extract
+    assert calls["transcribe"] == 1
+    assert calls["summarize"] == 1
     assert "already an MP3" in stub.log_text
+    # The action menu was never shown (mp3 → summary directly).
+    assert ("select", "What should EchoGist produce?") not in stub.messages
+
+
+def test_local_file_action_back_returns_to_menu(tmp_path: Path) -> None:
+    # TD-13: "← Back" from the action menu does nothing and returns to the main menu.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "__back__", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 0
+    assert calls["transcribe"] == 0
+    assert calls["summarize"] == 0
+
+
+def test_flow_clears_screen_on_entry(tmp_path: Path) -> None:
+    # TD-11: each flow clears the console on entry so prior menu chrome doesn't pile up.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    assert menu.run_menu(deps) == 0
+    assert ("clear", "") in stub.messages
+
+
+def test_transcript_save_reveals_folder_once(tmp_path: Path) -> None:
+    # TD-14: a NEW transcript save reveals its folder, and only once per launch even
+    # across two transcribe flows.
+    a = tmp_path / "a.wav"
+    a.write_bytes(b"x")
+    b = tmp_path / "b.wav"
+    b.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "1", "1", str(b), "1", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1  # once per launch, not once per transcribe
+    assert reveals[0][1].endswith("transcripts")
+
+
+def test_saved_transcript_resummarize_does_not_reveal(tmp_path: Path) -> None:
+    # TD-14: re-summarizing an existing transcript does NOT pop the folder (no new save).
+    _seed_transcript(tmp_path)
+    deps, stub, _ = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert not [m for m in stub.messages if m[0] == "reveal_dir"]
 
 
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:

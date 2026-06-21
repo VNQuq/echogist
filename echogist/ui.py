@@ -24,9 +24,10 @@ the network. The module imports clean with no model, no key, no wire.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
 from typing import IO, Protocol, runtime_checkable
 
@@ -87,12 +88,14 @@ class UI(Protocol):
     tests = a scripted stub. The menu depends only on this Protocol."""
 
     def banner(self, title: str, subtitle: str = "") -> None: ...
+    def clear(self) -> None: ...
     def select(self, prompt: str, choices: Sequence[Choice]) -> str: ...
     def text(self, prompt: str, *, default: str = "") -> str: ...
     def confirm(self, prompt: str, *, default: bool = False) -> bool: ...
     def pick_file(
         self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
     ) -> str | None: ...
+    def reveal_dir(self, path: Path) -> None: ...
     def info(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
     def warn(self, message: str) -> None: ...
@@ -133,6 +136,9 @@ class RichQuestionaryUI:
             )
         self.console = Console(theme=RICH_THEME)
         self.glyphs: Glyphs = glyphs(detect_caps(self.console))
+        # TD-14: reveal the transcript folder at most once per launch (= per UI
+        # instance). The guard lives here so the menu stays declarative.
+        self._revealed = False
 
     # -- input (cancel → EOFError, the loop's clean-exit) -------------------- #
     def _ask(self, question: questionary.Question) -> object:
@@ -149,6 +155,12 @@ class RichQuestionaryUI:
         if subtitle:
             body.append("\n" + subtitle, style="dim")
         self.console.print(Panel(body, box=self.glyphs.box, border_style="banner", expand=False))
+
+    def clear(self) -> None:
+        """Wipe the console (TD-11). The menu calls this on entry to each flow so the
+        prior cycle's answered prompts and tables don't pile up; the working log of the
+        flow about to run starts on a clean screen."""
+        self.console.clear()
 
     def select(self, prompt: str, choices: Sequence[Choice]) -> str:
         options = [questionary.Choice(title=label, value=value) for value, label in choices]
@@ -238,6 +250,23 @@ class RichQuestionaryUI:
         except (KeyboardInterrupt, EOFError) as exc:
             raise EOFError from exc
         return str(answer) if answer else None
+
+    # -- reveal (TD-14) ------------------------------------------------------ #
+    def reveal_dir(self, path: Path) -> None:
+        """Open the OS file browser at ``path`` — once per launch, Windows only.
+
+        Fires after the first transcript save so the operator lands on the folder
+        without hunting for it. ``os.startfile`` is Windows-only (guarded on ``nt``);
+        elsewhere (the WSL dev box) it is a no-op. Any failure is swallowed — revealing
+        a folder must never mask a completed transcribe/summarize run. Focus-stealing is
+        not controllable from stdlib, so the foreground pop is best-effort (TD-14)."""
+        if self._revealed:
+            return
+        self._revealed = True
+        if os.name != "nt":
+            return
+        with suppress(OSError):
+            os.startfile(path)  # type: ignore[attr-defined]  # nt-only, guarded above
 
     # -- output -------------------------------------------------------------- #
     def info(self, message: str) -> None:
@@ -367,6 +396,7 @@ class StubUI:
         self.answers: list[object] = list(answers or [])
         self.messages: list[tuple[str, str]] = []
         self.progress_values: list[float] = []
+        self._revealed = False  # mirrors the once-per-launch reveal guard (TD-14)
 
     def _pop(self) -> object:
         if not self.answers:
@@ -380,6 +410,9 @@ class StubUI:
 
     def banner(self, title: str, subtitle: str = "") -> None:
         self.messages.append(("banner", title))
+
+    def clear(self) -> None:
+        self.messages.append(("clear", ""))
 
     def select(self, prompt: str, choices: Sequence[Choice]) -> str:
         self.messages.append(("select", prompt))
@@ -403,6 +436,14 @@ class StubUI:
         self.messages.append(("pick_file", prompt))
         answer = self._pop()
         return None if answer is None else str(answer)
+
+    def reveal_dir(self, path: Path) -> None:
+        """Record the reveal once per instance (mirrors the production once-per-launch
+        guard), so a test can assert it fired exactly once across multiple transcribes."""
+        if self._revealed:
+            return
+        self._revealed = True
+        self.messages.append(("reveal_dir", str(path)))
 
     def info(self, message: str) -> None:
         self.messages.append(("info", message))

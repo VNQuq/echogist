@@ -261,7 +261,18 @@ terminal paste into the fallback, no code).
 
 ### TD-11 — Console accumulates menu chrome; no ephemeral-vs-durable log split
 
-Severity: MEDIUM · Created 2026-06-21 (operator Windows run) · Trigger: operator UX pass on the menu surface · SoT: this file
+Severity: MEDIUM · Created 2026-06-21 (operator Windows run) · **Status: BUILT on `main` 2026-06-21 (pragmatic clear-on-flow-entry); Windows-acceptance remainder below.** · SoT: this file
+
+**BUILT (office-hours 2026-06-21, design `pc-main-design-20260621-201432.md`).** Shipped the
+pragmatic 80/20, not the full ephemeral/durable two-region TUI (ratified out of scope for a
+single-operator tool — questionary won't live inside a `rich.Live`). Added `UI.clear()` to the
+seam (`RichQuestionaryUI.clear` → `console.clear()`; `StubUI.clear` records). The menu calls it on
+entry to each flow (`_flow_local_file`, `_flow_saved_transcript`, `_flow_settings`) — chosen over a
+menu-loop-top clear, which would have wiped a just-finished flow's result line ("Done — summary
+written to…") before the operator could read it. Net: re-entering Settings no longer stacks tables,
+and each flow starts clean, while the current flow's working log stays visible. Tested
+(`test_flow_clears_screen_on_entry`). Windows-acceptance remainder: confirm `console.clear()`
+renders cleanly on conhost vs Windows Terminal (ANSI, not WSL-verifiable).
 
 **What.** Every menu prompt, every `Settings` table, every `→ Change a setting` round-trip stays
 printed in the scrollback forever. After a few actions the console is a wall of transient chrome
@@ -286,7 +297,14 @@ is the larger follow-on.
 
 ### TD-12 — `.mp3` input still offers MP3/Both actions (extraction is a no-op there)
 
-Severity: LOW · Created 2026-06-21 (operator feature request) · Trigger: trivial — fold into the next `menu.py` touch · SoT: this file
+Severity: LOW · Created 2026-06-21 (operator feature request) · **Status: BUILT on `main` 2026-06-21.** · SoT: this file
+
+**BUILT (office-hours 2026-06-21).** `_flow_local_file` now branches on `extract.is_mp3(source)`
+after the pick: an mp3 sets `action = "1"` (summary) and skips the `ui.select` entirely (with an
+"already an MP3 — summarizing it" note); non-mp3 inputs still get the 3-way prompt. The file is
+summarized in place — no copy into `output/audio/`, no lossy re-encode. Tested
+(`test_mp3_source_skips_action_menu`: mp3 → no action select shown → summary runs, extract == 0).
+Fully closed (no Windows-acceptance remainder beyond the shared menu run).
 
 **What.** When the picked file is already an `.mp3`, the action menu still shows all three choices
 ("Summary", "MP3 only", "Both"). For an mp3 there is nothing to extract — "MP3 only" would just
@@ -304,7 +322,17 @@ surface beyond a `test_menu` case (mp3 pick → no action prompt → summary pat
 
 ### TD-13 — No back/ESC navigation; submenus are one-way until completed
 
-Severity: MEDIUM · Created 2026-06-21 (operator bug report) · Trigger: operator UX pass on the menu surface · SoT: this file
+Severity: MEDIUM · Created 2026-06-21 (operator bug report) · **Status: BUILT on `main` 2026-06-21 (`← Back` entries; ESC-as-back deliberately deferred).** · SoT: this file
+
+**BUILT (office-hours 2026-06-21).** Shipped the easy-win tier: explicit `← Back` entries on the
+action menu (`_ACTION_CHOICES` `__back__` → return to main menu) and the transcript picker
+(`__cancel__` relabelled `← Back`), and the Settings back entry relabelled to `← Back` for one
+consistent back vocabulary. The ESC-as-back stretch was **deliberately not built** — questionary
+maps ESC to the same `None` as Ctrl-C/Ctrl-D, so distinguishing it needs custom prompt_toolkit key
+bindings that would risk the load-bearing `_ask` cancel/exit contract (TD-10). ESC stays = exit, now
+documented in the `run_menu` docstring. Tested (`test_local_file_action_back_returns_to_menu`).
+Remaining (LOW, optional): the ESC keybinding, only if the operator still wants it after living with
+the `← Back` entries.
 
 **What.** The file-selection menu (and the others) have no "back" affordance — once in a submenu the
 operator must complete it or Ctrl-C out of the whole app. Operator wants to backtrack out of any
@@ -326,7 +354,19 @@ first; spike the ESC binding separately so it can't destabilize the existing can
 
 ### TD-14 — Open Explorer at the transcript folder after first save (Windows)
 
-Severity: LOW · Created 2026-06-21 (operator feature request) · Trigger: fold into the next `menu.py`/UI touch · SoT: this file
+Severity: LOW · Created 2026-06-21 (operator feature request) · **Status: BUILT on `main` 2026-06-21; live Explorer pop is Windows-acceptance only.** · SoT: this file
+
+**BUILT (office-hours 2026-06-21).** Added `UI.reveal_dir(path)` to the seam.
+`RichQuestionaryUI.reveal_dir` → `os.startfile(path)` guarded on `os.name == "nt"`, wrapped in
+`suppress(OSError)` (a reveal failure must never mask a completed run), and gated by a
+`self._revealed` flag so it fires at most once per launch (= per UI instance). `StubUI` mirrors the
+once-guard so it's testable offline. Called from `_transcribe_to_checkpoint` right after the
+"Saved transcript:" line — so a NEW transcript pops the folder, but re-summarizing an existing one
+does not. Tested (`test_transcript_save_reveals_folder_once`: one reveal across two transcribe
+flows; `test_saved_transcript_resummarize_does_not_reveal`). Known limitation (documented, not
+chased): `os.startfile` may foreground Explorer — true no-focus-steal would need a
+`ShellExecute(SW_SHOWNOACTIVATE)` ctypes call, explicitly out of scope. Windows-acceptance
+remainder: confirm the live Explorer pop (nt-only, not WSL-verifiable).
 
 **What.** After a transcript is saved, operator wants Windows Explorer to open at the target
 transcript folder (`output/transcripts/`) — **once per EchoGist launch**, and ideally in the

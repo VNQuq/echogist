@@ -231,6 +231,7 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
         transcript, deps.base / "output" / "transcripts", source.stem
     )
     ui.info(f"Saved transcript: {tpath}")
+    ui.reveal_dir(tpath.parent)  # TD-14: pop the transcript folder (Windows, once/launch)
     return transcript.text
 
 
@@ -241,6 +242,7 @@ _ACTION_CHOICES: tuple[Choice, ...] = (
     ("1", "Summary"),
     ("2", "MP3 only"),
     ("3", "Both (MP3 + summary)"),
+    ("__back__", "← Back"),
 )
 
 # Advisory filter for the native picker (TD-10). The pipeline transcodes anything
@@ -262,6 +264,7 @@ def _flow_local_file(deps: Deps) -> None:
     returns to the menu; Ctrl-C/Ctrl-D still exits via the loop's ``EOFError`` contract.
     """
     ui = _ui(deps)
+    ui.clear()  # TD-11: start this flow on a clean screen
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
 
@@ -277,14 +280,19 @@ def _flow_local_file(deps: Deps) -> None:
     # state-write failure never masks the run). Covers every action below.
     config.save_last_dir(source.parent)
 
-    action = ui.select("What should EchoGist produce?", _ACTION_CHOICES)
+    # TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality —
+    # so skip the action prompt and go straight to summary. Non-mp3 inputs still choose.
+    if extract.is_mp3(source):
+        ui.info(f"{source.name} is already an MP3 — summarizing it.")
+        action = "1"
+    else:
+        action = ui.select("What should EchoGist produce?", _ACTION_CHOICES)
+        if action == "__back__":  # TD-13: back out to the main menu, do nothing
+            return
 
-    if action in ("2", "3"):  # produce the MP3 artifact
-        if extract.is_mp3(source):
-            ui.info(f"{source.name} is already an MP3; keeping it as-is.")
-        else:
-            mp3 = deps.extract_audio(source, deps.base / "output" / "audio", log=ui.info)
-            ui.success(f"Saved MP3: {mp3}")
+    if action in ("2", "3"):  # produce the MP3 artifact (only a non-mp3 reaches here)
+        mp3 = deps.extract_audio(source, deps.base / "output" / "audio", log=ui.info)
+        ui.success(f"Saved MP3: {mp3}")
     if action == "2":  # MP3 only — done
         return
 
@@ -302,7 +310,7 @@ def _pick_transcript(deps: Deps, directory: Path) -> Path | None:
 
     choices: list[Choice] = [(str(i), p.name) for i, p in enumerate(saved)]
     choices.append(("__path__", "Type a path instead…"))
-    choices.append(("__cancel__", "Cancel"))
+    choices.append(("__cancel__", "← Back"))  # TD-13: consistent back-gesture label
     chosen = ui.select("Pick a saved transcript", choices)
     if chosen == "__cancel__":
         return None
@@ -314,6 +322,7 @@ def _pick_transcript(deps: Deps, directory: Path) -> Path | None:
 def _flow_saved_transcript(deps: Deps) -> None:
     """Source 2 — re-summarize a saved transcript (the recovery path, plan §3)."""
     ui = _ui(deps)
+    ui.clear()  # TD-11: start this flow on a clean screen
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
 
@@ -339,13 +348,14 @@ _SETTINGS_FIELDS: tuple[Choice, ...] = (
     ("2", "Output format"),
     ("3", "Model tier"),
     ("4", "Cost confirm threshold"),
-    ("__back__", "Back to menu"),
+    ("__back__", "← Back"),
 )
 
 
 def _flow_settings(deps: Deps) -> None:
     """Source 3 — edit one setting and persist it (validated on save)."""
     ui = _ui(deps)
+    ui.clear()  # TD-11: start on a clean screen so repeated edits don't stack tables
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
     ui.table(
@@ -414,6 +424,13 @@ def run_menu(deps: Deps | None = None) -> int:
     stage error (or an unexpected one) is reported and returns to the loop — never a
     crash (CLAUDE.md). A cancel (Ctrl-C / Ctrl-D / closed stdin) surfaces as ``EOFError``
     and exits cleanly, which is also how a piped test run ends.
+
+    Navigation (TD-13): every submenu offers an explicit ``← Back`` entry that returns to
+    its parent. ESC is deliberately NOT a back gesture — questionary maps ESC to the same
+    ``None`` as Ctrl-C/Ctrl-D, so ESC exits the app (the ``EOFError`` contract above).
+    Telling ESC apart from Ctrl-C would need custom prompt_toolkit key bindings on every
+    prompt and would put the load-bearing cancel/exit contract at risk; ``← Back`` is the
+    intentional, low-risk alternative.
     """
     deps = deps or Deps()
     if deps.ui is None:
