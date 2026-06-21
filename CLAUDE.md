@@ -8,7 +8,8 @@ or a saved transcript. Output is an MP3 track and/or a structured RU/EN summary
 is one cloud Anthropic call. No online sources, no logins, no history/analytics.
 Personal-use, Windows-only; developed in WSL2.
 
-The authoritative build spec is `docs/V1_ENGINEERING_PLAN.md`. Do not deviate from
+The authoritative build spec is `docs/archive/V1_ENGINEERING_PLAN.md` (archived once v1 +
+v1.1 shipped; still the locked reference for architecture/stack/scope). Do not deviate from
 it without operator approval.
 
 ## Hard Constraints
@@ -62,8 +63,8 @@ The File Map below is a routing table, not a preload list.
 | Task | Read |
 |------|------|
 | Current priorities / blockers | `docs/CURRENT_CONTEXT.md` |
-| Implementation — v1 (architecture, stack, tasks, tests) | `docs/V1_ENGINEERING_PLAN.md` |
-| Implementation — v1.1 menu/UX overhaul (UI seam, theme, progress, tasks) | `docs/V1.1_ENGINEERING_PLAN.md` |
+| Implementation — v1 (architecture, stack, tasks, tests) | `docs/archive/V1_ENGINEERING_PLAN.md` |
+| Implementation — v1.1 menu/UX overhaul (UI seam, theme, progress, tasks) | `docs/archive/V1.1_ENGINEERING_PLAN.md` |
 | Active technical debt | `docs/TECHNICAL_DEBT.md` |
 
 ## State Update Protocol
@@ -88,5 +89,5 @@ Do not skip review gates for: DB, LLM prompts, evaluation, safety, CI/deploy.
 When documents conflict:
 1. Explicit operator instruction in current session
 2. This CLAUDE.md (guardrails take precedence over all docs)
-3. `docs/V1_ENGINEERING_PLAN.md` (locked build spec — authoritative for architecture/stack/scope)
+3. `docs/archive/V1_ENGINEERING_PLAN.md` (locked build spec — authoritative for architecture/stack/scope)
 4. `docs/CURRENT_CONTEXT.md` (live status — authoritative for priorities/blockers)
