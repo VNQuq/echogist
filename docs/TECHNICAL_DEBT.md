@@ -255,6 +255,96 @@ terminal paste into the fallback, no code).
 `state.json` → `None`→ladder (tested, silent-but-correct); read-only `config/` on save → swallowed
 (tested, run already done); dead UNC initialdir → `OSError`-guarded→home (tested).
 
+> Source: operator Windows run 2026-06-21 (TD-10 picker live, end-to-end to F3). Four UX items
+> surfaced from one session; TD-11..TD-14 below. None is a correctness/safety bug — all are
+> console-UX polish on the now-working v1.1 flow.
+
+### TD-11 — Console accumulates menu chrome; no ephemeral-vs-durable log split
+
+Severity: MEDIUM · Created 2026-06-21 (operator Windows run) · Trigger: operator UX pass on the menu surface · SoT: this file
+
+**What.** Every menu prompt, every `Settings` table, every `→ Change a setting` round-trip stays
+printed in the scrollback forever. After a few actions the console is a wall of transient chrome
+(repeated settings tables, answered selects) interleaved with the few lines that actually matter:
+"Extracting audio →", "✓ Saved MP3", "Saved transcript", the F3 notice, the eventual summary path.
+Operator wants the console to hold **only the durable working log**; menu transitions and other
+ephemeral "artifacts" should auto-clean as you move between menus.
+
+**Why deferred.** This is a real design task, not a one-liner. It means separating two output
+classes — **durable** (stage progress + saved-artifact paths + errors) from **ephemeral** (menu
+selects, settings tables, confirms) — and giving the ephemeral class a self-erasing surface. rich
+can do it (`Console.screen()`/alternate-screen buffer for menus, or `Live` regions, or a clear
+between selections) but questionary prints its own answered prompts to the main stream and does not
+compose with a rich `Live` out of the box, so the seam needs design: likely a `UI` method that runs
+a menu inside an alt-screen context and returns only the choice, leaving the scrollback untouched.
+Must stay capability-gated (the TD-7 non-TTY fail-loud + the glyph fallback still hold) and must not
+swallow the durable log. Wants `/office-hours` before build (ambiguous scope per CLAUDE.md).
+
+**When to open.** With the next menu/UX pass. Smallest useful first step: clear-and-redraw the
+`Settings` sub-flow so repeated setting changes don't stack tables; the full ephemeral/durable split
+is the larger follow-on.
+
+### TD-12 — `.mp3` input still offers MP3/Both actions (extraction is a no-op there)
+
+Severity: LOW · Created 2026-06-21 (operator feature request) · Trigger: trivial — fold into the next `menu.py` touch · SoT: this file
+
+**What.** When the picked file is already an `.mp3`, the action menu still shows all three choices
+("Summary", "MP3 only", "Both"). For an mp3 there is nothing to extract — "MP3 only" would just
+re-encode (lossy) the file the operator already has, and "Both" is "summary + a pointless re-encode".
+Operator wants: if the selection is `.mp3`, skip the 3-way prompt and go straight to **summary**.
+
+**Why deferred.** Tiny and clear, but recorded rather than slipped in mid-audit. The predicate already
+exists (`extract.is_mp3(source)`); the change is in `menu._flow_local_file`: after `_resolve_typed_path`
+succeeds, branch on `is_mp3(source)` → set action to summary and skip the `ui.select(_ACTION_CHOICES)`.
+One open design question to settle at build: whether an mp3 should still be **copied/registered** into
+`output/audio/` (probably not — it already lives on disk; just summarize it in place). No new test
+surface beyond a `test_menu` case (mp3 pick → no action prompt → summary path).
+
+**When to open.** Next time `menu.py` is touched. No design gate needed; just decide the copy question.
+
+### TD-13 — No back/ESC navigation; submenus are one-way until completed
+
+Severity: MEDIUM · Created 2026-06-21 (operator bug report) · Trigger: operator UX pass on the menu surface · SoT: this file
+
+**What.** The file-selection menu (and the others) have no "back" affordance — once in a submenu the
+operator must complete it or Ctrl-C out of the whole app. Operator wants to backtrack out of any
+submenu, ideally by pressing **ESC**, returning to the parent menu instead of exiting.
+
+**Why deferred.** Two tiers of effort, settle which at build:
+- **Easy win:** add an explicit `← Back` entry to each submenu (the file picker already returns to the
+  main menu on Cancel/`None`; this generalizes that to settings sub-prompts and the action menu). Pure
+  questionary, no key-binding work.
+- **ESC keybinding:** questionary runs on prompt_toolkit; ESC is not a back gesture by default and
+  prompt_toolkit treats a lone ESC with a timeout delay (it's the CSI prefix). Wiring ESC→return-to-
+  parent means custom key bindings on each prompt and a clean "cancelled" sentinel distinct from the
+  Ctrl-C/EOF app-exit contract (TD-10's cancel split must not regress). More work, more test surface.
+
+Recorded together; the `← Back` entries are the low-risk first delivery, ESC is the stretch.
+
+**When to open.** With the next menu/UX pass (pairs naturally with TD-11). Do the `← Back` entries
+first; spike the ESC binding separately so it can't destabilize the existing cancel/EOF contract.
+
+### TD-14 — Open Explorer at the transcript folder after first save (Windows)
+
+Severity: LOW · Created 2026-06-21 (operator feature request) · Trigger: fold into the next `menu.py`/UI touch · SoT: this file
+
+**What.** After a transcript is saved, operator wants Windows Explorer to open at the target
+transcript folder (`output/transcripts/`) — **once per EchoGist launch**, and ideally in the
+background (not stealing focus from the console).
+
+**Why deferred.** Small but platform-specific and easy to get subtly wrong. Notes for build:
+- **Open mechanism:** `os.startfile(folder)` on Windows opens Explorer; guard on `os.name == "nt"`
+  so WSL-dev/CI is a clean no-op (it must not break the offline test path — local-only, killswitch
+  unaffected). Belongs behind a tiny UI/helper seam so `StubUI` no-ops it in tests.
+- **"Once per launch":** a session-scoped flag (set on first transcript save, checked thereafter) — not
+  persisted to `state.json`; it resets every launch by design.
+- **"Background" caveat:** `os.startfile` may foreground Explorer; true no-focus-steal is not reliably
+  controllable from stdlib (would need ShellExecute flags via ctypes). Record this as a best-effort —
+  if focus-stealing annoys, revisit with a `SW_SHOWNOACTIVATE` ShellExecute call.
+
+**When to open.** Next `menu.py`/UI touch. No design gate; decide only how hard to chase true
+background (best-effort `os.startfile` is the recommended first cut).
+
 ---
 
 ## Closed debts

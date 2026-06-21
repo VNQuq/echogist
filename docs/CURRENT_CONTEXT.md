@@ -1,6 +1,7 @@
 # Current Context
 
-**Updated:** 2026-06-21 (TD-10 picker: T1–T4 BUILT on `main`; only T5 Windows live-dialog gate left)
+**Updated:** 2026-06-21 (TD-10 picker T1–T4 BUILT on `main`, only T5 Windows gate left; logged
+TD-11..TD-14 menu/UX polish from the 2026-06-21 Windows run)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -118,8 +119,14 @@ killswitch invariant holds. v1.1 adds `questionary==2.1.1` + `rich==15.0.0` (+ `
   non-interactive run is ever needed) · **TD-8** stale `setuptools<81` plan wording vs the
   82.0.1 lock (LOW; reconcile at next re-lock) · **TD-9** cheap-call "press Enter" beat dropped
   in v1.1 (LOW; restore on operator request) · **TD-10** file picker — T1–T4 BUILT on `main`,
-  only the T5 Windows live-dialog gate left (**HIGH**, operator-side). **TD-1, TD-2, TD-3, TD-4 closed.**
-  → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
+  only the T5 Windows live-dialog gate left (**HIGH**, operator-side).
+- **From the 2026-06-21 Windows run (menu/UX polish):** **TD-11** console accumulates menu
+  chrome — split durable log from ephemeral menus/tables (MEDIUM; wants office-hours) · **TD-12**
+  `.mp3` input should skip the MP3/Both actions → summary only (LOW; trivial) · **TD-13** no
+  back/ESC navigation out of submenus (MEDIUM; `← Back` entries easy, ESC keybinding is the
+  stretch) · **TD-14** open Explorer at `output/transcripts/` after first save, once per launch
+  (LOW; Windows-only `os.startfile`). TD-11+TD-13 pair as one menu/UX pass; TD-12+TD-14 slip-in.
+- **TD-1, TD-2, TD-3, TD-4 closed.** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
 
 ## Hard constraints (carry-over)
 
