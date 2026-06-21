@@ -66,21 +66,6 @@ invocation in its real use. A full second adapter to serve a case that never occ
 **When to open.** If a batch/scripted/headless menu invocation becomes a real need. The `UI` Protocol
 seam already leaves a clean place to add a `PlainUI` without touching the flows.
 
-### TD-8 — `setuptools<81` pin in the v1.1 plan does not exist in the lockfile
-
-Severity: LOW · Created 2026-06-17 (v1.1 build) · Trigger: next `scripts/lock-deps` re-lock, or any ctranslate2 `pkg_resources` import failure on Windows · SoT: this file
-
-**What.** The (now-archived) v1.1 plan §2 says "PRESERVE the existing `setuptools<81` pin". There is
-no such pin: `requirements.in` never constrained it and `requirements.lock` ships `setuptools==82.0.1`,
-which the operator's Windows runs passed on. The plan's premise was stale; the cuDNN↔ctranslate2
-skew tripwire (the pin that matters) is untouched.
-
-**Why deferred.** Adding `setuptools<81` now would be an unrequested downgrade against a lock that
-ships and passes on the 4060. ctranslate2 4.8 imports clean with setuptools 82 there.
-
-**When to open.** At the next re-lock: confirm setuptools 82.x still imports clean and strike the
-"<81" wording, or add the pin deliberately if a real `pkg_resources` failure surfaces.
-
 ### TD-9 — Cheap-call "press Enter to summarize" beat dropped in v1.1
 
 Severity: LOW · Created 2026-06-17 (v1.1 build) · Trigger: operator review of the v1.1 confirm UX · SoT: this file
@@ -158,12 +143,26 @@ would need a `ShellExecute(SW_SHOWNOACTIVATE)` ctypes call, out of scope.
 
 ### TD-12 — `.mp3` input offered MP3/Both actions (extraction is a no-op there) ✓ CLOSED
 
-Severity (was): LOW · Created 2026-06-21 → Closed 2026-06-21 (`f4fd2ca`)
+Severity (was): LOW · Created 2026-06-21 → Closed 2026-06-21 (`f4fd2ca`, revised `738cf9e`)
 
-The fork was whether an mp3 input should still ask Summary/MP3/Both. Decision: skip the prompt —
-`_flow_local_file` branches on `extract.is_mp3(source)` and goes straight to summary in place (no
-lossy re-encode, no copy into `output/audio/`); non-mp3 inputs still choose. Logic-only, no
-Windows-specific behavior, tested (`test_mp3_source_skips_action_menu`). Fully closed.
+The fork was what an mp3 input should offer, since MP3-only/Both are no-ops there. First cut
+(`f4fd2ca`) skipped the prompt entirely and went straight to summary; the operator then asked to
+keep a choice, so `738cf9e` gives an mp3 a *trimmed* menu — **Summary / Transcript only / ← Back**
+(MP3-only and Both dropped). `_flow_local_file` branches on `extract.is_mp3(source)` to pick the
+menu; "Transcript only" saves the checkpoint and stops short of the network call. Logic-only,
+tested (`test_mp3_source_summary`, `test_mp3_source_transcript_only`). Fully closed.
+
+### TD-8 — `setuptools<81` pin the archived v1.1 plan references never existed ✓ CLOSED
+
+Severity (was): LOW · Created 2026-06-17 → Closed 2026-06-21 (no code change — premise dismissed)
+
+The archived v1.1 plan §2/T7 says to "preserve the existing `setuptools<81` pin", but no such pin
+ever existed: `requirements.in` never constrained setuptools and `requirements.lock` ships
+`setuptools==82.0.1`, which the 4060 runs pass on. The doc premise was stale and the plan is now
+frozen/archived (we do not edit archived specs), so there is nothing to fix — no defect in the code
+or the lockfile. The cuDNN↔ctranslate2 skew tripwire (the pin that actually matters) was always
+untouched. Residual note, not debt: if a ctranslate2 `pkg_resources` import failure ever surfaces on
+Windows, a deliberate `setuptools` pin in `requirements.in` + re-lock is the lever.
 
 ### TD-3 — GPU provisioning the launcher must automate ✓ CLOSED
 

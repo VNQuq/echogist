@@ -84,8 +84,8 @@ PROACTIVE false.
 - **TD-11 / TD-14** menu/UX built (`f4fd2ca`); Windows-acceptance remainder only (clear-render,
   Explorer pop). **TD-13** `← Back` built; ESC-as-back deferred (LOW).
 - **TD-5** chunked map-reduce · **TD-6** title leaks source language · **TD-7** non-TTY fallback UI ·
-  **TD-8** stale `setuptools<81` plan wording · **TD-9** dropped cheap-call Enter beat — all LOW.
-- **Closed:** TD-1, TD-2, TD-3, TD-4, TD-12.
+  **TD-9** dropped cheap-call Enter beat — all LOW.
+- **Closed:** TD-1, TD-2, TD-3, TD-4, TD-8, TD-12.
 
 ## Relevant SoT
 
