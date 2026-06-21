@@ -28,11 +28,17 @@ transcription bar) behind a `UI` Protocol injected via `Deps` (production `RichQ
 - **TD-10 file picker** (T1–T4): `UI.pick_file` — native tkinter dialog → `questionary.path()`
   fallback; last-used dir in gitignored `config/state.json`. Only **T5** (live Windows dialog) left.
 - **TD-11/12/13/14** (`f4fd2ca`, office-hours pragmatic 80/20): `UI.clear()` on flow entry (no more
-  stacked chrome); `.mp3` skips the action menu → summary; `← Back` entries (ESC stays = exit); 
-  `UI.reveal_dir()` pops the transcript folder once per launch (Windows). TD-12 fully closed.
+  stacked chrome); `← Back` entries (ESC stays = exit); `UI.reveal_dir()` pops the transcript folder
+  once per launch (Windows).
+- **TD-12 revised** (`738cf9e`): an `.mp3` no longer skips straight to summary — it gets a *trimmed*
+  action menu (**Summary / Transcript only / ← Back**; MP3-only and Both are dropped, nothing to
+  extract). "Transcript only" runs Whisper, saves the checkpoint, and stops short of the network call.
+- **Muted nav controls** (`fa70401`): `← Back` / cancel choices (dunder-wrapped values) render in a
+  grey+italic `control` style so they read as subtle chrome, distinct from the functional choices.
+  questionary applies the formatted title verbatim, so Back stays grey under the arrow pointer.
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **287 passed, 2 skipped** (the 2 live tests).
+`main` passes ruff + mypy --strict + tests. Current: **289 passed, 2 skipped** (the 2 live tests).
 
 ## Config / behavior notes
 
@@ -50,7 +56,8 @@ transcription bar) behind a `UI` Protocol injected via `Deps` (production `RichQ
 One Windows pass on the 4060 covers all remainders (WSL is blind to `isatty`/`legacy_windows`/key
 handling / tkinter / `os.startfile`):
 - **v1.1 menu:** arrow-key nav + settings, emoji-vs-ASCII glyph fallback, the `%/ETA` bar, Ctrl-C
-  clean exit, confirm defaults (No above threshold, proceed below), result/error panels.
+  clean exit, confirm defaults (No above threshold, proceed below), result/error panels; the `.mp3`
+  trimmed menu (Summary/Transcript only) and the muted grey `← Back` styling render as intended.
 - **T7 cold-install:** `pip install --require-hashes -r requirements.lock` clean cold run.
 - **TD-10 T5:** native picker dialog — `initialdir`, filetypes, native Cancel→menu, no ghost window,
   clean 2nd invocation.
