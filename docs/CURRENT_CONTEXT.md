@@ -90,6 +90,8 @@ WSL `.venv` (python3.12), GPU stack installed, RTX 4060 visible. Linux loads
 cuDNN/cuBLAS via `LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the win32 shim.
 PyPI + GitHub reachable from WSL; huggingface.co is not (no VPN). `ANTHROPIC_API_KEY`
 not set here (live gate needs it: `ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live`).
+API key now resolves from `ANTHROPIC_API_KEY` env first, then a gitignored
+`config/secrets.toml` (`anthropic_api_key`) fallback — `config/secrets.toml.example` shows the format (`53d0fa5`).
 `anthropic` + `fpdf2` installed in `.venv` (match the lock); both lazy-imported so the
 killswitch invariant holds. v1.1 adds `questionary==2.1.1` + `rich==15.0.0` (+ `prompt_toolkit`,
 `wcwidth`) — pure-Python, offline, no ABI tie to the GPU pins. Telemetry off, PROACTIVE false.
