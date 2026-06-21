@@ -118,13 +118,16 @@ def _model_dir(model_config: config.ModelConfig, base: Path) -> Path:
 
 
 def _resolve_typed_path(deps: Deps, typed: str) -> Path | None:
-    """A typed transcript path → an existing file, or None (cancel / F1 bad path)."""
+    """A typed/picked path → an existing file, or None (cancel / F1 bad path).
+
+    Shared by the transcript prompt (source 2) and the file picker's path entry
+    (source 1, TD-10), so the F1 message lives here once."""
     typed = typed.strip()
     if not typed:
         return None
     path = Path(typed).expanduser()
     if not path.is_file():  # F1
-        _ui(deps).error(f"File not found: {path}.")
+        _ui(deps).error(f"File not found: {path}. Check the path and try again.")
         return None
     return path
 
@@ -239,21 +242,39 @@ _ACTION_CHOICES: tuple[Choice, ...] = (
     ("3", "Both (MP3 + summary)"),
 )
 
+# Advisory filter for the native picker (TD-10). The pipeline transcodes anything
+# ffmpeg reads, so the trailing "All files" entry keeps an odd-extension input from
+# being silently hidden; the in-console fallback ignores this list entirely.
+_AV_FILETYPES: tuple[tuple[str, str], ...] = (
+    ("Audio/Video", "*.mp3 *.m4a *.wav *.flac *.aac *.ogg *.opus *.mp4 *.mkv *.mov *.webm *.ts"),
+    ("All files", "*.*"),
+)
+
 
 def _flow_local_file(deps: Deps) -> None:
-    """Source 1 — a local audio/video file → {summary · MP3 only · both} (§5)."""
+    """Source 1 — a local audio/video file → {summary · MP3 only · both} (§5).
+
+    The operator picks the file through :meth:`UI.pick_file` (TD-10): a native OS
+    dialog where one is available, an in-console Tab-completing prompt otherwise. The
+    dialog opens at the last-used directory (or a sensible default); a successful pick
+    remembers its parent for next time. A soft cancel (dialog Cancel / blank entry)
+    returns to the menu; Ctrl-C/Ctrl-D still exits via the loop's ``EOFError`` contract.
+    """
     ui = _ui(deps)
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
 
-    raw = ui.text("Path to the audio/video file:").strip()
-    if not raw:
-        ui.info("No path entered; returning to the menu.")
+    initialdir = config.resolve_initial_dir(config.load_last_dir())
+    raw = ui.pick_file("Select an audio/video file", filetypes=_AV_FILETYPES, initialdir=initialdir)
+    if raw is None:  # dialog Cancel / blank fallback entry → soft cancel
+        ui.info("No file selected; returning to the menu.")
         return
-    source = Path(raw).expanduser()
-    if not source.is_file():  # F1 — classify→reject, clear message
-        ui.error(f"File not found: {source}. Check the path and try again.")
+    source = _resolve_typed_path(deps, raw)  # F1 bad path → message + None
+    if source is None:
         return
+    # Remember where the operator picks files (best-effort; swallows OSError so a
+    # state-write failure never masks the run). Covers every action below.
+    config.save_last_dir(source.parent)
 
     action = ui.select("What should EchoGist produce?", _ACTION_CHOICES)
 

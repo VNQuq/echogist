@@ -22,6 +22,8 @@ import ast
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from echogist import config, menu
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary
@@ -117,6 +119,19 @@ def _write_settings(tmp_path: Path, **overrides: Any) -> None:
     config.save_settings(settings, tmp_path / "settings.json")
 
 
+@pytest.fixture(autouse=True)
+def isolate_last_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
+    """Keep the TD-10 picker's state IO off the real ``config/state.json`` in unit
+    tests, and record every ``save_last_dir`` call. The menu calls these via the
+    module (``config.save_last_dir`` etc.), so patching the module attrs is enough.
+    Returns the list of saved directories for assertions."""
+    saved: list[Path] = []
+    monkeypatch.setattr(config, "load_last_dir", lambda *a, **k: None)
+    monkeypatch.setattr(config, "resolve_initial_dir", lambda last: tmp_path)
+    monkeypatch.setattr(config, "save_last_dir", lambda d, *a, **k: saved.append(d))
+    return saved
+
+
 # --------------------------------------------------------------------------- #
 # Loop + navigation
 # --------------------------------------------------------------------------- #
@@ -179,18 +194,32 @@ def test_mp3_source_not_re_extracted(tmp_path: Path) -> None:
     assert "already an MP3" in stub.log_text
 
 
-def test_local_file_bad_path_returns_to_menu(tmp_path: Path) -> None:
+def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
     deps, stub, calls = _make_deps(tmp_path, ["1", str(tmp_path / "nope.wav"), "4"])
     assert menu.run_menu(deps) == 0
     assert "File not found" in stub.log_text
     assert calls["transcribe"] == 0
+    assert isolate_last_dir == []  # F1 → nothing remembered
 
 
-def test_local_file_blank_path_returns_to_menu(tmp_path: Path) -> None:
-    deps, stub, calls = _make_deps(tmp_path, ["1", "", "4"])
+def test_local_file_cancel_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
+    # A soft cancel from the picker is a queued None (dialog Cancel / blank entry).
+    deps, stub, calls = _make_deps(tmp_path, ["1", None, "4"])
     assert menu.run_menu(deps) == 0
-    assert "No path entered" in stub.log_text
+    assert "No file selected" in stub.log_text
     assert calls["transcribe"] == 0
+    assert isolate_last_dir == []  # cancel → nothing transcribed, nothing remembered
+
+
+def test_local_file_picker_remembers_directory(
+    tmp_path: Path, isolate_last_dir: list[Path]
+) -> None:
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["transcribe"] == 1
+    assert isolate_last_dir == [src.parent]  # the picked file's parent is saved
 
 
 # --------------------------------------------------------------------------- #
