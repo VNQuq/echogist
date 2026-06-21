@@ -185,19 +185,32 @@ def test_local_file_both_extracts_and_summarizes(tmp_path: Path) -> None:
     assert calls["summarize"] == 1
 
 
-def test_mp3_source_skips_action_menu(tmp_path: Path) -> None:
-    # TD-12: an mp3 input skips the Summary/MP3/Both prompt and goes straight to
-    # summary — no action answer is queued (just file pick, then exit).
+def test_mp3_source_summary(tmp_path: Path) -> None:
+    # TD-12: an mp3 input is offered a trimmed menu (no extract step); picking Summary
+    # runs the full transcribe → summarize pipeline without ever producing an mp3.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0  # already an mp3 — nothing to extract
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 1
     assert "already an MP3" in stub.log_text
-    # The action menu was never shown (mp3 → summary directly).
-    assert ("select", "What should EchoGist produce?") not in stub.messages
+    # The trimmed action menu WAS shown (mp3 still chooses transcript vs summary).
+    assert ("select", "What should EchoGist produce?") in stub.messages
+
+
+def test_mp3_source_transcript_only(tmp_path: Path) -> None:
+    # TD-12: picking "Transcript only" for an mp3 saves the checkpoint and stops — no
+    # extract, no network summarize call.
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"x")
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "transcript", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 0
+    assert calls["transcribe"] == 1
+    assert calls["summarize"] == 0  # transcript-only never touches the network
+    assert list((tmp_path / "output" / "transcripts").glob("*.txt"))
 
 
 def test_local_file_action_back_returns_to_menu(tmp_path: Path) -> None:

@@ -245,6 +245,15 @@ _ACTION_CHOICES: tuple[Choice, ...] = (
     ("__back__", "← Back"),
 )
 
+# TD-12: an mp3 has nothing to extract, so the MP3-only / Both options are dropped —
+# but the operator still chooses whether to stop at the saved transcript or go on to a
+# summary. "transcript" runs Whisper and keeps the checkpoint without the network call.
+_MP3_ACTION_CHOICES: tuple[Choice, ...] = (
+    ("1", "Summary"),
+    ("transcript", "Transcript only"),
+    ("__back__", "← Back"),
+)
+
 # Advisory filter for the native picker (TD-10). The pipeline transcodes anything
 # ffmpeg reads, so the trailing "All files" entry keeps an odd-extension input from
 # being silently hidden; the in-console fallback ignores this list entirely.
@@ -280,15 +289,16 @@ def _flow_local_file(deps: Deps) -> None:
     # state-write failure never masks the run). Covers every action below.
     config.save_last_dir(source.parent)
 
-    # TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality —
-    # so skip the action prompt and go straight to summary. Non-mp3 inputs still choose.
+    # TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality — so
+    # it gets a trimmed menu (transcript vs summary, no MP3/Both). Non-mp3 inputs choose
+    # from the full set.
     if extract.is_mp3(source):
-        ui.info(f"{source.name} is already an MP3 — summarizing it.")
-        action = "1"
+        ui.info(f"{source.name} is already an MP3.")
+        action = ui.select("What should EchoGist produce?", _MP3_ACTION_CHOICES)
     else:
         action = ui.select("What should EchoGist produce?", _ACTION_CHOICES)
-        if action == "__back__":  # TD-13: back out to the main menu, do nothing
-            return
+    if action == "__back__":  # TD-13: back out to the main menu, do nothing
+        return
 
     if action in ("2", "3"):  # produce the MP3 artifact (only a non-mp3 reaches here)
         mp3 = deps.extract_audio(source, deps.base / "output" / "audio", log=ui.info)
@@ -297,6 +307,8 @@ def _flow_local_file(deps: Deps) -> None:
         return
 
     text = _transcribe_to_checkpoint(deps, source, model_config)
+    if action == "transcript":  # transcript only — the checkpoint is the deliverable
+        return
     _run_summary(deps, settings, model_config, text, source.stem)
 
 
