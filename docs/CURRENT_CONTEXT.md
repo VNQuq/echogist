@@ -1,7 +1,7 @@
 # Current Context
 
-**Updated:** 2026-06-21 (v1 + v1.1 built on `main`; menu/UX debts TD-11..14 closed in code —
-only operator-side Windows acceptance remains; engineering plans archived)
+**Updated:** 2026-06-23 (v1 + v1.1 shipped on `main`; Windows acceptance PASSED — TD-10/11/13/14
+closed; only a cold/clean-deploy pass + T12 docs remain)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -9,94 +9,70 @@ only operator-side Windows acceptance remains; engineering plans archived)
 
 ## Active scope
 
-EchoGist is **functionally complete on `main`** — both build phases shipped. The only open work is
-the operator-side Windows acceptance pass; everything WSL-buildable is done and green.
+EchoGist is **functionally complete and Windows-accepted on `main`** — both build phases shipped, and
+the operator's 4060 Windows run passed (file picker, screen-clear, `← Back`, Explorer pop all
+confirmed; TD-10/11/13/14 closed 2026-06-23). Only a cold/clean-deploy verification (T7, operator,
+deferred) and the T12 first-run docs (WSL-doable) remain.
 
-**v1 — complete** ([`docs/archive/V1_ENGINEERING_PLAN.md`](./archive/V1_ENGINEERING_PLAN.md)).
-Pure-stage pipeline, artifact-based recovery (saved transcript = checkpoint), single-pass summarize.
-GUARD + cost are LOCAL/offline; `SUMMARIZE` is the one network stage. Three operator 4060/Windows
-acceptance runs passed (2026-06-16): win-smoke (closed TD-3), measurement (closed TD-4 →
-`int8_float16`), and the T10 live gate (real Sonnet, RU+EN clear the golden bar).
-
-**v1.1 — menu/UX overhaul, built**
-([`docs/archive/V1.1_ENGINEERING_PLAN.md`](./archive/V1.1_ENGINEERING_PLAN.md)). Replaced the bare
-`input()`/numeric menu with **questionary + rich** (arrow-key nav, styled panels, a %/ETA
-transcription bar) behind a `UI` Protocol injected via `Deps` (production `RichQuestionaryUI`, tests
-`StubUI`) — the seam keeps the killswitch CI offline/no-TTY. New: `echogist/ui.py`, `echogist/theme.py`.
-
-**Post-v1.1 UX debts — closed in code (2026-06-21):**
-- **TD-10 file picker** (T1–T4): `UI.pick_file` — native tkinter dialog → `questionary.path()`
-  fallback; last-used dir in gitignored `config/state.json`. Only **T5** (live Windows dialog) left.
-- **TD-11/12/13/14** (`f4fd2ca`, office-hours pragmatic 80/20): `UI.clear()` on flow entry (no more
-  stacked chrome); `← Back` entries (ESC stays = exit); `UI.reveal_dir()` pops the transcript folder
-  once per launch (Windows).
-- **TD-12 revised** (`738cf9e`): an `.mp3` no longer skips straight to summary — it gets a *trimmed*
-  action menu (**Summary / Transcript only / ← Back**; MP3-only and Both are dropped, nothing to
-  extract). "Transcript only" runs Whisper, saves the checkpoint, and stops short of the network call.
-- **Muted nav controls** (`fa70401`): `← Back` / cancel choices (dunder-wrapped values) render in a
-  grey+italic `control` style so they read as subtle chrome, distinct from the functional choices.
-  questionary applies the formatted title verbatim, so Back stays grey under the arrow pointer.
+- **v1** ([archive/V1_ENGINEERING_PLAN.md](./archive/V1_ENGINEERING_PLAN.md)): pure-stage pipeline,
+  artifact-based recovery (saved transcript = checkpoint), single-pass summarize. GUARD + cost are
+  LOCAL/offline; `SUMMARIZE` is the one network stage. Earlier 4060 runs (2026-06-16) closed TD-3
+  (win-smoke), TD-4 (→ `int8_float16`), and the T10 live gate (real Sonnet, RU+EN clear the bar).
+- **v1.1** ([archive/V1.1_ENGINEERING_PLAN.md](./archive/V1.1_ENGINEERING_PLAN.md)): replaced the bare
+  `input()`/numeric menu with **questionary + rich** (arrow-key nav, styled panels, %/ETA bar) behind
+  a `UI` Protocol injected via `Deps` (prod `RichQuestionaryUI`, tests `StubUI`) — the seam keeps the
+  killswitch CI offline/no-TTY. Files: `echogist/ui.py`, `echogist/theme.py`. Post-v1.1 UX debts
+  (file picker, screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu, muted nav) all built and
+  Windows-accepted — see [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
 `main` passes ruff + mypy --strict + tests. Current: **289 passed, 2 skipped** (the 2 live tests).
 
 ## Config / behavior notes
 
-- **Default model tier = `economy` (Haiku)** for everyday use; `balanced`/`flagship` selectable in
-  Settings. The T10 live gate stays pinned to `balanced` (Sonnet).
-- **Output layout:** the F13 recovery `.json` writes to `output/summaries/raw/`; `output/summaries/`
-  holds only the readable `.pdf`/`.md`. The triplet shares one stem.
-- **API key:** `ANTHROPIC_API_KEY` env first, then a gitignored `config/secrets.toml`
-  (`anthropic_api_key`) fallback — `config/secrets.toml.example` shows the format (`53d0fa5`).
-- **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (only `{language}`
-  is substituted); the output schema is code in `summarize.py`.
+- **Default model tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings. T10 live gate is
+  pinned to `balanced` (Sonnet).
+- **Output layout:** F13 recovery `.json` → `output/summaries/raw/`; `output/summaries/` holds only
+  the readable `.pdf`/`.md`. The triplet shares one stem.
+- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`
+  (`anthropic_api_key`) fallback — see `config/secrets.toml.example` (`53d0fa5`).
+- **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (only `{language}` is
+  substituted); output schema is code in `summarize.py`.
 
-## Next — operator-side Windows acceptance (the only open work)
+## Next — two items left
 
-One Windows pass on the 4060 covers all remainders (WSL is blind to `isatty`/`legacy_windows`/key
-handling / tkinter / `os.startfile`):
-- **v1.1 menu:** arrow-key nav + settings, emoji-vs-ASCII glyph fallback, the `%/ETA` bar, Ctrl-C
-  clean exit, confirm defaults (No above threshold, proceed below), result/error panels; the `.mp3`
-  trimmed menu (Summary/Transcript only) and the muted grey `← Back` styling render as intended.
-- **T7 cold-install:** `pip install --require-hashes -r requirements.lock` clean cold run.
-- **TD-10 T5:** native picker dialog — `initialdir`, filetypes, native Cancel→menu, no ghost window,
-  clean 2nd invocation.
-- **TD-11 / TD-14:** `console.clear()` renders cleanly (conhost vs Windows Terminal); Explorer pops
-  once after a transcript save.
-- **T12 docs:** final first-run steps + the arrow-key menu (last deferred v1 build task).
+- **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock`
+  on a fresh machine + cold first run (DLL/model provisioning). The accepted run was on an
+  already-provisioned box; this is the one honest gap.
+- **T12 docs (WSL-doable):** final first-run steps + the arrow-key menu (last deferred v1 task).
 
 ## Dev env
 
-WSL `.venv` (python3.12), GPU stack installed, RTX 4060 visible. Linux loads cuDNN/cuBLAS via
+WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Linux loads cuDNN/cuBLAS via
 `LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the win32 shim. PyPI + GitHub reachable from WSL;
-huggingface.co is not (no VPN). `ANTHROPIC_API_KEY` not set here (live gate needs it:
+huggingface.co is not (no VPN). `ANTHROPIC_API_KEY` not set here (live gate:
 `ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live`). `anthropic` + `fpdf2` + `questionary==2.1.1` +
 `rich==15.0.0` installed (match the lock); all lazy/offline so the killswitch holds. Telemetry off,
 PROACTIVE false.
 
-## Open blockers
+## Open blockers / debts
 
-- **None.** TD-1 (the only standing blocker) is closed.
-
-## Open debts → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md)
-
-- **TD-10** file picker — T1–T4 built, only the T5 Windows live-dialog gate left (**HIGH**, operator).
-- **TD-11 / TD-14** menu/UX built (`f4fd2ca`); Windows-acceptance remainder only (clear-render,
-  Explorer pop). **TD-13** `← Back` built; ESC-as-back deferred (LOW).
-- **TD-5** chunked map-reduce · **TD-6** title leaks source language · **TD-7** non-TTY fallback UI ·
-  **TD-9** dropped cheap-call Enter beat — all LOW.
-- **Closed:** TD-1, TD-2, TD-3, TD-4, TD-8, TD-12.
+- **Blockers: none.**
+- **Open debts** (all LOW, trigger-gated, nothing blocking) →
+  [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): TD-5 chunked map-reduce · TD-6 title leaks source
+  language · TD-7 non-TTY fallback UI · TD-9 dropped cheap-call Enter beat.
+- **Closed:** TD-1/2/3/4/8/10/11/12/13/14.
 
 ## Relevant SoT
 
-- **Build specs (locked, archived):** [v1](./archive/V1_ENGINEERING_PLAN.md) ·
+- Build specs (locked, archived): [v1](./archive/V1_ENGINEERING_PLAN.md) ·
   [v1.1](./archive/V1.1_ENGINEERING_PLAN.md).
-- Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
-- Operator testing playbook (RU): [`OPERATOR_TESTING_PLAYBOOK.md`](./archive/OPERATOR_TESTING_PLAYBOOK.md).
+- Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md) ·
+  operator playbook (RU): [`OPERATOR_TESTING_PLAYBOOK.md`](./archive/OPERATOR_TESTING_PLAYBOOK.md).
 
 ## Hard constraints (carry-over)
 
-- API key from `ANTHROPIC_API_KEY` env / local config file only; never in code/committed.
+- API key from env / local config only; never in code/committed.
 - Killswitch: `SUMMARIZE` is the only network stage; everything left of it is offline +
   unit-testable against a stub. (Model fetch is one-time provisioning, not a stage.)
 - Every push to `main` must pass: ruff + mypy + tests. (Development is on `main` directly.)

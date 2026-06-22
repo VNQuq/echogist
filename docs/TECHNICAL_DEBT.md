@@ -82,64 +82,54 @@ Dropping the forced keypress is also less friction in an arrow-key UI.
 **When to open.** If the operator wants the explicit pause back, add a one-line `ui.text("Press
 Enter to summarize…")` in `menu._run_summary` before the cheap-path proceed — no `cost.py` change.
 
-### TD-10 — File input forces manual path typing (no picker) — UX BLOCKER
-
-Severity: HIGH · Created 2026-06-17 (v1.1 operator feedback) · **Status: T1–T4 BUILT on `main`; only the T5 Windows live-dialog gate remains (operator-side).** · SoT: this file
-
-**What / built.** v1.1 made the operator type the audio/video path by hand — unacceptable friction on
-the most-used action. Replaced by `UI.pick_file(prompt, *, filetypes, initialdir=None) -> str | None`:
-a native tkinter "Open File" dialog (lazy, dual-guarded `ImportError`/`TclError`) → `questionary.path()`
-fallback; last-used dir persisted to gitignored `config/state.json`; pure `resolve_initial_dir` ladder
-(`last → ~/Downloads → ~`, never cwd). **T1–T2** config IO + `ui.py` seam (`8629ec2`); **T3**
-`menu._flow_local_file` rewire + `save_last_dir` after a valid pick (`8c67b68`); **T4** verified
-tkinter stubs type-check under mypy --strict (`9e8d768`). WSL/CI exercises the fallback + StubUI paths.
-
-**When to open / remaining.** **T5 (operator, Windows-only):** live native dialog — `initialdir`
-honored, filetypes dropdown, native Cancel→menu, Ctrl-C→exit, no ghost window, focus over console,
-clean 2nd invocation. Not CI-testable (tk absent in WSL). Folds into the v1.1 Windows acceptance pass.
-
-### TD-11 — Console accumulated menu chrome — BUILT (pragmatic), Windows-acceptance remainder
-
-Severity: MEDIUM · Created 2026-06-21 (operator Windows run) · **Status: BUILT on `main` 2026-06-21 (`f4fd2ca`); Windows-acceptance remainder only.** · SoT: this file
-
-**What / built.** Answered prompts and repeated `Current settings` tables piled up in the scrollback.
-Shipped the pragmatic 80/20 (ratified at office-hours 2026-06-21, design
-`pc-main-design-20260621-201432.md`): added `UI.clear()` to the seam, called on entry to each flow
-(`_flow_local_file`/`_flow_saved_transcript`/`_flow_settings`). Chosen over a menu-loop-top clear,
-which would wipe a finished flow's result line before it could be read. The full ephemeral/durable
-two-region TUI was ratified **out of scope** (questionary won't live inside a `rich.Live`).
-
-**When to open / remaining.** Windows-acceptance only: confirm `console.clear()` (ANSI) renders
-cleanly on conhost vs Windows Terminal. Not WSL-verifiable; folds into the v1.1 Windows pass.
-
-### TD-13 — Submenu back-navigation — BUILT (`← Back`); ESC-as-back deferred
-
-Severity: MEDIUM (back nav done) / LOW (ESC stretch) · Created 2026-06-21 (operator bug report) · **Status: `← Back` BUILT on `main` (`f4fd2ca`); ESC keybinding deferred.** · SoT: this file
-
-**What / built.** Submenus were one-way. Added explicit `← Back` entries to the action menu, the
-transcript picker, and Settings (one consistent back vocabulary). ESC stays = exit — questionary maps
-ESC to the same `None` as Ctrl-C/Ctrl-D, documented in the `run_menu` docstring.
-
-**When to open / remaining (LOW).** The ESC-as-back stretch was deliberately not built: telling ESC
-apart from Ctrl-C needs custom prompt_toolkit key bindings that would risk the load-bearing `_ask`
-cancel/exit contract (TD-10). Open only if the operator still wants ESC after living with `← Back`.
-
-### TD-14 — Open Explorer at the transcript folder after first save — BUILT, Windows-acceptance remainder
-
-Severity: LOW · Created 2026-06-21 (operator feature request) · **Status: BUILT on `main` 2026-06-21 (`f4fd2ca`); live Explorer pop is Windows-acceptance only.** · SoT: this file
-
-**What / built.** Added `UI.reveal_dir(path)` — `os.startfile` guarded on `os.name == "nt"`, wrapped
-in `suppress(OSError)`, gated by a `self._revealed` flag so it fires once per launch. Called from
-`_transcribe_to_checkpoint` after the "Saved transcript:" line, so a NEW save pops the folder but a
-re-summarize does not. `StubUI` mirrors the once-guard (tested offline).
-
-**When to open / remaining.** Windows-acceptance: confirm the live Explorer pop (nt-only). Known
-limitation (documented, not chased): `os.startfile` may foreground Explorer — true no-focus-steal
-would need a `ShellExecute(SW_SHOWNOACTIVATE)` ctypes call, out of scope.
-
 ---
 
 ## Closed debts
+
+### TD-10 — File input forced manual path typing (no picker) ✓ CLOSED
+
+Severity (was): HIGH · Created 2026-06-17 → Closed 2026-06-23 (operator Windows acceptance)
+
+The fork was how to kill the friction of hand-typing the audio/video path on the most-used action.
+Decision: `UI.pick_file` opens a native tkinter "Open File" dialog (lazy, dual-guarded
+`ImportError`/`TclError`) → `questionary.path()` fallback; last-used dir persisted to gitignored
+`config/state.json`; pure `resolve_initial_dir` ladder (`last → ~/Downloads → ~`, never cwd). Built
+`8629ec2`/`8c67b68`/`9e8d768` (T1–T4, WSL/CI exercises fallback + StubUI). The T5 live-dialog gate
+closed on the operator's Windows run: the native picker opened, browsed + selected, and Cancel
+returned to the menu cleanly.
+
+### TD-11 — Console accumulated menu chrome ✓ CLOSED
+
+Severity (was): MEDIUM · Created 2026-06-21 → Closed 2026-06-23 (operator Windows acceptance)
+
+The fork was how to stop answered prompts and repeated `Current settings` tables piling up in the
+scrollback. Decision (pragmatic 80/20, office-hours `pc-main-design-20260621-201432.md`): `UI.clear()`
+on entry to each flow (`_flow_local_file`/`_flow_saved_transcript`/`_flow_settings`), not a
+menu-loop-top clear (which would wipe a finished flow's result line). The full two-region TUI was
+ruled out of scope (questionary won't live inside a `rich.Live`). Built `f4fd2ca`; `console.clear()`
+confirmed rendering cleanly on the operator's Windows run.
+
+### TD-13 — Submenu back-navigation ✓ CLOSED
+
+Severity (was): MEDIUM · Created 2026-06-21 → Closed 2026-06-23 (operator Windows acceptance)
+
+The fork was how to give one-way submenus a way back. Decision: explicit `← Back` entries on the
+action menu, transcript picker, and Settings (one consistent back vocabulary), built `f4fd2ca` and
+confirmed working on the operator's Windows run. Residual note (not debt): ESC still maps to exit
+(questionary returns the same `None` as Ctrl-C/Ctrl-D, documented in `run_menu`); distinguishing
+ESC-as-back needs custom prompt_toolkit bindings that would risk the load-bearing `_ask` cancel/exit
+contract — open only if `← Back` ever proves insufficient.
+
+### TD-14 — Open Explorer at the transcript folder after first save ✓ CLOSED
+
+Severity (was): LOW · Created 2026-06-21 → Closed 2026-06-23 (operator Windows acceptance)
+
+The fork was whether to surface saved transcripts in Explorer automatically. Decision: `UI.reveal_dir`
+— `os.startfile` guarded on `os.name == "nt"`, wrapped in `suppress(OSError)`, fired once per launch
+(`self._revealed`) from `_transcribe_to_checkpoint` after the "Saved transcript:" line (a NEW save
+pops, a re-summarize does not). Built `f4fd2ca`; the live Explorer pop confirmed on the operator's
+Windows run. Known limitation (documented, not chased): `os.startfile` may foreground Explorer — true
+no-focus-steal would need a `ShellExecute(SW_SHOWNOACTIVATE)` ctypes call, out of scope.
 
 ### TD-12 — `.mp3` input offered MP3/Both actions (extraction is a no-op there) ✓ CLOSED
 
