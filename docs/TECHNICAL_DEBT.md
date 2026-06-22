@@ -24,13 +24,13 @@ Deadline/Trigger · SoT) + **What** / **Why deferred** / **When to open**.
 
 ## Open debts
 
-### TD-5 — Chunked map-reduce summarization deferred from v1
+### TD-5 — Chunked map-reduce summarization deferred from v1.0
 
 Severity: LOW · Created 2026-06-14 (eng-review) · Trigger: first real transcript that exceeds the single-pass context budget · SoT: this file
 
-**What.** v1 summarizes the whole transcript in one structured call. A 1.5–2.5h transcript
+**What.** v1.0 summarizes the whole transcript in one structured call. A 1.5–2.5h transcript
 (~35–40K tokens) fits one call in every tier, so chunked map-reduce + per-chunk checkpointing
-were cut. v1 instead estimates tokens against the model context and stops cleanly above a safe
+were cut. v1.0 instead estimates tokens against the model context and stops cleanly above a safe
 budget (F6). Deferred: chunked map-reduce, per-chunk checkpointing, chunk-level cost, reduce/merge.
 
 **Why deferred.** Builds rare-path machinery (~8h+ inputs) the common case never exercises; a
@@ -52,11 +52,11 @@ the T10 live gate passes both. Fix is a one-line prompt hardening but wants a pa
 **When to open.** When audio-language ≠ summary-language becomes a normal input — harden the title
 instruction and re-run the live gate.
 
-### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.1
+### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
-Severity: LOW · Created 2026-06-17 (v1.1 eng-review) · Trigger: a non-interactive (piped/redirected) run is ever genuinely needed · SoT: this file
+Severity: LOW · Created 2026-06-17 (console-UX eng-review) · Trigger: a non-interactive (piped/redirected) run is ever genuinely needed · SoT: this file
 
-**What.** v1.1's questionary+rich layer needs an interactive TTY. The adapter detects a non-TTY at
+**What.** The console UX layer's questionary+rich needs an interactive TTY. The adapter detects a non-TTY at
 startup and exits cleanly with a message (`NotInteractiveError`), rather than carrying a second
 `input()`/`print` UI for piped runs.
 
@@ -66,11 +66,11 @@ invocation in its real use. A full second adapter to serve a case that never occ
 **When to open.** If a batch/scripted/headless menu invocation becomes a real need. The `UI` Protocol
 seam already leaves a clean place to add a `PlainUI` without touching the flows.
 
-### TD-9 — Cheap-call "press Enter to summarize" beat dropped in v1.1
+### TD-9 — Cheap-call "press Enter to summarize" beat dropped in v1.0
 
-Severity: LOW · Created 2026-06-17 (v1.1 build) · Trigger: operator review of the v1.1 confirm UX · SoT: this file
+Severity: LOW · Created 2026-06-17 (console-UX build) · Trigger: operator review of the confirm UX · SoT: this file
 
-**What.** The archived v1.1 plan §5 wanted a "press Enter to continue" beat on the below-threshold
+**What.** The engineering plan §6.4 wanted a "press Enter to continue" beat on the below-threshold
 cost path. The build shows the estimate via `ui.info` and proceeds with no blocking keypress
 (`cost.confirm_proceed` returns `True` for cheap calls). The above-threshold gate (explicit confirm,
 default No) and the `$0.50` threshold policy are unchanged.
@@ -142,14 +142,14 @@ keep a choice, so `738cf9e` gives an mp3 a *trimmed* menu — **Summary / Transc
 menu; "Transcript only" saves the checkpoint and stops short of the network call. Logic-only,
 tested (`test_mp3_source_summary`, `test_mp3_source_transcript_only`). Fully closed.
 
-### TD-8 — `setuptools<81` pin the archived v1.1 plan references never existed ✓ CLOSED
+### TD-8 — `setuptools<81` pin the engineering plan references never existed ✓ CLOSED
 
 Severity (was): LOW · Created 2026-06-17 → Closed 2026-06-21 (no code change — premise dismissed)
 
-The archived v1.1 plan §2/T7 says to "preserve the existing `setuptools<81` pin", but no such pin
+The engineering plan §2 / U7 says to "preserve the existing `setuptools<81` pin", but no such pin
 ever existed: `requirements.in` never constrained setuptools and `requirements.lock` ships
-`setuptools==82.0.1`, which the 4060 runs pass on. The doc premise was stale and the plan is now
-frozen/archived (we do not edit archived specs), so there is nothing to fix — no defect in the code
+`setuptools==82.0.1`, which the 4060 runs pass on. The doc premise was stale, so there is nothing
+to fix — no defect in the code
 or the lockfile. The cuDNN↔ctranslate2 skew tripwire (the pin that actually matters) was always
 untouched. Residual note, not debt: if a ctranslate2 `pkg_resources` import failure ever surfaces on
 Windows, a deliberate `setuptools` pin in `requirements.in` + re-lock is the lever.
