@@ -1,7 +1,7 @@
 # Current Context
 
 **Updated:** 2026-06-23 (v1 + v1.1 shipped on `main`; Windows acceptance PASSED — TD-10/11/13/14
-closed; only a cold/clean-deploy pass + T12 docs remain)
+closed; T12 usage docs shipped — only a cold/clean-deploy pass remains)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -11,8 +11,9 @@ closed; only a cold/clean-deploy pass + T12 docs remain)
 
 EchoGist is **functionally complete and Windows-accepted on `main`** — both build phases shipped, and
 the operator's 4060 Windows run passed (file picker, screen-clear, `← Back`, Explorer pop all
-confirmed; TD-10/11/13/14 closed 2026-06-23). Only a cold/clean-deploy verification (T7, operator,
-deferred) and the T12 first-run docs (WSL-doable) remain.
+confirmed; TD-10/11/13/14 closed 2026-06-23). The T12 first-run/usage guide shipped
+([USAGE.md](./USAGE.md), `840becb`); only a cold/clean-deploy verification (T7, operator,
+deferred) remains.
 
 - **v1** ([archive/V1_ENGINEERING_PLAN.md](./archive/V1_ENGINEERING_PLAN.md)): pure-stage pipeline,
   artifact-based recovery (saved transcript = checkpoint), single-pass summarize. GUARD + cost are
@@ -39,12 +40,11 @@ deferred) and the T12 first-run docs (WSL-doable) remain.
 - **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (only `{language}` is
   substituted); output schema is code in `summarize.py`.
 
-## Next — two items left
+## Next — one item left
 
 - **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock`
   on a fresh machine + cold first run (DLL/model provisioning). The accepted run was on an
   already-provisioned box; this is the one honest gap.
-- **T12 docs (WSL-doable):** final first-run steps + the arrow-key menu (last deferred v1 task).
 
 ## Dev env
 
