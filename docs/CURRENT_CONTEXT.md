@@ -1,7 +1,8 @@
 # Current Context
 
-**Updated:** 2026-06-23 (v1.0 shipped on `main`; Windows acceptance PASSED — TD-10/11/13/14
-closed; T12 usage docs shipped — only a cold/clean-deploy pass remains)
+**Updated:** 2026-06-23 (**v1.0.0 released** — tagged `v1.0.0` + GitHub Release published;
+Windows acceptance PASSED — TD-10/11/13/14 closed; usage docs shipped — only a cold/clean-deploy
+pass remains)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -9,11 +10,13 @@ closed; T12 usage docs shipped — only a cold/clean-deploy pass remains)
 
 ## Active scope
 
-EchoGist is **functionally complete and Windows-accepted on `main`** — v1.0 shipped (both build
-phases of the [engineering plan](./archive/ENGINEERING_PLAN.md)), and the operator's 4060 Windows
-run passed (file picker, screen-clear, `← Back`, Explorer pop all confirmed; TD-10/11/13/14 closed
-2026-06-23). The T12 first-run/usage guide shipped ([USAGE.md](./USAGE.md), `840becb`); only a
-cold/clean-deploy verification (T7, operator, deferred) remains.
+EchoGist is **released as v1.0.0** — both build phases of the
+[engineering plan](./archive/ENGINEERING_PLAN.md) shipped, `release/v1.0` merged to `main` (`ecb31d7`,
+`--no-ff`), tag `v1.0.0` pushed, and the GitHub Release published with notes from
+[CHANGELOG.md](../CHANGELOG.md). The operator's 4060 Windows run passed (file picker, screen-clear,
+`← Back`, Explorer pop all confirmed; TD-10/11/13/14 closed 2026-06-23). The first-run/usage guide
+shipped ([USAGE.md](./USAGE.md)); only a cold/clean-deploy verification (T7, operator, deferred)
+remains.
 
 - **Phase 1 — pipeline** (ENGINEERING_PLAN §1–§5): pure-stage pipeline, artifact-based recovery
   (saved transcript = checkpoint), single-pass summarize. GUARD + cost are LOCAL/offline;
@@ -27,7 +30,7 @@ cold/clean-deploy verification (T7, operator, deferred) remains.
   built and Windows-accepted — see [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **289 passed, 2 skipped** (the 2 live tests).
+`main` passes ruff + mypy --strict + tests. Current: **294 passed, 2 skipped** (the 2 live tests).
 
 ## Config / behavior notes
 
