@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
 from typing import IO, Protocol, runtime_checkable
 
 import questionary
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
@@ -181,12 +183,50 @@ class RichQuestionaryUI:
             )
             for value, label in choices
         ]
-        answer = self._ask(
-            questionary.select(
-                prompt, choices=options, style=QUESTIONARY_STYLE, qmark=self.glyphs.arrow
-            )
+        # Hidden number quick-select (1-9): the default "(Use arrow keys)" hint is
+        # extended in place — same muted grey — to reveal the binding elegantly, with
+        # the upper bound matched to this menu's size (never promising a key past the
+        # last row). One row → no number worth advertising, so keep the bare hint.
+        bound = min(len(options), 9)
+        instruction = f"(Use arrow keys or 1-{bound})" if bound >= 2 else "(Use arrow keys)"
+        question = questionary.select(
+            prompt,
+            choices=options,
+            style=QUESTIONARY_STYLE,
+            qmark=self.glyphs.arrow,
+            instruction=instruction,
         )
+        self._bind_number_keys(question, options)
+        answer = self._ask(question)
         return str(answer)
+
+    @staticmethod
+    def _bind_number_keys(
+        question: questionary.Question, options: Sequence[questionary.Choice]
+    ) -> None:
+        """Wire hidden 1-9 quick-select onto a select prompt: pressing digit *N* picks
+        the *N*-th visible row immediately (including a ``← Back`` row — it is just a
+        position). Position-based, so it works for every menu regardless of the choices'
+        own values, and lives here once so all menus/submenus get it.
+
+        Only digit keys are added; the cancel/exit keys (Ctrl-C / Ctrl-D / ESC → None →
+        ``EOFError`` via :meth:`_ask`) are left untouched, so the load-bearing exit
+        contract (TD-13) is unaffected. questionary builds the prompt on a prompt_toolkit
+        ``Application`` whose ``KeyBindings`` we extend in place before ``ask()``;
+        ``KeyBindings.add`` bumps a version counter, so the additions take effect.
+        """
+        bindings = question.application.key_bindings
+        if not isinstance(bindings, KeyBindings):  # defensive; questionary uses KeyBindings
+            return
+
+        def _make(value: object) -> Callable[[KeyPressEvent], None]:
+            def _handler(event: KeyPressEvent) -> None:
+                event.app.exit(result=value)
+
+            return _handler
+
+        for index, choice in enumerate(options[:9]):
+            bindings.add(str(index + 1), eager=True)(_make(choice.value))
 
     def text(self, prompt: str, *, default: str = "") -> str:
         answer = self._ask(questionary.text(prompt, default=default, style=QUESTIONARY_STYLE))

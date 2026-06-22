@@ -13,9 +13,11 @@ import sys
 import types
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 import questionary
+from prompt_toolkit.key_binding import KeyBindings
 
 from echogist.ui import (
     UI,
@@ -42,6 +44,9 @@ class _FakeQuestion:
     def __init__(self, answer: Any = None, *, raises: BaseException | None = None) -> None:
         self._answer = answer
         self._raises = raises
+        # select() now wires hidden number keys onto question.application.key_bindings;
+        # give the fake a real (empty) KeyBindings so that path is exercised, not skipped.
+        self.application = types.SimpleNamespace(key_bindings=KeyBindings())
 
     def ask(self) -> Any:
         if self._raises is not None:
@@ -104,6 +109,69 @@ def test_select_styles_control_choices_subtly(monkeypatch: pytest.MonkeyPatch) -
     by_value = {c.value: c.title for c in captured["choices"]}
     assert by_value["1"] == "Summary"  # functional → plain title
     assert by_value["__back__"] == [("class:control", "← Back")]  # control → muted style
+
+
+# --------------------------------------------------------------------------- #
+# Hidden number quick-select (1-9) — the binding + its subtle in-hint advert.
+# --------------------------------------------------------------------------- #
+def _captured_instruction(monkeypatch: pytest.MonkeyPatch, choices: list[tuple[str, str]]) -> str:
+    captured: dict[str, Any] = {}
+
+    def fake_select(prompt: str, *, choices: Any, **kw: Any) -> Any:
+        captured.update(kw)
+        return _FakeQuestion(choices[0].value)
+
+    monkeypatch.setattr(questionary, "select", fake_select)
+    _tty_ui().select("pick", choices)
+    return str(captured["instruction"])
+
+
+def test_select_advertises_number_keys_in_arrow_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The bind is hidden per-row; the only tell is the existing "(Use arrow keys)" hint,
+    # extended with the range — and the upper bound matches THIS menu's row count.
+    got = _captured_instruction(monkeypatch, [("1", "A"), ("2", "B"), ("3", "C")])
+    assert got == "(Use arrow keys or 1-3)"
+
+
+def test_select_number_hint_caps_at_nine(monkeypatch: pytest.MonkeyPatch) -> None:
+    choices = [(str(i), str(i)) for i in range(12)]
+    assert _captured_instruction(monkeypatch, choices) == "(Use arrow keys or 1-9)"
+
+
+def test_select_single_choice_keeps_bare_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One row → no number worth advertising; the hint stays exactly as it was.
+    assert _captured_instruction(monkeypatch, [("only", "Only")]) == "(Use arrow keys)"
+
+
+def test_bind_number_keys_maps_digits_to_row_positions() -> None:
+    # Position-based: digit N picks the N-th row (a ← Back row is just a position), and
+    # the handler exits with that row's value — exactly what Enter on the row would do.
+    choices = [
+        questionary.Choice(title=lbl, value=val)
+        for val, lbl in (("a", "A"), ("b", "B"), ("__back__", "← Back"))
+    ]
+    q = questionary.select("pick", choices=choices)
+    RichQuestionaryUI._bind_number_keys(q, choices)
+    kb = q.application.key_bindings
+    assert isinstance(kb, KeyBindings)
+    digit = {
+        str(b.keys[0]): b for b in kb.bindings if len(b.keys) == 1 and str(b.keys[0]).isdigit()
+    }
+    assert sorted(digit) == ["1", "2", "3"]  # no "4" — only three rows
+    for key, expected in (("1", "a"), ("2", "b"), ("3", "__back__")):
+        event = MagicMock()
+        digit[key].handler(event)
+        event.app.exit.assert_called_once_with(result=expected)
+
+
+def test_bind_number_keys_caps_at_nine() -> None:
+    choices = [questionary.Choice(title=str(i), value=str(i)) for i in range(12)]
+    q = questionary.select("pick", choices=choices)
+    RichQuestionaryUI._bind_number_keys(q, choices)
+    kb = q.application.key_bindings
+    assert isinstance(kb, KeyBindings)
+    digits = {str(b.keys[0]) for b in kb.bindings if len(b.keys) == 1 and str(b.keys[0]).isdigit()}
+    assert digits == {"1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
 
 # --------------------------------------------------------------------------- #
