@@ -8,9 +8,9 @@ or a saved transcript. Output is an MP3 track and/or a structured RU/EN summary
 is one cloud Anthropic call. No online sources, no logins, no history/analytics.
 Personal-use, Windows-only; developed in WSL2.
 
-The authoritative build spec is `docs/archive/V1_ENGINEERING_PLAN.md` (archived once v1 +
-v1.1 shipped; still the locked reference for architecture/stack/scope). Do not deviate from
-it without operator approval.
+The authoritative build spec is `docs/archive/ENGINEERING_PLAN.md` (the locked reference for
+architecture/stack/scope, covering the full v1.0 build). Do not deviate from it without
+operator approval.
 
 ## Hard Constraints
 
@@ -35,7 +35,7 @@ it without operator approval.
   No `job.json`, no history layer.
 - **Pure stages.** Each pipeline stage is pure over an in-memory object so the whole
   pipeline is unit-testable with `SUMMARIZE` mocked.
-- **Single-pass v1.** Summarize the whole transcript in one structured call; a hard
+- **Single-pass.** Summarize the whole transcript in one structured call; a hard
   overflow guard stops cleanly above budget. No chunking until a real input trips it.
 - **Config is data, not code.** Model IDs, prices, model source URL, settings are
   editable without a code change.
@@ -63,8 +63,7 @@ The File Map below is a routing table, not a preload list.
 | Task | Read |
 |------|------|
 | Current priorities / blockers | `docs/CURRENT_CONTEXT.md` |
-| Implementation — v1 (architecture, stack, tasks, tests) | `docs/archive/V1_ENGINEERING_PLAN.md` |
-| Implementation — v1.1 menu/UX overhaul (UI seam, theme, progress, tasks) | `docs/archive/V1.1_ENGINEERING_PLAN.md` |
+| Implementation — pipeline + console UX (architecture, stack, tasks, tests) | `docs/archive/ENGINEERING_PLAN.md` |
 | Active technical debt | `docs/TECHNICAL_DEBT.md` |
 
 ## State Update Protocol
@@ -89,5 +88,5 @@ Do not skip review gates for: DB, LLM prompts, evaluation, safety, CI/deploy.
 When documents conflict:
 1. Explicit operator instruction in current session
 2. This CLAUDE.md (guardrails take precedence over all docs)
-3. `docs/archive/V1_ENGINEERING_PLAN.md` (locked build spec — authoritative for architecture/stack/scope)
+3. `docs/archive/ENGINEERING_PLAN.md` (locked build spec — authoritative for architecture/stack/scope)
 4. `docs/CURRENT_CONTEXT.md` (live status — authoritative for priorities/blockers)

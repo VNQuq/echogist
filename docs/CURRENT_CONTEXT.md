@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-06-23 (v1 + v1.1 shipped on `main`; Windows acceptance PASSED — TD-10/11/13/14
+**Updated:** 2026-06-23 (v1.0 shipped on `main`; Windows acceptance PASSED — TD-10/11/13/14
 closed; T12 usage docs shipped — only a cold/clean-deploy pass remains)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
@@ -9,22 +9,22 @@ closed; T12 usage docs shipped — only a cold/clean-deploy pass remains)
 
 ## Active scope
 
-EchoGist is **functionally complete and Windows-accepted on `main`** — both build phases shipped, and
-the operator's 4060 Windows run passed (file picker, screen-clear, `← Back`, Explorer pop all
-confirmed; TD-10/11/13/14 closed 2026-06-23). The T12 first-run/usage guide shipped
-([USAGE.md](./USAGE.md), `840becb`); only a cold/clean-deploy verification (T7, operator,
-deferred) remains.
+EchoGist is **functionally complete and Windows-accepted on `main`** — v1.0 shipped (both build
+phases of the [engineering plan](./archive/ENGINEERING_PLAN.md)), and the operator's 4060 Windows
+run passed (file picker, screen-clear, `← Back`, Explorer pop all confirmed; TD-10/11/13/14 closed
+2026-06-23). The T12 first-run/usage guide shipped ([USAGE.md](./USAGE.md), `840becb`); only a
+cold/clean-deploy verification (T7, operator, deferred) remains.
 
-- **v1** ([archive/V1_ENGINEERING_PLAN.md](./archive/V1_ENGINEERING_PLAN.md)): pure-stage pipeline,
-  artifact-based recovery (saved transcript = checkpoint), single-pass summarize. GUARD + cost are
-  LOCAL/offline; `SUMMARIZE` is the one network stage. Earlier 4060 runs (2026-06-16) closed TD-3
-  (win-smoke), TD-4 (→ `int8_float16`), and the T10 live gate (real Sonnet, RU+EN clear the bar).
-- **v1.1** ([archive/V1.1_ENGINEERING_PLAN.md](./archive/V1.1_ENGINEERING_PLAN.md)): replaced the bare
-  `input()`/numeric menu with **questionary + rich** (arrow-key nav, styled panels, %/ETA bar) behind
-  a `UI` Protocol injected via `Deps` (prod `RichQuestionaryUI`, tests `StubUI`) — the seam keeps the
-  killswitch CI offline/no-TTY. Files: `echogist/ui.py`, `echogist/theme.py`. Post-v1.1 UX debts
-  (file picker, screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu, muted nav) all built and
-  Windows-accepted — see [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
+- **Phase 1 — pipeline** (ENGINEERING_PLAN §1–§5): pure-stage pipeline, artifact-based recovery
+  (saved transcript = checkpoint), single-pass summarize. GUARD + cost are LOCAL/offline;
+  `SUMMARIZE` is the one network stage. Earlier 4060 runs (2026-06-16) closed TD-3 (win-smoke), TD-4
+  (→ `int8_float16`), and the T10 live gate (real Sonnet, RU+EN clear the bar).
+- **Phase 2 — console UX** (ENGINEERING_PLAN §6): replaced the bare `input()`/numeric menu with
+  **questionary + rich** (arrow-key nav, styled panels, %/ETA bar) behind a `UI` Protocol injected
+  via `Deps` (prod `RichQuestionaryUI`, tests `StubUI`) — the seam keeps the killswitch CI
+  offline/no-TTY. Files: `echogist/ui.py`, `echogist/theme.py`. The follow-on UX debts (file picker,
+  screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu, muted nav, hidden 1-9 quick-select) all
+  built and Windows-accepted — see [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
 `main` passes ruff + mypy --strict + tests. Current: **289 passed, 2 skipped** (the 2 live tests).
@@ -65,8 +65,7 @@ PROACTIVE false.
 
 ## Relevant SoT
 
-- Build specs (locked, archived): [v1](./archive/V1_ENGINEERING_PLAN.md) ·
-  [v1.1](./archive/V1.1_ENGINEERING_PLAN.md).
+- Build spec (locked): [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (pipeline + console UX).
 - Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md) ·
   operator playbook (RU): [`OPERATOR_TESTING_PLAYBOOK.md`](./archive/OPERATOR_TESTING_PLAYBOOK.md).
 
