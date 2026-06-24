@@ -1,10 +1,10 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.0.1 prepped** — patch over v1.0.0: a %/ETA progress bar for video→MP3
+**Updated:** 2026-06-25 (**v1.0.1 released** — patch over v1.0.0: a %/ETA progress bar for video→MP3
 conversion, and the Explorer reveal extended to the MP3-only flow with a background no-focus-steal
-open. VERSION + CHANGELOG bumped to 1.0.1; the `v1.0.1` tag + GitHub Release are still to be cut
-(via `/ship` or by the operator). Gate green: 303 passed, 2 skipped. Pending a 4060 Windows
-verification of both fixes + the deferred cold/clean-deploy pass)
+open. VERSION + CHANGELOG bumped to 1.0.1; `v1.0.1` tag pushed and the GitHub Release published
+(`scripts/release.py`). Gate green: 303 passed, 2 skipped. Pending a 4060 Windows verification of
+both fixes + the deferred cold/clean-deploy pass)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
