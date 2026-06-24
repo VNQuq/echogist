@@ -1,8 +1,9 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.0.0 released**; two post-release fixes landed on `main` — a %/ETA
-progress bar for video→MP3 conversion, and the Explorer reveal extended to the MP3-only flow with a
-background no-focus-steal open. Gate green: 303 passed, 2 skipped. Pending a 4060 Windows
+**Updated:** 2026-06-25 (**v1.0.1 prepped** — patch over v1.0.0: a %/ETA progress bar for video→MP3
+conversion, and the Explorer reveal extended to the MP3-only flow with a background no-focus-steal
+open. VERSION + CHANGELOG bumped to 1.0.1; the `v1.0.1` tag + GitHub Release are still to be cut
+(via `/ship` or by the operator). Gate green: 303 passed, 2 skipped. Pending a 4060 Windows
 verification of both fixes + the deferred cold/clean-deploy pass)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
