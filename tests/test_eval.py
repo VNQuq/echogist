@@ -79,6 +79,8 @@ def test_rejects_missing_structure() -> None:
         section_timecodes=(summarize.SectionMarker("[00:00:00]", "Intro"),),
         recurring_themes=(),  # no themes
         core_idea="",  # no core idea
+        decisions=(),
+        action_items=(),
         language="en",
     )
     report = evaluate_summary(broken, _transcript("transcript_en.txt"))

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from . import naming
-from .summarize import SectionMarker, Summary
+from .summarize import ActionItem, Decision, SectionMarker, Summary
 
 Logger = Callable[[str], object]
 
@@ -62,6 +62,9 @@ _LABELS: dict[str, dict[str, str]] = {
     "en": {
         "overview": "Overview",
         "key_takeaways": "Key takeaways",
+        "decisions": "Decisions",
+        "action_items": "Action items",
+        "estimate": "estimate",
         "sections": "Sections",
         "recurring_themes": "Recurring themes",
         "core_idea": "Core idea",
@@ -69,6 +72,9 @@ _LABELS: dict[str, dict[str, str]] = {
     "ru": {
         "overview": "Обзор",
         "key_takeaways": "Ключевые выводы",
+        "decisions": "Принятые решения",
+        "action_items": "Пункты к выполнению",
+        "estimate": "оценка",
         "sections": "Разделы",
         "recurring_themes": "Повторяющиеся темы",
         "core_idea": "Главная мысль",
@@ -116,6 +122,20 @@ def load_summary(json_path: Path) -> Summary:
         for m in raw.get("section_timecodes", [])
         if isinstance(m, dict)
     )
+    decisions = tuple(
+        Decision(decision=str(d.get("decision", "")), rationale=str(d.get("rationale", "")))
+        for d in raw.get("decisions", [])
+        if isinstance(d, dict)
+    )
+    actions = tuple(
+        ActionItem(
+            task=str(a.get("task", "")),
+            owner=str(a.get("owner", "")),
+            estimate=str(a.get("estimate", "")),
+        )
+        for a in raw.get("action_items", [])
+        if isinstance(a, dict)
+    )
     return Summary(
         title=str(raw.get("title", "")),
         overview=str(raw.get("overview", "")),
@@ -123,6 +143,8 @@ def load_summary(json_path: Path) -> Summary:
         section_timecodes=markers,
         recurring_themes=_str_tuple(raw.get("recurring_themes")),
         core_idea=str(raw.get("core_idea", "")),
+        decisions=decisions,
+        action_items=actions,
         language=str(raw.get("language", "")),
     )
 
@@ -180,6 +202,24 @@ def render(
 
 
 # --------------------------------------------------------------------------- #
+# Shared one-line formatting for the meeting/planning fields (Markdown + PDF agree)
+# --------------------------------------------------------------------------- #
+def _decision_text(item: Decision) -> str:
+    """A decision as one line: the decision, then the rationale when present."""
+    return f"{item.decision} — {item.rationale}" if item.rationale else item.decision
+
+
+def _action_text(item: ActionItem, lab: dict[str, str]) -> str:
+    """An action item as one line: the task, then owner / labelled estimate when present."""
+    bits: list[str] = []
+    if item.owner:
+        bits.append(item.owner)
+    if item.estimate:
+        bits.append(f"{lab['estimate']}: {item.estimate}")
+    return f"{item.task} — {', '.join(bits)}" if bits else item.task
+
+
+# --------------------------------------------------------------------------- #
 # Markdown (pure, no dependency — the always-available fallback)
 # --------------------------------------------------------------------------- #
 def _markdown(summary: Summary) -> str:
@@ -190,6 +230,14 @@ def _markdown(summary: Summary) -> str:
         out += [f"## {lab['overview']}", "", summary.overview, ""]
     if summary.key_takeaways:
         out += [f"## {lab['key_takeaways']}", "", *(f"- {t}" for t in summary.key_takeaways), ""]
+    if summary.decisions:
+        out += [f"## {lab['decisions']}", ""]
+        out += [f"- {_decision_text(d)}" for d in summary.decisions]
+        out += [""]
+    if summary.action_items:
+        out += [f"## {lab['action_items']}", ""]
+        out += [f"- {_action_text(a, lab)}" for a in summary.action_items]
+        out += [""]
     if summary.section_timecodes:
         out += [f"## {lab['sections']}", ""]
         out += [f"- `{m.timecode}` {m.title}".rstrip() for m in summary.section_timecodes]
@@ -251,6 +299,14 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
             _heading(pdf, lab["key_takeaways"])
             for item in summary.key_takeaways:
                 _bullet(pdf, item)
+        if summary.decisions:
+            _heading(pdf, lab["decisions"])
+            for decision in summary.decisions:
+                _bullet(pdf, _decision_text(decision))
+        if summary.action_items:
+            _heading(pdf, lab["action_items"])
+            for action in summary.action_items:
+                _bullet(pdf, _action_text(action, lab))
         if summary.section_timecodes:
             _heading(pdf, lab["sections"])
             for marker in summary.section_timecodes:

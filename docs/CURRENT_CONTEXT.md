@@ -55,6 +55,12 @@ seams/unit tests only (WSL `os.name != nt`) — need a 4060 Windows pass.
 
 ## Next
 
+- **v1.1.0 feature on `main` (uncommitted):** summary schema gained `decisions` ({decision,
+  rationale}) and `action_items` ({task, owner, estimate}) — meeting/planning output with effort
+  estimates; rendered (PDF+MD) under localized RU/EN headings, empty for non-meeting material. Same
+  change hardened the `title` prompt (TD-6). Offline gate green (309 passed, 2 skipped); **needs the
+  paid live gate (T10) for RU/EN quality + the TD-6 cross-language title re-check.** VERSION still
+  1.0.1 — bump to 1.1.0 at release (operator, via `/ship` or `scripts/release.py`).
 - **Verify the two 2026-06-25 fixes on the 4060 Windows box:** does the bar advance during a real
   video→MP3, and does Explorer pop *behind* the console for MP3-only (`output/audio`) and stay put on
   Both (`output/transcripts`)?
@@ -75,8 +81,9 @@ PROACTIVE false.
 
 - **Blockers: none.**
 - **Open debts** (all LOW, trigger-gated, nothing blocking) →
-  [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): TD-5 chunked map-reduce · TD-6 title leaks source
-  language · TD-7 non-TTY fallback UI · TD-9 dropped cheap-call Enter beat.
+  [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): TD-5 chunked map-reduce · TD-6 title-language **prompt
+  fix landed 2026-06-25** (pending paid cross-language live re-check) · TD-7 non-TTY fallback UI ·
+  TD-9 dropped cheap-call Enter beat.
 - **Closed:** TD-1/2/3/4/8/10/11/12/13/14.
 
 ## Relevant SoT

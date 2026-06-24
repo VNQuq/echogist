@@ -83,12 +83,40 @@ class SectionMarker:
 
 
 @dataclass(frozen=True)
+class Decision:
+    """One decision reached in the material: the decision plus the reasoning.
+
+    The meeting/planning half of the summary. ``rationale`` may be empty when the
+    transcript states a decision without spelling out the why.
+    """
+
+    decision: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class ActionItem:
+    """One action item in planning format: the task, who owns it, a rough estimate.
+
+    ``owner`` is a name from the transcript or the model's word for "unassigned"
+    when none is stated; ``estimate`` is the model's best-effort effort sizing (a
+    planning estimate, not a transcript fact). Either may be empty defensively.
+    """
+
+    task: str
+    owner: str
+    estimate: str
+
+
+@dataclass(frozen=True)
 class Summary:
     """The structured summary every downstream stage (render T7) reads.
 
     Matches the tool-use ``input_schema`` field-for-field, plus ``language`` (the
     code the summary was written in). ``title`` is always non-empty — the F10
-    fallback fills it when the model returns none.
+    fallback fills it when the model returns none. ``decisions`` / ``action_items``
+    are the meeting/planning half: empty for material (a lecture, a monologue) that
+    has none.
     """
 
     title: str
@@ -97,6 +125,8 @@ class Summary:
     section_timecodes: tuple[SectionMarker, ...]
     recurring_themes: tuple[str, ...]
     core_idea: str
+    decisions: tuple[Decision, ...]
+    action_items: tuple[ActionItem, ...]
     language: str
 
 
@@ -149,7 +179,10 @@ def _tool_schema() -> dict[str, Any]:
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "Short, specific, meaningful title. No date, no extension.",
+                    "description": (
+                        "Short, specific, meaningful title in the TARGET summary language "
+                        "(not the spoken language). No date, no extension."
+                    ),
                 },
                 "overview": {"type": "string", "description": "2-4 sentences of what it covers."},
                 "key_takeaways": {
@@ -172,6 +205,55 @@ def _tool_schema() -> dict[str, Any]:
                         "required": ["timecode", "title"],
                     },
                 },
+                "decisions": {
+                    "type": "array",
+                    "description": (
+                        "Concrete decisions reached in the material, in order. "
+                        "Empty list if none were made (e.g. a lecture)."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "decision": {
+                                "type": "string",
+                                "description": "The decision that was made.",
+                            },
+                            "rationale": {
+                                "type": "string",
+                                "description": "Why it was decided / the reasoning given.",
+                            },
+                        },
+                        "required": ["decision", "rationale"],
+                    },
+                },
+                "action_items": {
+                    "type": "array",
+                    "description": (
+                        "Action items in planning format, in order. "
+                        "Empty list if the material has none."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "The concrete action to take.",
+                            },
+                            "owner": {
+                                "type": "string",
+                                "description": (
+                                    "Who is responsible (a name from the transcript), or the "
+                                    "word for 'unassigned' in the target language if unstated."
+                                ),
+                            },
+                            "estimate": {
+                                "type": "string",
+                                "description": "A rough effort/time estimate for the task.",
+                            },
+                        },
+                        "required": ["task", "owner", "estimate"],
+                    },
+                },
                 "recurring_themes": {"type": "array", "items": string},
                 "core_idea": {"type": "string", "description": "1-2 sentences: the central point."},
             },
@@ -182,6 +264,8 @@ def _tool_schema() -> dict[str, Any]:
                 "section_timecodes",
                 "recurring_themes",
                 "core_idea",
+                "decisions",
+                "action_items",
             ],
         },
     }
@@ -237,6 +321,42 @@ def _markers(value: Any) -> tuple[SectionMarker, ...]:
     return tuple(out)
 
 
+def _decisions(value: Any) -> tuple[Decision, ...]:
+    """Coerce the decisions array to :class:`Decision`s; skip entries with no decision."""
+    if not isinstance(value, list):
+        return ()
+    out: list[Decision] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        decision = str(item.get("decision", "")).strip()
+        if not decision:  # a decision with no statement is dropped, not faked
+            continue
+        out.append(Decision(decision=decision, rationale=str(item.get("rationale", "")).strip()))
+    return tuple(out)
+
+
+def _action_items(value: Any) -> tuple[ActionItem, ...]:
+    """Coerce the action_items array to :class:`ActionItem`s; skip entries with no task."""
+    if not isinstance(value, list):
+        return ()
+    out: list[ActionItem] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        task = str(item.get("task", "")).strip()
+        if not task:  # an action item with no task is dropped, not faked
+            continue
+        out.append(
+            ActionItem(
+                task=task,
+                owner=str(item.get("owner", "")).strip(),
+                estimate=str(item.get("estimate", "")).strip(),
+            )
+        )
+    return tuple(out)
+
+
 def _fallback_title(source_stem: str, today: date | None) -> str:
     """F10: model returned no usable title -> ``<source-stem>-<date>`` (named, no crash)."""
     stamp = (today or date.today()).isoformat()
@@ -264,6 +384,8 @@ def _parse_summary(
         section_timecodes=_markers(tool_input.get("section_timecodes")),
         recurring_themes=_str_list(tool_input.get("recurring_themes")),
         core_idea=str(tool_input.get("core_idea", "")).strip(),
+        decisions=_decisions(tool_input.get("decisions")),
+        action_items=_action_items(tool_input.get("action_items")),
         language=language,
     )
 

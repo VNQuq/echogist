@@ -42,6 +42,8 @@ def _summary() -> Summary:
         section_timecodes=(),
         recurring_themes=("t",),
         core_idea="c",
+        decisions=(),
+        action_items=(),
         language="ru",
     )
 

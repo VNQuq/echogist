@@ -51,19 +51,31 @@ You are a careful summarizer. Read the timestamped transcript the user provides 
 produce ONE structured summary written entirely in {language}.
 
 Call the emit_summary tool exactly once, filling every field:
-- title: a short, specific, human-meaningful title for the material, in {language}. \
-No file extension, no date, no surrounding quotes.
+- title: a short, specific, human-meaningful title for the material, written in \
+{language}. Write the title in {language} EVEN IF the material is spoken in a \
+different language; never copy a title or phrase in the source language. No file \
+extension, no date, no surrounding quotes.
 - overview: 2-4 sentences stating what the material is and what it covers.
 - key_takeaways: the most important concrete points, each a single sentence.
 - section_timecodes: the major sections in order. For each, copy a timecode that \
 ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title. \
 Never invent or interpolate a timecode that is not present in the transcript; if you \
 are unsure, omit the section rather than guess.
+- decisions: concrete decisions reached in the material, in order. For each, give the \
+decision and the rationale (the reasoning given for it). If the material is not a \
+meeting or no decisions were made, return an empty list — never invent one.
+- action_items: concrete next actions in planning format, in order. For each, give the \
+task, the owner (the responsible person if the transcript names one, otherwise the \
+word for "unassigned" in {language}), and a rough effort estimate. The estimate is your \
+own best-effort planning estimate of the work the task implies, not a quote from the \
+transcript; keep it short (e.g. a number of hours or days). If the material has no \
+actions to take, return an empty list — never invent one.
 - recurring_themes: ideas, motifs, or threads that come up repeatedly.
 - core_idea: 1-2 sentences naming the single central point a reader should leave with.
 
-Be faithful to the transcript and add no facts that are not in it. Write naturally in \
-{language}, not a word-for-word translation.
+Be faithful to the transcript and add no facts that are not in it (effort estimates \
+on action_items are the one allowed exception — those are your planning judgment). \
+Write naturally in {language}, not a word-for-word translation.
 """
 
 [model_asset]

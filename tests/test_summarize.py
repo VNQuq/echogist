@@ -24,7 +24,9 @@ import pytest
 from echogist import summarize
 from echogist.config import ModelTier, SummarizeConfig
 from echogist.summarize import (
+    ActionItem,
     CallOutcome,
+    Decision,
     SectionMarker,
     SummarizeError,
     SummarizeResult,
@@ -57,6 +59,12 @@ def _full_tool_input() -> dict[str, Any]:
         "section_timecodes": [
             {"timecode": "[00:00:00]", "title": "Intro"},
             {"timecode": "[00:12:30]", "title": "Costs"},
+        ],
+        "decisions": [
+            {"decision": "Ship the local-inference path first.", "rationale": "Lower cost."},
+        ],
+        "action_items": [
+            {"task": "Benchmark int8 on the 4060.", "owner": "Pat", "estimate": "1 day"},
         ],
         "recurring_themes": ["efficiency", "access"],
         "core_idea": "AI is becoming infrastructure.",
@@ -133,6 +141,8 @@ def test_build_request_schema_requires_all_summary_fields() -> None:
         "section_timecodes",
         "recurring_themes",
         "core_idea",
+        "decisions",
+        "action_items",
     }
     assert "English" in req["system"]
 
@@ -149,6 +159,8 @@ def test_parse_full_result() -> None:
         SectionMarker("[00:00:00]", "Intro"),
         SectionMarker("[00:12:30]", "Costs"),
     )
+    assert s.decisions == (Decision("Ship the local-inference path first.", "Lower cost."),)
+    assert s.action_items == (ActionItem("Benchmark int8 on the 4060.", "Pat", "1 day"),)
     assert s.recurring_themes == ("efficiency", "access")
 
 
@@ -175,6 +187,36 @@ def test_parse_coerces_non_list_arrays_to_empty() -> None:
     s = summarize._parse_summary(data, "en", source_stem="x")
     assert s.key_takeaways == ()
     assert s.recurring_themes == ()
+
+
+def test_parse_drops_decisions_without_a_statement() -> None:
+    data = _full_tool_input() | {
+        "decisions": [
+            {"decision": "", "rationale": "orphan rationale"},  # no decision -> dropped
+            {"decision": "Adopt int8.", "rationale": ""},  # empty rationale is fine
+            "not a dict",
+        ]
+    }
+    s = summarize._parse_summary(data, "en", source_stem="x")
+    assert s.decisions == (Decision("Adopt int8.", ""),)
+
+
+def test_parse_drops_action_items_without_a_task() -> None:
+    data = _full_tool_input() | {
+        "action_items": [
+            {"task": "", "owner": "Pat", "estimate": "2h"},  # no task -> dropped
+            {"task": "Write the doc."},  # missing owner/estimate coerce to ""
+        ]
+    }
+    s = summarize._parse_summary(data, "en", source_stem="x")
+    assert s.action_items == (ActionItem("Write the doc.", "", ""),)
+
+
+def test_parse_coerces_non_list_meeting_fields_to_empty() -> None:
+    data = _full_tool_input() | {"decisions": "oops", "action_items": None}
+    s = summarize._parse_summary(data, "en", source_stem="x")
+    assert s.decisions == ()
+    assert s.action_items == ()
 
 
 # --------------------------------------------------------------------------- #
@@ -245,6 +287,8 @@ def _summary(title: str) -> Summary:
         section_timecodes=(SectionMarker("[00:00:00]", "s"),),
         recurring_themes=("t",),
         core_idea="c",
+        decisions=(Decision("d", "r"),),
+        action_items=(ActionItem("task", "owner", "1h"),),
         language="ru",
     )
 

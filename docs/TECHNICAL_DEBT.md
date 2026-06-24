@@ -40,17 +40,20 @@ single 40K-token call costs ~$0.12, so "never re-pay" is pennies.
 
 ### TD-6 — Summary title can leak the source language (not the target)
 
-Severity: LOW · Created 2026-06-16 · Trigger: cross-language summarizing becomes a regular case · SoT: this file
+Severity: LOW · Created 2026-06-16 · Prompt fix landed 2026-06-25 · Trigger: pending paid live re-validation · SoT: this file
 
-**What.** The `[summarize]` prompt asks for `title` "in {language}", but a German clip summarized
+**What.** The `[summarize]` prompt asked for `title` "in {language}", but a German clip summarized
 to Russian returned a German title with a correctly-Russian body (`claude-haiku-4-5`, T13 smoke).
-The title anchors to the source language when source ≠ target — content is unaffected.
+The title anchored to the source language when source ≠ target — content was unaffected.
 
-**Why deferred.** Supported languages are RU + EN; same-language cases (RU→RU, EN→EN) are clean and
-the T10 live gate passes both. Fix is a one-line prompt hardening but wants a paid live re-validation.
+**Fix landed (2026-06-25).** The `title` instruction in `config/models.toml` and the schema field
+description in `summarize.py` were hardened: the title must be written in the target language EVEN
+IF the material is spoken in another language; never copy a source-language phrase. Offline gate is
+green, but this is a prompt change — only a **paid live re-validation on a cross-language input**
+(source ≠ summary language) actually confirms it.
 
-**When to open.** When audio-language ≠ summary-language becomes a normal input — harden the title
-instruction and re-run the live gate.
+**When to close.** Run a live summarize on a non-RU/EN-spoken clip targeted to RU (and vice versa);
+confirm the title returns in the target language. Then move TD-6 to Closed.
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 

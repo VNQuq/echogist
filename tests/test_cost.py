@@ -43,6 +43,8 @@ def _result(input_tokens: int, output_tokens: int) -> SummarizeResult:
         section_timecodes=(),
         recurring_themes=(),
         core_idea="c",
+        decisions=(),
+        action_items=(),
         language="en",
     )
     return SummarizeResult(

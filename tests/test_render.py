@@ -17,7 +17,7 @@ import pytest
 
 from echogist import render, summarize
 from echogist.render import RenderError
-from echogist.summarize import SectionMarker, Summary
+from echogist.summarize import ActionItem, Decision, SectionMarker, Summary
 
 
 def _summary(title: str = "AI in 2026", language: str = "en") -> Summary:
@@ -31,6 +31,8 @@ def _summary(title: str = "AI in 2026", language: str = "en") -> Summary:
         ),
         recurring_themes=("efficiency", "access"),
         core_idea="AI is becoming infrastructure.",
+        decisions=(Decision("Ship local inference first.", "Lower cost."),),
+        action_items=(ActionItem("Benchmark int8.", "Pat", "1 day"),),
         language=language,
     )
 
@@ -57,6 +59,38 @@ def test_markdown_uses_russian_headings_for_ru_summary(tmp_path: Path) -> None:
     assert "Состояние ИИ" in text  # Cyrillic stays literal, not \\u-escaped
 
 
+def test_markdown_renders_decisions_and_action_items(tmp_path: Path) -> None:
+    text = render.render(_summary(), tmp_path, "md").read_text(encoding="utf-8")
+    assert "## Decisions" in text
+    assert "- Ship local inference first. — Lower cost." in text  # decision — rationale
+    assert "## Action items" in text
+    assert "- Benchmark int8. — Pat, estimate: 1 day" in text  # task — owner, estimate: X
+
+
+def test_markdown_localizes_meeting_headings_for_ru(tmp_path: Path) -> None:
+    s = _summary(title="Планёрка", language="ru")
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    assert "## Принятые решения" in text
+    assert "## Пункты к выполнению" in text
+    assert "оценка: 1 day" in text  # estimate label localized, value verbatim
+
+
+def test_markdown_action_item_omits_empty_owner_and_estimate(tmp_path: Path) -> None:
+    s = Summary(
+        title="T",
+        overview="o",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        decisions=(),
+        action_items=(ActionItem("Lone task", "", ""),),
+        language="en",
+    )
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    assert "- Lone task\n" in text  # no trailing " — " when owner+estimate empty
+
+
 def test_markdown_skips_empty_sections(tmp_path: Path) -> None:
     bare = Summary(
         title="Bare",
@@ -65,11 +99,15 @@ def test_markdown_skips_empty_sections(tmp_path: Path) -> None:
         section_timecodes=(),
         recurring_themes=(),
         core_idea="",
+        decisions=(),
+        action_items=(),
         language="en",
     )
     text = render.render(bare, tmp_path, "md").read_text(encoding="utf-8")
     assert "## Overview" in text
     assert "## Key takeaways" not in text  # empty arrays produce no heading
+    assert "## Decisions" not in text
+    assert "## Action items" not in text
     assert "## Core idea" not in text
 
 
@@ -157,7 +195,7 @@ def test_load_summary_filters_non_dict_markers(tmp_path: Path) -> None:
 # Empty-title fallback parity (load_summary can rebuild an empty title)
 # --------------------------------------------------------------------------- #
 def test_markdown_empty_title_uses_fallback(tmp_path: Path) -> None:
-    s = Summary("", "ov", (), (), (), "", "en")
+    s = Summary("", "ov", (), (), (), "", (), (), "en")
     text = render.render(s, tmp_path, "md", base="x").read_text(encoding="utf-8")
     assert text.startswith("# Summary\n")  # not a bare "# "
 
