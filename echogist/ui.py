@@ -310,20 +310,45 @@ class RichQuestionaryUI:
 
     # -- reveal (TD-14) ------------------------------------------------------ #
     def reveal_dir(self, path: Path) -> None:
-        """Open the OS file browser at ``path`` — once per launch, Windows only.
+        """Open the OS file browser at ``path`` in the background — once per launch.
 
-        Fires after the first transcript save so the operator lands on the folder
-        without hunting for it. ``os.startfile`` is Windows-only (guarded on ``nt``);
-        elsewhere (the WSL dev box) it is a no-op. Any failure is swallowed — revealing
-        a folder must never mask a completed transcribe/summarize run. Focus-stealing is
-        not controllable from stdlib, so the foreground pop is best-effort (TD-14)."""
+        Fires once per launch on the folder the chosen flow produced: the transcripts
+        folder after a transcript save, or the audio folder after an MP3-only run (the
+        menu picks which). Windows only (guarded on ``nt``); on the WSL dev box it is a
+        no-op. The pop opens *without* stealing focus from the console (the operator's
+        "в фоне"). Failure is non-fatal — revealing a folder must never mask a completed
+        run — but instead of swallowing it silently we log a one-line fallback so a
+        missing pop is diagnosable."""
         if self._revealed:
             return
         self._revealed = True
         if os.name != "nt":
             return
+        if not self._open_in_background(path):
+            self.info(f"Folder ready: {path}")
+
+    @staticmethod
+    def _open_in_background(path: Path) -> bool:
+        """Open ``path`` in the file browser without stealing console focus. True on a
+        confirmed open, False otherwise.
+
+        ``ShellExecuteW`` with ``SW_SHOWNOACTIVATE`` (4) opens Explorer behind the
+        console — true no-focus-steal, which ``os.startfile`` cannot promise. If the
+        ctypes call is unavailable or fails, fall back to ``os.startfile`` (which at
+        least opens the folder, even if it may foreground)."""
+        sw_shownoactivate = 4
+        with suppress(OSError, AttributeError, ValueError):
+            import ctypes
+
+            result = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]  # nt-only
+                None, "open", str(path), None, None, sw_shownoactivate
+            )
+            if int(result) > 32:  # ShellExecuteW: an HINSTANCE > 32 means success
+                return True
         with suppress(OSError):
-            os.startfile(path)  # type: ignore[attr-defined]  # nt-only, guarded above
+            os.startfile(str(path))  # type: ignore[attr-defined]  # nt-only, guarded by caller
+            return True
+        return False
 
     # -- output -------------------------------------------------------------- #
     def info(self, message: str) -> None:

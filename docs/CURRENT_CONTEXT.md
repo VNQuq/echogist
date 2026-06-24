@@ -1,8 +1,9 @@
 # Current Context
 
-**Updated:** 2026-06-23 (**v1.0.0 released** — tagged `v1.0.0` + GitHub Release published;
-Windows acceptance PASSED — TD-10/11/13/14 closed; usage docs shipped — only a cold/clean-deploy
-pass remains)
+**Updated:** 2026-06-25 (**v1.0.0 released**; two post-release fixes landed on `main` — a %/ETA
+progress bar for video→MP3 conversion, and the Explorer reveal extended to the MP3-only flow with a
+background no-focus-steal open. Gate green: 303 passed, 2 skipped. Pending a 4060 Windows
+verification of both fixes + the deferred cold/clean-deploy pass)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -29,8 +30,16 @@ remains.
   screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu, muted nav, hidden 1-9 quick-select) all
   built and Windows-accepted — see [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md).
 
+**Post-release fixes (2026-06-25, on `main`):** (1) **Bug #1** — `extract_audio` now drives a %/ETA
+bar: it probes duration (`ffmpeg -i` stderr; no ffprobe in imageio-ffmpeg) then streams
+`-progress pipe:1` `out_time_us` via a new `stream_runner` seam; no callback / unknown duration falls
+back to the plain runner (no fake %). (2) **Bug #2** — `reveal_dir` opens in the background
+(`ShellExecuteW(SW_SHOWNOACTIVATE)` → `os.startfile` fallback) and the menu reveals `output/audio`
+for MP3-only vs `output/transcripts` for transcribe flows, one folder per launch. Both verified via
+seams/unit tests only (WSL `os.name != nt`) — need a 4060 Windows pass.
+
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **294 passed, 2 skipped** (the 2 live tests).
+`main` passes ruff + mypy --strict + tests. Current: **303 passed, 2 skipped** (the 2 live tests).
 
 ## Config / behavior notes
 
@@ -43,8 +52,11 @@ remains.
 - **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (only `{language}` is
   substituted); output schema is code in `summarize.py`.
 
-## Next — one item left
+## Next
 
+- **Verify the two 2026-06-25 fixes on the 4060 Windows box:** does the bar advance during a real
+  video→MP3, and does Explorer pop *behind* the console for MP3-only (`output/audio`) and stay put on
+  Both (`output/transcripts`)?
 - **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock`
   on a fresh machine + cold first run (DLL/model provisioning). The accepted run was on an
   already-provisioned box; this is the one honest gap.

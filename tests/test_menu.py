@@ -255,6 +255,39 @@ def test_saved_transcript_resummarize_does_not_reveal(tmp_path: Path) -> None:
     assert not [m for m in stub.messages if m[0] == "reveal_dir"]
 
 
+def test_mp3_conversion_drives_progress_bar(tmp_path: Path) -> None:
+    # Bug #1: the video→MP3 conversion runs behind a %/ETA bar (was a frozen log line).
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    assert menu.run_menu(deps) == 0
+    assert ("progress", "Converting to MP3") in stub.messages
+
+
+def test_mp3_only_reveals_audio_folder(tmp_path: Path) -> None:
+    # Bug #2: an MP3-only run pops the audio folder (the chosen flow's output), not the
+    # transcripts folder, and only once per launch.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0][1].endswith("audio")
+
+
+def test_both_flow_reveals_transcript_folder_not_audio(tmp_path: Path) -> None:
+    # Bug #2 hierarchy: "Both" transcribes, so the transcript folder is the right reveal
+    # target — the MP3-folder pop is reserved for the MP3-only path.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "3", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0][1].endswith("transcripts")
+
+
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
     deps, stub, calls = _make_deps(tmp_path, ["1", str(tmp_path / "nope.wav"), "4"])
     assert menu.run_menu(deps) == 0

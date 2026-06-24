@@ -301,9 +301,15 @@ def _flow_local_file(deps: Deps) -> None:
         return
 
     if action in ("2", "3"):  # produce the MP3 artifact (only a non-mp3 reaches here)
-        mp3 = deps.extract_audio(source, deps.base / "output" / "audio", log=ui.info)
+        audio_dir = deps.base / "output" / "audio"
+        # The conversion is the one long blocking step here, so drive a %/ETA bar off
+        # ffmpeg's progress (it was previously a single frozen log line).
+        with ui.progress("Converting to MP3", total=1.0) as bar:
+            mp3 = deps.extract_audio(source, audio_dir, progress=bar.advance_to, log=ui.info)
+            bar.done()
         ui.success(f"Saved MP3: {mp3}")
-    if action == "2":  # MP3 only — done
+    if action == "2":  # MP3 only — reveal the audio folder (TD-14 hierarchy) and stop
+        ui.reveal_dir(deps.base / "output" / "audio")
         return
 
     text = _transcribe_to_checkpoint(deps, source, model_config)

@@ -128,8 +128,11 @@ The fork was whether to surface saved transcripts in Explorer automatically. Dec
 — `os.startfile` guarded on `os.name == "nt"`, wrapped in `suppress(OSError)`, fired once per launch
 (`self._revealed`) from `_transcribe_to_checkpoint` after the "Saved transcript:" line (a NEW save
 pops, a re-summarize does not). Built `f4fd2ca`; the live Explorer pop confirmed on the operator's
-Windows run. Known limitation (documented, not chased): `os.startfile` may foreground Explorer — true
-no-focus-steal would need a `ShellExecute(SW_SHOWNOACTIVATE)` ctypes call, out of scope.
+Windows run. **Extended 2026-06-25:** the reveal now also fires for the MP3-only flow
+(`output/audio`) — transcript flows still pop `output/transcripts`, one folder per launch by menu
+choice — and the once-deferred no-focus-steal open landed: `reveal_dir` uses
+`ShellExecuteW(SW_SHOWNOACTIVATE)` (falls back to `os.startfile`, and logs a `Folder ready:` line on
+failure instead of swallowing it). Pending a 4060 Windows verification pass.
 
 ### TD-12 — `.mp3` input offered MP3/Both actions (extraction is a no-op there) ✓ CLOSED
 

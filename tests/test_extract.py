@@ -198,6 +198,122 @@ def test_extract_audio_silent_no_output_fails_loud(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Duration probe + progress parsing (pure helpers)
+# --------------------------------------------------------------------------- #
+def test_parse_duration_reads_ffmpeg_line() -> None:
+    stderr = "  Input #0, mov\n  Duration: 01:02:03.50, start: 0.000000, bitrate: 128 kb/s\n"
+    assert extract._parse_duration(stderr) == 3723.5
+
+
+def test_parse_duration_none_when_absent_or_na() -> None:
+    assert extract._parse_duration("no duration here") is None
+    assert extract._parse_duration("Duration: N/A, bitrate: N/A") is None
+
+
+def test_parse_out_time_us_reads_microseconds() -> None:
+    assert extract._parse_out_time_us("out_time_us=2500000\n") == 2_500_000.0
+    assert extract._parse_out_time_us("out_time_us=N/A\n") is None  # early, pre-first-frame
+    assert extract._parse_out_time_us("progress=continue\n") is None
+
+
+# --------------------------------------------------------------------------- #
+# extract_audio — live progress path (probe duration → stream → fraction)
+# --------------------------------------------------------------------------- #
+def test_extract_audio_streams_progress_fractions(tmp_path: Path) -> None:
+    source = tmp_path / "lecture.mp4"
+    source.write_bytes(b"fake video")
+    seen: list[float] = []
+    stream_argv: list[list[str]] = []
+
+    def runner(argv: list[str]) -> tuple[int, str]:  # the duration probe
+        return 1, "Duration: 00:00:10.00, start: 0.0\nAt least one output file"
+
+    def stream_runner(argv: list[str], on_line: object) -> tuple[int, str]:
+        assert callable(on_line)
+        stream_argv.append(argv)
+        on_line("out_time_us=2500000\n")  # 2.5s / 10s
+        on_line("progress=continue\n")  # ignored
+        on_line("out_time_us=5000000\n")  # 5s / 10s
+        on_line("out_time_us=20000000\n")  # past end → clamps to 1.0
+        on_line("progress=end\n")
+        Path(argv[-1]).write_bytes(b"ID3")
+        return 0, ""
+
+    path = extract.extract_audio(
+        source,
+        tmp_path / "audio",
+        today=date(2026, 6, 15),
+        log=lambda _m: None,
+        ffmpeg_exe="/fake/ffmpeg",
+        runner=runner,
+        stream_runner=stream_runner,
+        progress=seen.append,
+    )
+
+    assert path.is_file()
+    assert seen == [0.25, 0.5, 1.0]  # clamped, no out-of-range fraction
+    assert "-progress" in stream_argv[0]  # streaming argv asks ffmpeg for progress
+    assert "pipe:1" in stream_argv[0]
+
+
+def test_extract_audio_unknown_duration_falls_back_to_plain_runner(tmp_path: Path) -> None:
+    # A probe that can't read a duration must NOT stream (no honest fraction to show);
+    # extraction still succeeds via the plain capture-at-end runner.
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"x")
+    seen: list[float] = []
+    used_stream = False
+
+    def runner(argv: list[str]) -> tuple[int, str]:
+        # First call = probe (no Duration); second = the conversion (writes the file).
+        if "-f" in argv:  # the conversion argv (probe argv has no muxer flag)
+            Path(argv[-1]).write_bytes(b"ID3")
+            return 0, ""
+        return 1, "Duration: N/A"
+
+    def stream_runner(argv: list[str], on_line: object) -> tuple[int, str]:
+        nonlocal used_stream
+        used_stream = True
+        return 0, ""
+
+    path = extract.extract_audio(
+        source,
+        tmp_path / "audio",
+        today=date(2026, 6, 15),
+        log=lambda _m: None,
+        ffmpeg_exe="/fake/ffmpeg",
+        runner=runner,
+        stream_runner=stream_runner,
+        progress=seen.append,
+    )
+
+    assert path.is_file()
+    assert not used_stream  # unknown duration → no streaming
+    assert seen == []  # nothing fraudulent reported
+
+
+def test_extract_audio_no_progress_skips_probe_and_streaming(tmp_path: Path) -> None:
+    # The MP3-without-bar callers (and the rest of the suite) pass no progress: there
+    # must be no probe call and a single plain conversion, argv unchanged (no -progress).
+    source = tmp_path / "talk.wav"
+    source.write_bytes(b"x")
+    calls, runner = _recorder()
+
+    path = extract.extract_audio(
+        source,
+        tmp_path / "audio",
+        today=date(2026, 6, 15),
+        log=lambda _m: None,
+        ffmpeg_exe="/fake/ffmpeg",
+        runner=runner,
+    )
+
+    assert path.is_file()
+    assert len(calls) == 1  # no separate probe call
+    assert "-progress" not in calls[0]
+
+
+# --------------------------------------------------------------------------- #
 # _default_ffmpeg_exe — F11 missing-binary guard
 # --------------------------------------------------------------------------- #
 def test_default_ffmpeg_exe_missing_package_fails_loud(
