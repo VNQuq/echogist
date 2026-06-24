@@ -82,6 +82,13 @@ def estimate_cost(
     recomputed — :class:`echogist.guard.GuardResult.est_input_tokens`). Output is
     the fixed ``guard.output_tokens_estimate`` absolute. Both priced at the tier's
     rates. Biased high on the input side because the GUARD estimate already is.
+
+    SELF-AUDIT-FIX (FIX-7): the system prompt + tool schema are ALREADY represented
+    in ``est_input_tokens`` via the GUARD's flat ``_PROMPT_OVERHEAD_TOKENS`` (1000),
+    so the cost estimate already accounts for the prompt. Do NOT add the prompt
+    length here again — that would double-count it. (The measured prompt+schema is
+    ~1270 tok; the flat overhead's small under-shoot is dwarfed by the +20% body
+    bias — see the constant's note in guard.py for why that is harmless.)
     """
     return CostEstimate(
         input_tokens=est_input_tokens,

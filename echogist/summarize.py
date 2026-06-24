@@ -58,6 +58,14 @@ _TOOL_NAME = "emit_summary"
 # itself so a hand-edited settings file never crashes the stage.
 _LANGUAGE_NAMES = {"ru": "Russian", "en": "English"}
 
+# The fixed "unassigned" owner label injected into the prompt's {unassigned} token.
+# Pinned here (not free-chosen by the model) so an action_item with no named owner
+# gets ONE consistent string per language instead of the model drifting between
+# "Не назначено" / "Без ответственного" / "Не указано" across calls. Lives beside
+# _LANGUAGE_NAMES — both are per-language prompt-substitution values. Unknown code
+# falls back to the English label, mirroring _language_name's fail-soft default.
+_UNASSIGNED_LABELS = {"ru": "Не назначено", "en": "Unassigned"}
+
 
 class SummarizeError(Exception):
     """A recoverable summarization failure. Print it, return to the menu.
@@ -188,7 +196,7 @@ def _tool_schema() -> dict[str, Any]:
                 "key_takeaways": {
                     "type": "array",
                     "items": string,
-                    "description": "Most important concrete points, one sentence each.",
+                    "description": "Most important concrete points, one sentence each (3-7 items).",
                 },
                 "section_timecodes": {
                     "type": "array",
@@ -200,7 +208,10 @@ def _tool_schema() -> dict[str, Any]:
                                 "type": "string",
                                 "description": "An [HH:MM:SS] that appears in the transcript.",
                             },
-                            "title": {"type": "string", "description": "Short section title."},
+                            "title": {
+                                "type": "string",
+                                "description": "Short section title, in the target language.",
+                            },
                         },
                         "required": ["timecode", "title"],
                     },
@@ -243,7 +254,7 @@ def _tool_schema() -> dict[str, Any]:
                                 "type": "string",
                                 "description": (
                                     "Who is responsible (a name from the transcript), or the "
-                                    "word for 'unassigned' in the target language if unstated."
+                                    "fixed 'unassigned' label given in the prompt if unstated."
                                 ),
                             },
                             "estimate": {
@@ -254,7 +265,11 @@ def _tool_schema() -> dict[str, Any]:
                         "required": ["task", "owner", "estimate"],
                     },
                 },
-                "recurring_themes": {"type": "array", "items": string},
+                "recurring_themes": {
+                    "type": "array",
+                    "items": string,
+                    "description": "Recurring ideas as short noun phrases (2-6 words), 2-6 items.",
+                },
                 "core_idea": {"type": "string", "description": "1-2 sentences: the central point."},
             },
             "required": [
@@ -279,19 +294,36 @@ def _language_name(code: str) -> str:
     return _LANGUAGE_NAMES.get(code, code)
 
 
+def _unassigned_label(code: str) -> str:
+    """The fixed 'unassigned' owner label for ``code`` (ru -> Не назначено).
+
+    Unknown code falls back to the English label, so a hand-edited settings file
+    never crashes the stage (mirrors :func:`_language_name`'s fail-soft default).
+    """
+    return _UNASSIGNED_LABELS.get(code, "Unassigned")
+
+
 def build_request(
     transcript_text: str, tier: ModelTier, cfg: SummarizeConfig, *, language: str
 ) -> dict[str, Any]:
     """Assemble the ``messages.create`` kwargs (pure; no network).
 
-    ``{language}`` in the config prompt is replaced with ``str.replace`` (not
-    ``.format``) so the operator can use literal braces in the prompt text without
-    breaking. ``tool_choice`` forces the one tool, suppressing any prose preamble.
+    The config prompt's tokens are filled with ``str.replace`` (not ``.format``) so
+    the operator can use literal braces in the prompt text without breaking:
+    ``{language}`` -> the human language name, ``{unassigned}`` -> the fixed
+    no-owner label for that language. ``temperature=0`` pins the decoding so the
+    same transcript yields the same title (the title is the artifact filename stem
+    via :func:`naming.summary_stem`; a drifting title would dedup into ``-2``/``-3``
+    duplicates instead of overwriting on a re-run). ``tool_choice`` forces the one
+    tool, suppressing any prose preamble.
     """
-    system = cfg.system_prompt.replace("{language}", _language_name(language))
+    system = cfg.system_prompt.replace("{language}", _language_name(language)).replace(
+        "{unassigned}", _unassigned_label(language)
+    )
     return {
         "model": tier.model_id,
         "max_tokens": cfg.max_output_tokens,
+        "temperature": 0,
         "system": system,
         "messages": [{"role": "user", "content": transcript_text}],
         "tools": [_tool_schema()],

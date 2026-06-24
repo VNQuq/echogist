@@ -36,6 +36,18 @@ _TOKENS_PER_CHAR_DEFAULT = 0.30  # ~3.3 chars/token
 
 # Fixed instruction/prompt scaffolding wrapped around the transcript in the single
 # structured SUMMARIZE call. Counted on the input side (plan §4: transcript + prompt).
+# SELF-AUDIT-FIX (FIX-7): this flat overhead is the ONE place the system prompt +
+# tool-use schema are charged to the input estimate. cost.estimate_cost reuses this
+# value (via GuardResult.est_input_tokens — see menu.py), so the prompt IS already
+# represented in the cost estimate; do NOT also add len(prompt)//4 in cost.py or it
+# double-counts. Measured today: prompt ~710 tok + serialized tool schema ~560 tok
+# ≈ 1270, so this flat 1000 slightly UNDER-shoots the true fixed scaffolding. That
+# is harmless: the overflow guarantee ("always catch an over-long transcript") rides
+# on the +20%-biased per-char body estimate, which scales with length and dwarfs a
+# ~270-tok fixed shortfall on any transcript long enough to approach the budget. A
+# near-empty transcript is the only case the shortfall isn't absorbed, and it is
+# sub-cent and nowhere near overflow. If the prompt/schema grows materially, raise
+# this constant above the measured prompt+schema total to keep the estimate high.
 _PROMPT_OVERHEAD_TOKENS = 1000
 
 

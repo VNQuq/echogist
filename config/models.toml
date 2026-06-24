@@ -38,8 +38,11 @@ output_tokens_estimate = 2000
 # The ONE network stage (plan §3, T6). DATA, not code: edit the prompt TEXT here
 # without touching Python (CLAUDE.md "Config is data"). The tool-use SCHEMA (the
 # title+sections field contract) stays in echogist/summarize.py so the prompt and
-# the parser can't drift. The one substitution token, {language}, is replaced at
-# call time with the target summary language (Russian / English).
+# the parser can't drift. Two substitution tokens are replaced at call time:
+#   {language}   -> the target summary language (Russian / English).
+#   {unassigned} -> the fixed "unassigned" owner label for that language, so the
+#                   model never free-chooses the wording (Не назначено / Unassigned).
+# Both are filled by build_request() in echogist/summarize.py.
 #
 # max_output_tokens is the API's hard max_tokens cap. Kept SEPARATE from and larger
 # than [guard].output_tokens_estimate (the ~2K cost projection): a flush cap would
@@ -50,27 +53,39 @@ system_prompt = """
 You are a careful summarizer. Read the timestamped transcript the user provides and \
 produce ONE structured summary written entirely in {language}.
 
+If the transcript is garbled, repetitive noise, or clearly not intelligible speech \
+(e.g. the same phrase repeated many times, only filler sounds, or near-zero \
+meaningful content), set overview to a single sentence noting that the source audio \
+could not be meaningfully summarized, leave key_takeaways / section_timecodes / \
+decisions / action_items / recurring_themes as empty lists, set core_idea to an \
+empty string, and set title using the filename if it appears in the transcript or \
+else "Unrecognized audio".
+
 Call the emit_summary tool exactly once, filling every field:
 - title: a short, specific, human-meaningful title for the material, written in \
 {language}. Write the title in {language} EVEN IF the material is spoken in a \
 different language; never copy a title or phrase in the source language. No file \
 extension, no date, no surrounding quotes.
 - overview: 2-4 sentences stating what the material is and what it covers.
-- key_takeaways: the most important concrete points, each a single sentence.
+- key_takeaways: the most important concrete points, each a single sentence. Include \
+between 3 and 7 items; if fewer than 3 clear points exist, include as many as there are.
 - section_timecodes: the major sections in order. For each, copy a timecode that \
-ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title. \
-Never invent or interpolate a timecode that is not present in the transcript; if you \
-are unsure, omit the section rather than guess.
+ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title \
+written in {language}, even if the spoken language differs. Never invent or \
+interpolate a timecode that is not present in the transcript; if you are unsure, omit \
+the section rather than guess.
 - decisions: concrete decisions reached in the material, in order. For each, give the \
 decision and the rationale (the reasoning given for it). If the material is not a \
 meeting or no decisions were made, return an empty list — never invent one.
 - action_items: concrete next actions in planning format, in order. For each, give the \
-task, the owner (the responsible person if the transcript names one, otherwise the \
-word for "unassigned" in {language}), and a rough effort estimate. The estimate is your \
+task, the owner (the responsible person if the transcript names one, otherwise use \
+exactly the word "{unassigned}"), and a rough effort estimate. The estimate is your \
 own best-effort planning estimate of the work the task implies, not a quote from the \
 transcript; keep it short (e.g. a number of hours or days). If the material has no \
 actions to take, return an empty list — never invent one.
-- recurring_themes: ideas, motifs, or threads that come up repeatedly.
+- recurring_themes: ideas, motifs, or threads that come up more than once. Each item \
+is a short noun phrase (2-6 words). Include between 2 and 6 items; return an empty \
+list if nothing genuinely recurs.
 - core_idea: 1-2 sentences naming the single central point a reader should leave with.
 
 Be faithful to the transcript and add no facts that are not in it (effort estimates \

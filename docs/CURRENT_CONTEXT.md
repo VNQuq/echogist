@@ -50,8 +50,10 @@ seams/unit tests only (WSL `os.name != nt`) — need a 4060 Windows pass.
   the readable `.pdf`/`.md`. The triplet shares one stem.
 - **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`
   (`anthropic_api_key`) fallback — see `config/secrets.toml.example` (`53d0fa5`).
-- **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (only `{language}` is
-  substituted); output schema is code in `summarize.py`.
+- **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (two tokens
+  substituted: `{language}` and `{unassigned}` — the fixed no-owner label per language); output
+  schema is code in `summarize.py`. `build_request` pins `temperature=0` so the title (the artifact
+  filename stem) is stable across re-runs.
 
 ## Next
 

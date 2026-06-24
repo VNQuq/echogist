@@ -124,11 +124,35 @@ def test_build_request_forces_the_tool_and_injects_language() -> None:
     req = summarize.build_request("hello", _tier(), _cfg(), language="ru")
     assert req["model"] == "claude-sonnet-4-6"
     assert req["max_tokens"] == 4096  # the cap, not the cost projection
+    assert req["temperature"] == 0  # FIX-3: pinned so the title (filename stem) is stable
     assert req["tool_choice"] == {"type": "tool", "name": "emit_summary"}
     assert req["tools"][0]["name"] == "emit_summary"
     assert "Russian" in req["system"]  # {language} replaced ru -> Russian
     assert "{language}" not in req["system"]
     assert req["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_build_request_substitutes_unassigned_label_per_language() -> None:
+    # FIX-4: {unassigned} is replaced with the fixed per-language no-owner label so
+    # the model never free-chooses the wording. The token must not survive into the
+    # system prompt for either language.
+    cfg = SummarizeConfig(
+        system_prompt="In {language}, unowned tasks use {unassigned}.",
+        max_output_tokens=4096,
+    )
+    ru = summarize.build_request("x", _tier(), cfg, language="ru")
+    en = summarize.build_request("x", _tier(), cfg, language="en")
+    assert "Не назначено" in ru["system"]
+    assert "Unassigned" in en["system"]
+    assert "{unassigned}" not in ru["system"]
+    assert "{unassigned}" not in en["system"]
+
+
+def test_unassigned_label_falls_back_to_english_for_unknown_code() -> None:
+    # Mirrors _language_name's fail-soft default: a hand-edited settings code that
+    # is not ru/en never crashes the stage — it gets the English label.
+    assert summarize._unassigned_label("ru") == "Не назначено"
+    assert summarize._unassigned_label("xx") == "Unassigned"
 
 
 def test_build_request_schema_requires_all_summary_fields() -> None:

@@ -72,9 +72,10 @@ class SummarizeConfig:
     """The one network stage's tunables (plan §3, T6). DATA, not code.
 
     ``system_prompt`` is the prompt TEXT — editable data per "Config is data"
-    (CLAUDE.md). It carries one substitution token, ``{language}``, replaced at
-    call time with the target summary language. The tool-use SCHEMA (the
-    title+sections field contract the parser depends on) lives in code, in
+    (CLAUDE.md). It carries two substitution tokens replaced at call time:
+    ``{language}`` (the target summary language) and ``{unassigned}`` (the fixed
+    no-owner label for that language). The tool-use SCHEMA (the title+sections
+    field contract the parser depends on) lives in code, in
     :mod:`echogist.summarize`, so the prompt and the schema cannot drift apart.
 
     ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately
