@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Publish a GitHub Release for the current (or a given) tag.
 
-This is the permanent, self-service release helper: it resolves the GitHub token
-the SAME way :mod:`echogist.config` resolves the Anthropic key — ``GITHUB_TOKEN``
-environment variable first, then the gitignored ``config/secrets.toml`` (key
-``github_token``). So once the token is in ``config/secrets.toml`` (copy
-``config/secrets.toml.example``), a release is one command with no token in the
-shell history and no secret in git.
+This is the permanent, self-service release helper. It reads the GitHub token
+from a SINGLE, repo-specific environment variable: ``ECHOGIST_GITHUB_TOKEN``.
+The name is deliberately namespaced (not the generic ``GITHUB_TOKEN``) so that,
+on a machine with several projects, it is unambiguous which token belongs to
+which repo and nothing accidentally grabs another project's token.
 
-Usage::
+Set it once in your shell profile (``~/.bashrc``)::
+
+    export ECHOGIST_GITHUB_TOKEN="github_pat_..."   # Contents: Read and write
+
+Then a release is one command, with no token in shell history and no secret in
+the repo (the token lives only in your profile, never in git):
 
     python3 scripts/release.py            # tag = v<VERSION file>
     python3 scripts/release.py v1.0.1     # explicit tag
@@ -18,58 +22,39 @@ The annotated git tag must already exist on the remote (``/ship`` or a manual
 ``## [X.Y.Z]`` section of ``CHANGELOG.md``. Re-running for a tag that already has
 a release is a no-op (GitHub returns 422, reported, exit 0).
 
-The token is never printed and never committed; ``config/secrets.toml`` is
-gitignored (see ``.gitignore``).
+The token is read from the environment only and is never printed or committed.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_SECRETS = _REPO_ROOT / "config" / "secrets.toml"
 _CHANGELOG = _REPO_ROOT / "CHANGELOG.md"
 _VERSION = _REPO_ROOT / "VERSION"
-_ENV_TOKEN = "GITHUB_TOKEN"
-_SECRETS_TOKEN = "github_token"
+_ENV_TOKEN = "ECHOGIST_GITHUB_TOKEN"
 
 
 class ReleaseError(Exception):
     """A human-readable, recoverable release failure."""
 
 
-def _token_from_env() -> str | None:
-    import os
-
-    value = os.environ.get(_ENV_TOKEN, "").strip()
-    return value or None
-
-
-def _token_from_secrets(path: Path = _SECRETS) -> str | None:
-    """The ``github_token`` from ``config/secrets.toml``, or None. A missing or
-    malformed file is a clean None (never a crash) — the env var is the primary path."""
-    try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
-        return None
-    token = data.get(_SECRETS_TOKEN)
-    return token.strip() if isinstance(token, str) and token.strip() else None
-
-
 def resolve_token() -> str:
-    """``GITHUB_TOKEN`` env first, then ``config/secrets.toml`` — same precedence as the
-    Anthropic key (env wins so a stray file can never shadow an explicit token)."""
-    token = _token_from_env() or _token_from_secrets()
-    if token is None:
+    """The token from the repo-specific ``ECHOGIST_GITHUB_TOKEN`` env var.
+
+    Intentionally namespaced (not generic ``GITHUB_TOKEN``) so a multi-project
+    machine never publishes with the wrong project's token."""
+    token = os.environ.get(_ENV_TOKEN, "").strip()
+    if not token:
         raise ReleaseError(
-            f"No GitHub token found. Set {_ENV_TOKEN}, or add github_token to "
-            f"{_SECRETS.relative_to(_REPO_ROOT)} (copy config/secrets.toml.example). "
+            f"No GitHub token found. Set {_ENV_TOKEN} in your shell profile "
+            f'(~/.bashrc): export {_ENV_TOKEN}="github_pat_...". '
             "The token needs 'Contents: Read and write' on this repo."
         )
     return token
