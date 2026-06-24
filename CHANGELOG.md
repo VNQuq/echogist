@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/);
 проект следует [семантическому версионированию](https://semver.org/lang/ru/).
 
-## [1.1.0] — не выпущено
+## [1.1.0] — 2026-06-25
 
 ### Добавлено
 
@@ -88,5 +88,6 @@
 - Гайд по использованию: [docs/USAGE.md](docs/USAGE.md).
 - Locked build spec: [docs/archive/ENGINEERING_PLAN.md](docs/archive/ENGINEERING_PLAN.md).
 
+[1.1.0]: https://github.com/VNQuq/echogist/releases/tag/v1.1.0
 [1.0.1]: https://github.com/VNQuq/echogist/releases/tag/v1.0.1
 [1.0.0]: https://github.com/VNQuq/echogist/releases/tag/v1.0.0

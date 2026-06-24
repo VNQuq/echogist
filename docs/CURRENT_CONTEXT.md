@@ -1,10 +1,13 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.0.1 released** — patch over v1.0.0: a %/ETA progress bar for video→MP3
-conversion, and the Explorer reveal extended to the MP3-only flow with a background no-focus-steal
-open. VERSION + CHANGELOG bumped to 1.0.1; `v1.0.1` tag pushed and the GitHub Release published
-(`scripts/release.py`). Gate green: 303 passed, 2 skipped. Pending a 4060 Windows verification of
-both fixes + the deferred cold/clean-deploy pass)
+**Updated:** 2026-06-25 (**v1.1.0 release prepped, tag held** — VERSION bumped 1.0.1→1.1.0 and
+CHANGELOG `[1.1.0]` dated 2026-06-25 with its release-link ref, both on `main`. Feature work
+(decisions + action_items; hardened system prompt: degraded-path, 3–7/2–6 list bounds, fixed
+`{unassigned}` label, `temperature=0`, TD-6 title language) is committed (`94d7e93`, `5c8fbd4`).
+**Tag `v1.1.0` and the GitHub Release are deliberately NOT cut yet** — they wait on the paid T10
+live gate (RU/EN quality + TD-6 cross-language title re-check), which is the one thing the prompt
+changes can't be verified without. Offline gate green. Also still pending: the 4060 Windows
+verification of the two 2026-06-25 console fixes + the deferred cold/clean-deploy pass)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -57,12 +60,15 @@ seams/unit tests only (WSL `os.name != nt`) — need a 4060 Windows pass.
 
 ## Next
 
-- **v1.1.0 feature on `main` (uncommitted):** summary schema gained `decisions` ({decision,
-  rationale}) and `action_items` ({task, owner, estimate}) — meeting/planning output with effort
-  estimates; rendered (PDF+MD) under localized RU/EN headings, empty for non-meeting material. Same
-  change hardened the `title` prompt (TD-6). Offline gate green (309 passed, 2 skipped); **needs the
-  paid live gate (T10) for RU/EN quality + the TD-6 cross-language title re-check.** VERSION still
-  1.0.1 — bump to 1.1.0 at release (operator, via `/ship` or `scripts/release.py`).
+- **v1.1.0 release — finish the cut.** All artifacts are prepped on `main` (VERSION 1.1.0, CHANGELOG
+  `[1.1.0] — 2026-06-25` + link ref). The feature/prompt work is committed (`94d7e93`, `5c8fbd4`):
+  summary schema gained `decisions` ({decision, rationale}) and `action_items` ({task, owner,
+  estimate}) — rendered (PDF+MD) under localized RU/EN headings, empty for non-meeting material —
+  plus the hardened system prompt (degraded-path, 3–7/2–6 list bounds, fixed `{unassigned}` label,
+  `temperature=0`, TD-6 title language). **Blocked on the paid live gate (T10) for RU/EN quality +
+  the TD-6 cross-language title re-check** — the prompt changes are not offline-verifiable. Once T10
+  passes: `git tag -a v1.1.0`, `git push origin v1.1.0`, then `python3 scripts/release.py` to publish
+  the GitHub Release.
 - **Verify the two 2026-06-25 fixes on the 4060 Windows box:** does the bar advance during a real
   video→MP3, and does Explorer pop *behind* the console for MP3-only (`output/audio`) and stay put on
   Both (`output/transcripts`)?
