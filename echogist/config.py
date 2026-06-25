@@ -84,6 +84,12 @@ class ModelTier:
     context_window: int
     price_in_per_mtok: float
     price_out_per_mtok: float
+    # Sampling temperature for the summarize call, or None to OMIT the parameter.
+    # The current Claude 4.x models deprecate `temperature` and reject the request
+    # (400) if it is sent, so a tier omits it by default. An older model that still
+    # honors sampling can set `temperature = 0` to pin the title (the filename stem)
+    # for stable re-run overwrites. Config is data: this lives in models.toml.
+    temperature: float | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +320,24 @@ def _optional_nonnegative(table: dict[str, Any], key: str, where: str, default: 
     return float(value)
 
 
+def _optional_temperature(table: dict[str, Any], where: str) -> float | None:
+    """Return ``table['temperature']`` validated as a number >= 0, or None if absent.
+
+    Optional and omittable on purpose: the current Claude 4.x models deprecate the
+    temperature parameter and reject the request (400) if it is sent, so a tier omits
+    it by default. Present-but-malformed is a loud ConfigError (a hand-edited typo is
+    caught, not silently ignored).
+    """
+    if "temperature" not in table:
+        return None
+    value = table["temperature"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{_MODELS_FILENAME}: 'temperature' in {where} must be a number.")
+    if value < 0:
+        raise ConfigError(f"{_MODELS_FILENAME}: 'temperature' in {where} must be >= 0.")
+    return float(value)
+
+
 def _parse_tier(name: str, table: Any) -> ModelTier:
     where = f"[tiers.{name}]"
     if not isinstance(table, dict):
@@ -334,6 +358,7 @@ def _parse_tier(name: str, table: Any) -> ModelTier:
         price_out_per_mtok=_as_positive_number(
             _require(table, "price_out_per_mtok", where), "price_out_per_mtok", where
         ),
+        temperature=_optional_temperature(table, where),
     )
 
 

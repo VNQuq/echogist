@@ -98,6 +98,28 @@ def test_no_tiers_errors(tmp_path: Path) -> None:
         load_model_config(_write(tmp_path / "models.toml", text))
 
 
+def test_tier_temperature_is_none_when_absent(tmp_path: Path) -> None:
+    # Current 4.x models deprecate temperature; absence -> omit the param at call time.
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.tier("economy").temperature is None
+
+
+def test_tier_temperature_is_read_when_present(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace(
+        'model_id = "claude-haiku-4-5"', 'model_id = "claude-haiku-4-5"\ntemperature = 0'
+    )
+    cfg = load_model_config(_write(tmp_path / "models.toml", text))
+    assert cfg.tier("economy").temperature == 0.0
+
+
+def test_negative_temperature_errors(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace(
+        'model_id = "claude-haiku-4-5"', 'model_id = "claude-haiku-4-5"\ntemperature = -1'
+    )
+    with pytest.raises(ConfigError, match="temperature.*must be >= 0"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
 def test_negative_price_errors(tmp_path: Path) -> None:
     text = VALID_MODELS_TOML.replace("price_in_per_mtok = 1.0", "price_in_per_mtok = -1.0")
     with pytest.raises(ConfigError, match="must be > 0"):

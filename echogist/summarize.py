@@ -359,27 +359,31 @@ def build_request(
     The config prompt's tokens are filled with ``str.replace`` (not ``.format``) so
     the operator can use literal braces in the prompt text without breaking:
     ``{language}`` -> the human language name, ``{unassigned}`` -> the fixed
-    no-owner label for that language. ``temperature=0`` pins the decoding so the
-    same transcript yields the same title (the title is the artifact filename stem
-    via :func:`naming.summary_stem`; a drifting title would dedup into ``-2``/``-3``
-    duplicates instead of overwriting on a re-run). ``tool_choice`` forces the one
-    tool, suppressing any prose preamble. ``extra_system`` is prepended to the system
-    prompt — the map step uses it to mark "this is segment N of M" (TD-5 chunking).
+    no-owner label for that language. ``temperature`` is sent ONLY when the tier
+    sets it (``tier.temperature is not None``): the current 4.x models deprecate the
+    parameter and 400 if it is present, so it is omitted by default; an older model
+    can pin ``temperature = 0`` in models.toml to keep the title (the filename stem
+    via :func:`naming.summary_stem`) stable so a re-run overwrites instead of
+    deduping into ``-2``/``-3``. ``tool_choice`` forces the one tool, suppressing any
+    prose preamble. ``extra_system`` is prepended to the system prompt — the map step
+    uses it to mark "this is segment N of M" (TD-5 chunking).
     """
     system = cfg.system_prompt.replace("{language}", _language_name(language)).replace(
         "{unassigned}", _unassigned_label(language)
     )
     if extra_system:
         system = f"{extra_system.strip()}\n\n{system}"
-    return {
+    request: dict[str, Any] = {
         "model": tier.model_id,
         "max_tokens": cfg.max_output_tokens,
-        "temperature": 0,
         "system": system,
         "messages": [{"role": "user", "content": transcript_text}],
         "tools": [_tool_schema()],
         "tool_choice": {"type": "tool", "name": _TOOL_NAME},
     }
+    if tier.temperature is not None:  # current 4.x models deprecate it -> omitted by default
+        request["temperature"] = tier.temperature
+    return request
 
 
 def _str_list(value: Any) -> tuple[str, ...]:
@@ -709,15 +713,17 @@ def build_reduce_request(
 ) -> dict[str, Any]:
     """The REDUCE/synthesis request: title+overview+core_idea over the merged points."""
     system = cfg.reduce_system_prompt.replace("{language}", _language_name(language))
-    return {
+    request: dict[str, Any] = {
         "model": tier.model_id,
         "max_tokens": cfg.max_output_tokens,
-        "temperature": 0,
         "system": system,
         "messages": [{"role": "user", "content": points_text}],
         "tools": [_reduce_tool_schema()],
         "tool_choice": {"type": "tool", "name": _SYNTHESIS_TOOL_NAME},
     }
+    if tier.temperature is not None:  # mirror build_request: omit on models that deprecate it
+        request["temperature"] = tier.temperature
+    return request
 
 
 def _norm(s: str) -> str:

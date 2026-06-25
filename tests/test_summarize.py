@@ -15,6 +15,7 @@ import ast
 import json
 import sys
 import types
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -125,12 +126,24 @@ def test_build_request_forces_the_tool_and_injects_language() -> None:
     req = summarize.build_request("hello", _tier(), _cfg(), language="ru")
     assert req["model"] == "claude-sonnet-4-6"
     assert req["max_tokens"] == 4096  # the cap, not the cost projection
-    assert req["temperature"] == 0  # FIX-3: pinned so the title (filename stem) is stable
+    assert "temperature" not in req  # tier omits it -> param absent (4.x models 400 on it)
     assert req["tool_choice"] == {"type": "tool", "name": "emit_summary"}
     assert req["tools"][0]["name"] == "emit_summary"
     assert "Russian" in req["system"]  # {language} replaced ru -> Russian
     assert "{language}" not in req["system"]
     assert req["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_build_request_includes_temperature_only_when_the_tier_sets_it() -> None:
+    # An older model that still honors sampling can pin temperature; current 4.x tiers
+    # leave it None (omitted). The same gate applies to the reduce/synthesis request.
+    pinned = replace(_tier(), temperature=0.0)
+    map_req = summarize.build_request("hi", pinned, _cfg(), language="ru")
+    reduce_req = summarize.build_reduce_request("points", pinned, _cfg(), language="ru")
+    assert map_req["temperature"] == 0.0
+    assert reduce_req["temperature"] == 0.0
+    # And omitted when the tier does not set it.
+    assert "temperature" not in summarize.build_reduce_request("p", _tier(), _cfg(), language="ru")
 
 
 def test_build_request_substitutes_unassigned_label_per_language() -> None:

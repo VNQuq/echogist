@@ -7,6 +7,12 @@
 # the Claude API reference when bumping. A deprecated/unknown model does not
 # crash the app — the summarize call surfaces it and Settings guides re-select.
 
+# Optional per-tier `temperature`: OMITTED here on purpose. The current Claude 4.x
+# models (Haiku 4.5 / Sonnet 4.6 / Opus 4.8) deprecate the temperature parameter and
+# reject the request (HTTP 400) if it is sent. Add `temperature = 0` to a tier ONLY
+# for an older model that still honors sampling and where you want a pinned title
+# (the summary filename stem) so a re-run overwrites instead of making a -2/-3 copy.
+
 [tiers.economy]
 model_id = "claude-haiku-4-5"
 context_window = 200000
