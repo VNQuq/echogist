@@ -1,9 +1,9 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.1.0 RELEASED** — VERSION 1.1.0, CHANGELOG `[1.1.0] — 2026-06-25`, tag
-`v1.1.0` pushed, GitHub Release published via `scripts/release.py`. The paid **T10 live gate passed**
-(`2 passed` — RU/EN quality + TD-6 cross-language title, real Sonnet). The two 2026-06-25 console
-fixes are **4060-Windows-verified**. Only the deferred T7 cold/clean-deploy pass remains.)
+**Updated:** 2026-06-25 (**v1.1.0 RELEASED**; **TD-5 map-reduce validated on a real paid run** — see
+"TD-5 validated" below — and the **readability follow-up is now the active work: TD-15**, phase order
+1 → 2 → 3 approved. The paid **T10 live gate passed** (`2 passed`, real Sonnet); the console fixes are
+**4060-Windows-verified**. Deferred T7 cold/clean-deploy pass remains.)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -55,12 +55,27 @@ verification (T7, operator, deferred) remains.
    `cost.py` (`estimate_cost_chunked`), `menu.py`, `config/models.toml`, `CLAUDE.md` (Single-pass
    principle superseded, operator-approved), + tests (`test_chunk.py` new, summarize/config/menu).
 
-**Calibration gap (both #2 and #3 need ONE paid run on a real lecture, killswitch blocks live test):**
-`max_output_tokens=8192` per chunk, `target_chunk_tokens=12000`, and the two QualityBudgets are
-unverified on real RU material. The first real chunked run prints the `extracted → after dedup` numbers
-and per-call token usage — read those to confirm 12k is right and dedup isn't collapsing ideas; if a
-segment trips the loud `max_tokens` guard, raise `max_output_tokens` (and switch SUMMARIZE to streaming
-above ~16k). Map-stage is still lossy *within* a chunk; the reduce is not (that is the guarantee).
+**TD-5 validated (first paid run, 2026-06-25) + calibration LOCKED.** A 179-min RU lecture
+(flagship/opus-4-8) ran clean: 7 chunks at `target_chunk_tokens=12000` / 90s overlap, no segment tripped
+the `max_tokens` guard (`max_output_tokens=8192` held), 221 takeaways extracted → 221 after dedup (no
+collapse), actual **$1.46 vs the $2.35 estimate** (high-bias estimate confirmed). 12k / 90s / 8192 are
+locked for real RU material. Two live bugs fixed in the run: `temperature` is now an optional per-tier
+`models.toml` field (the whole Claude 4.x family 400s on it — commit 1c49248); and the shared caller now
+extracts the forced tool from `tool_choice` so the REDUCE `emit_synthesis` reply isn't skipped (was a
+false "no tool call" — commit 53898f4). Map-stage is still lossy *within* a chunk; the reduce is not.
+
+**Readability follow-up (TD-15, active) — the new bottleneck.** Operator read of the run: completeness
+is met but the output is a flat wall (221 takeaways ≈ 10+ PDF pages, 5k-char single-paragraph overview,
+69 micro-sections, 63 flat themes, `Не назначено` on all 30 actions). Operator-approved direction:
+**group, keep all — NOT compress** (stays inside the CLAUDE.md completeness principle, no amendment).
+Three phases (full scope + the Phase-2 ADR in [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) TD-15):
+- **Phase 1 — quick wins, NO paid call** (re-renders the saved `raw/*.json`): drop `owner` when all
+  actions are unassigned; paragraph the overview; tighten dedup to substring/word-order near-dupes.
+- **Phase 2 — hierarchical grouping, NEEDS live calls** (ADR-trigger): `emit_grouping` reduce sub-call
+  returns headings + point **indices**; groups are **reconstructed verbatim by index**; completeness
+  invariant (every index placed once, orphans → `Прочее`, logged); additive `takeaway_groups` overlay
+  with flat-list fallback — grouping never re-summarizes. `Summary` data-model change.
+- **Phase 3 — PDF/MD format pass, NO paid call** (re-renders saved JSON): render the hierarchy, polish.
 
 ## Config / behavior notes
 
@@ -76,6 +91,9 @@ above ~16k). Map-stage is still lossy *within* a chunk; the reduce is not (that 
 
 ## Next
 
+- **TD-15 Phase 1 (next, no API spend):** render `owner`-suppression when all actions unassigned,
+  paragraphed overview, tighter near-dup dedup — then re-render the saved 221-point JSON for the operator.
+  Then Phase 2 (grouping, ADR approved, needs live calls), then Phase 3 (format pass, re-render).
 - **No release work outstanding.**
 - **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock` on a
   fresh machine + cold first run (DLL/model provisioning). The accepted run was on an already-provisioned
@@ -93,8 +111,9 @@ PROACTIVE false.
 ## Open blockers / debts
 
 - **Blockers: none.**
-- **Open debts** (all LOW, trigger-gated, nothing blocking) → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md):
-  TD-5 chunked map-reduce · TD-7 non-TTY fallback UI · TD-9 dropped cheap-call Enter beat.
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-15 readability follow-up (MEDIUM,
+  active — Phase 1 next)** · TD-5 chunked map-reduce (calibration resolved) · TD-7 non-TTY fallback UI
+  (LOW) · TD-9 dropped cheap-call Enter beat (LOW).
 - **Closed:** TD-1/2/3/4/6/8/10/11/12/13/14 (**TD-6 closed 2026-06-25** — title-language prompt fix
   confirmed by the v1.1.0 live gate).
 

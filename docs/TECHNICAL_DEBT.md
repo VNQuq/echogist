@@ -39,11 +39,16 @@ dedup`) is logged per run. Supersedes the original single-pass principle (CLAUDE
 **Still cut (intentional).** Per-chunk checkpointing — a failed chunk fails the whole run loud and
 retries from the saved transcript (artifact recovery, not a job engine — CLAUDE.md).
 
-**Still open (calibration).** `target_chunk_tokens` (12k), `max_output_tokens` (8192/chunk), and the
-two QualityBudgets are unverified on real RU material (killswitch blocks a live test). One paid run on a
-real lecture should confirm them — read the logged idea-count + per-call usage; raise `max_output_tokens`
-(and stream above ~16k) if a segment trips the loud `max_tokens` guard. Map-stage remains lossy *within*
-a chunk; the reduce is not.
+**Calibration — RESOLVED (2026-06-25, first paid run).** A 179-min RU lecture (flagship/opus-4-8) ran
+clean: 7 chunks at `target_chunk_tokens`=12k with 90s overlap, no segment tripped the `max_tokens` guard
+(8192/chunk held), 221 takeaways extracted → 221 after dedup (no collapse), actual **$1.46 vs the $2.35
+estimate** (high-bias estimate confirmed). 12k / 90s / 8192 are validated for real RU material. Two live
+bugs surfaced + fixed during the run: (a) the whole Claude 4.x family 400s on `temperature` → made it an
+optional per-tier `models.toml` field, omitted by default (commit 1c49248); (b) the shared caller
+extracted the tool block by a hardcoded `emit_summary`, so the REDUCE `emit_synthesis` reply was skipped
+and failed loud with a false "no tool call" → now matches the forced tool from `tool_choice` (commit
+53898f4). Map-stage remains lossy *within* a chunk; the reduce is not. **Output readability is now the
+binding bottleneck (221-point flat wall) → TD-15.**
 
 **Review residuals (2026-06-25 `/review`, deferred LOW).** Four findings fixed in-branch (per-chunk
 overflow guard restored on the chunked path; `_merge_sections` keyed on timecode alone; merge dedup
@@ -59,8 +64,57 @@ computed twice (menu cost preview + `summarize_auto`) from the same deterministi
 today, but a future estimator/overhead change must touch both; a shared `plan` threaded through `Deps`
 would make it one computation. (5) Exact-match dedup + the REDUCE dropping per-chunk overview/core_idea
 mean a near-duplicate overlap takeaway or a connecting idea that lived only in a chunk overview can
-survive/vanish — accepted as the conservative-over-lossy tradeoff, flagged here for honesty. Open any of
-these if the paid calibration run surfaces it.
+survive/vanish — accepted as the conservative-over-lossy tradeoff, flagged here for honesty. **(5)
+confirmed by the 2026-06-25 run — exact-match dedup let near-dup themes survive (`внутренняя свобода` ⊂
+`…независимо от обстоятельств`; `хочу / надо / могу` vs `хочу/могу/надо`); being tightened to
+substring/word-order near-dupes in TD-15 Phase 1.** Open any of the rest if a later run surfaces it.
+
+### TD-15 — Summary readability: hierarchical grouping + format pass (TD-5 follow-up)
+
+Severity: MEDIUM · Created 2026-06-25 (operator read of the first paid TD-5 run) · Trigger: **active — Phase 1 next** · SoT: this file
+
+**What.** The TD-5 map-reduce hit its completeness goal but the output is a flat wall: 221 takeaways
+(~10+ PDF pages), a 5024-char single-paragraph overview, 69 micro-sections, 63 flat themes with visible
+near-dupes, and `Не назначено` on all 30 action items (solo lecture, no owners). Operator read: "easier
+to listen to the whole thing myself." Extraction is no longer the bottleneck; **presentation is.**
+Operator-approved direction (decision brief 2026-06-25): **group, keep all — NOT compress.** Three phases:
+
+- **Phase 1 — quick wins (NO paid call; re-renders from the saved `raw/*.json`, F13).** (a) drop the
+  `owner` line in render when every action item is unassigned; (b) render the overview as real
+  paragraphs, not one slab; (c) tighten dedup to catch substring-containment + word-order near-dupes
+  (still mechanical, still never-re-summarize). Render + pure-logic only.
+- **Phase 2 — hierarchical grouping (NEEDS live calls; ADR below).** Nest every extracted point under
+  ~10–15 headings; consolidate the 69 micro-sections into ~10–15 time-ordered macro-sections; cluster the
+  63 themes. `Summary` gains additive `takeaway_groups` / `theme_groups`. ADR-trigger (data-model + new
+  LLM prompt).
+- **Phase 3 — PDF/MD format pass (NO paid call; re-renders from saved JSON).** Render the new hierarchy
+  cleanly, typographic polish, the paragraphed overview, de-noised action items. Operator-mandated.
+
+**ADR — Phase 2 grouping (approved 2026-06-25, index-assignment).** Grouping must **assign** points,
+never **rewrite** them — else it silently re-summarizes and breaks the TD-5 completeness guarantee.
+Decision:
+- A new forced-tool reduce sub-call (`emit_grouping`) receives the **numbered** flat point list and
+  returns only **headings + the indices** of the points under each — never the point text.
+- Each group is **reconstructed verbatim by index** from the original flat list. The model's text is used
+  for headings only; points are never taken from the model's output.
+- **Completeness invariant** (mechanical, logged like `extracted → after dedup`): every index `1..N`
+  appears under exactly one heading. Any unplaced index → a **`Прочее`** catch-all (fail-soft, logged —
+  a forgotten point is never lost and a paid run is never nuked). Log line, e.g.
+  `Grouped 221 points into 13 sections (0 orphaned)`.
+- **Additive overlay with flat-list fallback.** The flat, verified `key_takeaways` tuple stays the
+  canonical complete list (the completeness guarantee is unchanged); `takeaway_groups` is a presentation
+  layer alongside it. Render prefers the groups; if grouping returns empty/garbage, render falls back to
+  the flat list. Grouping structurally cannot endanger completeness.
+- Cost: adds 1–2 small reduce calls (index-list output is tiny); the "N+1 cloud calls" UX copy updates.
+
+**Why deferred / sequenced.** Phase 1 + 3 ship readability wins with zero extra API spend (re-render the
+existing 221-point JSON). Phase 2 is the ADR-trigger (`Summary` change ripples into `save_raw_result`
+JSON, render T7, and the test suite) and the only phase needing live calls — gated on this ADR per
+CLAUDE.md ("do not skip review gates for LLM prompts"). Phase order **1 → 2 → 3 approved**.
+
+**When to open / close.** Active now. Close when all three phases land and a re-render (Phase 1+3) plus
+one paid grouped run (Phase 2) are operator-accepted. Stays inside the CLAUDE.md completeness principle —
+no amendment needed (group-keep-all, never re-summarize).
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
