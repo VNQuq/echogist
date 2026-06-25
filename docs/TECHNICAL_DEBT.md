@@ -98,9 +98,11 @@ Decision:
 - Each group is **reconstructed verbatim by index** from the original flat list. The model's text is used
   for headings only; points are never taken from the model's output.
 - **Completeness invariant** (mechanical, logged like `extracted → after dedup`): every index `1..N`
-  appears under exactly one heading. Any unplaced index → a **`Прочее`** catch-all (fail-soft, logged —
-  a forgotten point is never lost and a paid run is never nuked). Log line, e.g.
-  `Grouped 221 points into 13 sections (0 orphaned)`.
+  appears under exactly one heading. Any unplaced index → a **language-aware catch-all heading**
+  (e.g. `Other` / `Прочее`), substituted at call time like the existing `{unassigned}` token (`Не
+  назначено` / `Unassigned`) — NOT a hardcoded literal, since the heading prints in the summary's target
+  language. Fail-soft, logged — a forgotten point is never lost and a paid run is never nuked. Log line,
+  e.g. `Grouped 221 points into 13 sections (0 orphaned)`.
 - **Additive overlay with flat-list fallback.** The flat, verified `key_takeaways` tuple stays the
   canonical complete list (the completeness guarantee is unchanged); `takeaway_groups` is a presentation
   layer alongside it. Render prefers the groups; if grouping returns empty/garbage, render falls back to

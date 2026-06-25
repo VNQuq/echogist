@@ -73,7 +73,8 @@ Three phases (full scope + the Phase-2 ADR in [TECHNICAL_DEBT.md](./TECHNICAL_DE
   actions are unassigned; paragraph the overview; tighten dedup to substring/word-order near-dupes.
 - **Phase 2 — hierarchical grouping, NEEDS live calls** (ADR-trigger): `emit_grouping` reduce sub-call
   returns headings + point **indices**; groups are **reconstructed verbatim by index**; completeness
-  invariant (every index placed once, orphans → `Прочее`, logged); additive `takeaway_groups` overlay
+  invariant (every index placed once, orphans → a language-aware catch-all heading like `{unassigned}`,
+  logged); additive `takeaway_groups` overlay
   with flat-list fallback — grouping never re-summarizes. `Summary` data-model change.
 - **Phase 3 — PDF/MD format pass, NO paid call** (re-renders saved JSON): render the hierarchy, polish.
 
