@@ -93,6 +93,14 @@ on action_items are the one allowed exception — those are your planning judgme
 Write naturally in {language}, not a word-for-word translation.
 """
 
+[transcript]
+# Timecode granularity of the saved transcript (and the text the summarizer reads).
+# Whisper emits a segment per VAD pause (~2-10s); echogist groups them into blocks of
+# ~this many seconds so one [HH:MM:SS] marks a readable chunk instead of every breath.
+# The block's timecode is its first segment's real start, so section_timecodes stay
+# citeable. Lower = finer/more anchors; higher = coarser. Optional (default 60).
+block_seconds = 60
+
 [model_asset]
 # Whisper model distribution (TD-1). Provisioning fetches the CT2 large-v3 weights
 # from Hugging Face (float16 on disk); T3 loads them with compute_type=int8_float16

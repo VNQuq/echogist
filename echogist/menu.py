@@ -228,11 +228,17 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
     if transcript.duration <= 0 and transcript.segments:  # T8: no-ETA readout
         ui.info(f"{len(transcript.segments)} segments transcribed (duration unknown).")
     tpath = transcribe.save_transcript(
-        transcript, deps.base / "output" / "transcripts", source.stem
+        transcript,
+        deps.base / "output" / "transcripts",
+        source.stem,
+        block_seconds=model_config.transcript.block_seconds,
     )
     ui.info(f"Saved transcript: {tpath}")
     ui.reveal_dir(tpath.parent)  # TD-14: pop the transcript folder (Windows, once/launch)
-    return transcript.text
+    # Summarize the saved checkpoint VERBATIM (not transcript.text) so the fresh-run
+    # and recovery (re-summarize saved .txt) paths feed byte-identical, timecoded text
+    # to GUARD + SUMMARIZE — the model can cite real section_timecodes on both.
+    return tpath.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #

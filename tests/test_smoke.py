@@ -113,6 +113,7 @@ def _model_config(local_dir: str) -> object:
         guard=config.GuardConfig(safe_budget_fraction=0.8, output_tokens_estimate=2000),
         summarize=config.SummarizeConfig(system_prompt="p {language}", max_output_tokens=4000),
         asset=config.ModelAsset(name="m", hf_repo="r", local_dir=local_dir),
+        transcript=config.TranscriptConfig(block_seconds=60.0),
     )
 
 

@@ -59,24 +59,67 @@ def test_transcript_text_empty() -> None:
 # --------------------------------------------------------------------------- #
 # render_transcript
 # --------------------------------------------------------------------------- #
-def test_render_transcript_timecoded_lines() -> None:
+def render_lines(t: Transcript, block_seconds: float = 60.0) -> list[str]:
+    rendered = transcribe.render_transcript(t, block_seconds)
+    return rendered.split("\n") if rendered else []
+
+
+def test_render_transcript_groups_within_window() -> None:
+    # Two segments < block_seconds apart collapse into one block; the block's
+    # timecode is the FIRST segment's start, the text is space-joined.
     t = _transcript(
         Segment(0.0, 2.5, "First line"),
         Segment(2.5, 65.0, "Second line"),
     )
-    assert render_lines(t) == [
+    assert render_lines(t, 60.0) == ["[00:00:00] First line Second line"]
+
+
+def test_render_transcript_opens_new_block_past_window() -> None:
+    # A segment starting >= block_seconds after the block start opens a new block.
+    t = _transcript(
+        Segment(0.0, 30.0, "alpha"),
+        Segment(45.0, 50.0, "beta"),  # 45 < 60 from block start (0) -> same block
+        Segment(70.0, 75.0, "gamma"),  # 70 >= 60 -> new block, timecode = 70
+    )
+    assert render_lines(t, 60.0) == [
+        "[00:00:00] alpha beta",
+        "[00:01:10] gamma",
+    ]
+
+
+def test_render_transcript_block_start_is_first_segment_start() -> None:
+    # The block timecode anchors to the first member's start (here 12s, not 0); the
+    # next segment starts 600s after -> new block at its own start.
+    t = _transcript(
+        Segment(12.0, 14.0, "one"),
+        Segment(612.0, 615.0, "two"),  # 612 - 12 = 600 >= 60 -> new block at 612
+    )
+    assert render_lines(t, 60.0) == [
+        "[00:00:12] one",
+        "[00:10:12] two",
+    ]
+
+
+def test_render_transcript_single_segment() -> None:
+    t = _transcript(Segment(5.0, 9.0, "solo"))
+    assert render_lines(t, 60.0) == ["[00:00:05] solo"]
+
+
+def test_render_transcript_zero_block_seconds_is_per_segment() -> None:
+    # Degrade path: block_seconds <= 0 keeps the legacy one-line-per-segment render.
+    t = _transcript(
+        Segment(0.0, 2.5, "First line"),
+        Segment(2.5, 65.0, "Second line"),
+    )
+    assert render_lines(t, 0.0) == [
         "[00:00:00] First line",
         "[00:00:02] Second line",
     ]
 
 
-def render_lines(t: Transcript) -> list[str]:
-    rendered = transcribe.render_transcript(t)
-    return rendered.split("\n") if rendered else []
-
-
 def test_render_transcript_empty() -> None:
     assert transcribe.render_transcript(_transcript()) == ""
+    assert transcribe.render_transcript(_transcript(), 0.0) == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +130,15 @@ def test_save_transcript_writes_dated_file(tmp_path: Path) -> None:
     path = transcribe.save_transcript(t, tmp_path, "lecture", today=date(2026, 6, 15))
     assert path == tmp_path / "2026-06-15-lecture.txt"
     assert path.read_text(encoding="utf-8") == "[00:00:00] Привет мир\n"
+
+
+def test_save_transcript_groups_by_block_seconds(tmp_path: Path) -> None:
+    # block_seconds threads through to render: two close segments share one block.
+    t = _transcript(Segment(0.0, 2.0, "a"), Segment(3.0, 5.0, "b"))
+    path = transcribe.save_transcript(
+        t, tmp_path, "talk", block_seconds=60.0, today=date(2026, 6, 15)
+    )
+    assert path.read_text(encoding="utf-8") == "[00:00:00] a b\n"
 
 
 def test_save_transcript_creates_out_dir(tmp_path: Path) -> None:

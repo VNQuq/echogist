@@ -138,6 +138,32 @@ def test_shipped_summarize_config_loads() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Model config — [transcript] block_seconds (optional, defaults to 60)
+# --------------------------------------------------------------------------- #
+def test_shipped_transcript_block_seconds_loads() -> None:
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.transcript.block_seconds == 60.0
+
+
+def test_missing_transcript_table_defaults(tmp_path: Path) -> None:
+    # VALID_MODELS_TOML has no [transcript] table -> falls back to the default.
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.transcript.block_seconds == 60.0
+
+
+def test_transcript_block_seconds_parsed(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML + "\n[transcript]\nblock_seconds = 90\n"
+    cfg = load_model_config(_write(tmp_path / "models.toml", text))
+    assert cfg.transcript.block_seconds == 90.0
+
+
+def test_transcript_block_seconds_non_positive_errors(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML + "\n[transcript]\nblock_seconds = 0\n"
+    with pytest.raises(ConfigError, match="must be > 0"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
+# --------------------------------------------------------------------------- #
 # Settings — defaults, round-trip, validation
 # --------------------------------------------------------------------------- #
 def test_missing_settings_returns_defaults(tmp_path: Path) -> None:

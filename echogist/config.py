@@ -36,6 +36,10 @@ _LAST_DIR_KEY = "last_input_dir"
 _SECRETS_FILENAME = "secrets.toml"
 _SECRETS_API_KEY = "anthropic_api_key"
 
+# Fallback timecode granularity when models.toml omits [transcript] block_seconds.
+# Kept in sync with echogist.transcribe._DEFAULT_BLOCK_SECONDS (the pure-stage default).
+_DEFAULT_BLOCK_SECONDS = 60.0
+
 
 class ConfigError(Exception):
     """A recoverable, human-readable config problem. Print it, return to menu."""
@@ -90,6 +94,20 @@ class SummarizeConfig:
 
 
 @dataclass(frozen=True)
+class TranscriptConfig:
+    """Transcript rendering tunables (DATA, not code).
+
+    ``block_seconds`` is the timecode granularity: Whisper segments are coalesced
+    into ~this-many-second blocks so the saved transcript stays readable and carries
+    a tractable number of real, citeable timecodes (see
+    :func:`echogist.transcribe.render_transcript`). Optional in ``models.toml`` — a
+    missing ``[transcript]`` table falls back to the shipped default.
+    """
+
+    block_seconds: float
+
+
+@dataclass(frozen=True)
 class ModelAsset:
     """Whisper model distribution (TD-1). Fetched from Hugging Face by repo id; a
     pre-placed ``local_dir`` is the offline escape hatch."""
@@ -107,6 +125,7 @@ class ModelConfig:
     guard: GuardConfig
     summarize: SummarizeConfig
     asset: ModelAsset
+    transcript: TranscriptConfig
 
     def tier(self, name: str) -> ModelTier:
         """Resolve a tier by name. Unknown/deprecated -> guided ConfigError (F5)."""
@@ -294,7 +313,26 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         local_dir=str(_require(asset_table, "local_dir", "[model_asset]")),
     )
 
-    return ModelConfig(tiers=tiers, guard=guard, summarize=summarize, asset=asset)
+    # [transcript] is OPTIONAL: a missing table (or missing key) falls back to the
+    # default so an existing models.toml keeps loading. A present-but-invalid value
+    # still fails loud (F5).
+    transcript_table = raw.get("transcript")
+    if transcript_table is None:
+        transcript = TranscriptConfig(block_seconds=_DEFAULT_BLOCK_SECONDS)
+    elif not isinstance(transcript_table, dict):
+        raise ConfigError(f"{_MODELS_FILENAME}: [transcript] must be a table.")
+    elif "block_seconds" not in transcript_table:
+        transcript = TranscriptConfig(block_seconds=_DEFAULT_BLOCK_SECONDS)
+    else:
+        transcript = TranscriptConfig(
+            block_seconds=_as_positive_number(
+                transcript_table["block_seconds"], "block_seconds", "[transcript]"
+            )
+        )
+
+    return ModelConfig(
+        tiers=tiers, guard=guard, summarize=summarize, asset=asset, transcript=transcript
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -27,7 +27,13 @@ verification (T7, operator, deferred) remains.
   (degraded-path, 3–7/2–6 list bounds, fixed `{unassigned}` label, `temperature=0`, TD-6 title language).
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **311 passed, 2 skipped** (the 2 live tests).
+`main` passes ruff + mypy --strict + tests. Current: **320 passed, 2 skipped** (the 2 live tests).
+
+**Unreleased (CHANGELOG `[Unreleased]`):** transcript timecodes coarsened — Whisper segments grouped
+into ~60s blocks (`[transcript] block_seconds` in models.toml), one `[HH:MM:SS]` per readable
+paragraph instead of per VAD segment (−95% timecode lines on a real lecture). Same fix aligns both
+SUMMARIZE paths: the fresh run now summarizes the saved checkpoint verbatim (was timecode-free
+`transcript.text`), so `section_timecodes` are citeable on fresh runs too, not just on re-summarize.
 
 ## Config / behavior notes
 

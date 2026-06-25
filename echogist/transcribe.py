@@ -30,6 +30,14 @@ from . import gpu, naming
 
 Logger = Callable[[str], object]
 
+# Default render granularity (plan §3 / TD: timecode density). One [HH:MM:SS] per
+# ~this many seconds of audio instead of one per Whisper segment. faster-whisper
+# emits a segment per VAD pause (~2-10s), which is far finer than a human reader or
+# the summarizer needs; grouping into coarser blocks keeps real, citeable anchors
+# while cutting ~85-90% of the timecode lines. Overridable via [transcript]
+# block_seconds in models.toml (config is data, CLAUDE.md).
+_DEFAULT_BLOCK_SECONDS = 60.0
+
 # Progress reporter (v1.1 plan §5). Additive, killswitch-safe — the ONE pipeline-stage
 # signature this overhaul touches. The value is a 0.0..1.0 completion *fraction* when the
 # audio duration is known (drives the %/ETA bar); when the duration is unknown it is a
@@ -83,13 +91,47 @@ def format_timecode(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def render_transcript(transcript: Transcript) -> str:
-    """Render as ``[HH:MM:SS] text`` lines (one per segment), newline-joined.
+def _group_segments(
+    segments: tuple[Segment, ...], block_seconds: float
+) -> tuple[tuple[float, str], ...]:
+    """Coalesce fine Whisper ``segments`` into coarser ``(start, text)`` blocks.
 
-    This is the on-disk checkpoint format and the text the summarizer reads, so the
-    timecodes it can quote are real (plan §3 — suppresses hallucinated timecodes).
+    A new block opens once a segment starts ``block_seconds`` or more after the
+    current block's first segment; the block's timecode is that first ``start`` (so
+    it is always a real, citeable point) and its text is the member segment texts
+    space-joined. ``block_seconds <= 0`` degrades to the legacy one-block-per-segment
+    behavior (no grouping). Empty input → ``()``. Pure + O(n) in one pass, so the
+    boundary math and the degrade branch are unit-testable without a GPU.
     """
-    return "\n".join(f"[{format_timecode(seg.start)}] {seg.text}" for seg in transcript.segments)
+    if not segments:
+        return ()
+    if block_seconds <= 0:
+        return tuple((seg.start, seg.text) for seg in segments)
+    blocks: list[tuple[float, str]] = []
+    block_start = segments[0].start
+    buffer: list[str] = [segments[0].text]
+    for seg in segments[1:]:
+        if seg.start - block_start >= block_seconds:
+            blocks.append((block_start, " ".join(buffer)))
+            block_start = seg.start
+            buffer = [seg.text]
+        else:
+            buffer.append(seg.text)
+    blocks.append((block_start, " ".join(buffer)))
+    return tuple(blocks)
+
+
+def render_transcript(transcript: Transcript, block_seconds: float = _DEFAULT_BLOCK_SECONDS) -> str:
+    """Render as ``[HH:MM:SS] text`` lines (one per *block*), newline-joined.
+
+    Segments are grouped into ~``block_seconds`` blocks (see :func:`_group_segments`)
+    so the saved transcript is human-readable and carries a tractable number of real
+    timecodes. This is the on-disk checkpoint format and the exact text the summarizer
+    reads, so every timecode it can quote actually appears (plan §3 — suppresses
+    hallucinated timecodes).
+    """
+    blocks = _group_segments(transcript.segments, block_seconds)
+    return "\n".join(f"[{format_timecode(start)}] {text}" for start, text in blocks)
 
 
 def save_transcript(
@@ -97,19 +139,21 @@ def save_transcript(
     out_dir: Path,
     source_stem: str,
     *,
+    block_seconds: float = _DEFAULT_BLOCK_SECONDS,
     today: date | None = None,
 ) -> Path:
     """Write the rendered transcript to ``out_dir/<date>-<stem>.txt`` (deduped).
 
     The saved file is the recovery checkpoint: option 2 of the menu re-summarizes
-    it without re-transcribing. Returns the path written. Naming (illegal-char
-    strip + ``-2``/``-3`` dedup, F9) is the shared :mod:`echogist.naming` rule.
+    it without re-transcribing. ``block_seconds`` sets the timecode granularity (see
+    :func:`render_transcript`). Returns the path written. Naming (illegal-char strip +
+    ``-2``/``-3`` dedup, F9) is the shared :mod:`echogist.naming` rule.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = naming.dated_artifact_path(
         out_dir, source_stem, ".txt", fallback="transcript", today=today
     )
-    path.write_text(render_transcript(transcript) + "\n", encoding="utf-8")
+    path.write_text(render_transcript(transcript, block_seconds) + "\n", encoding="utf-8")
     return path
 
 
