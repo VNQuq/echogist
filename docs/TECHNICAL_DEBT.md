@@ -71,7 +71,7 @@ substring/word-order near-dupes in TD-15 Phase 1.** Open any of the rest if a la
 
 ### TD-15 — Summary readability: hierarchical grouping + format pass (TD-5 follow-up)
 
-Severity: MEDIUM · Created 2026-06-25 (operator read of the first paid TD-5 run) · Trigger: **active — Phase 1 next** · SoT: this file
+Severity: MEDIUM · Created 2026-06-25 (operator read of the first paid TD-5 run) · Trigger: **active — Phase 1 done, Phase 2 code done (paid validation next), Phase 3 after** · SoT: this file
 
 **What.** The TD-5 map-reduce hit its completeness goal but the output is a flat wall: 221 takeaways
 (~10+ PDF pages), a 5024-char single-paragraph overview, 69 micro-sections, 63 flat themes with visible
@@ -113,6 +113,23 @@ Decision:
 existing 221-point JSON). Phase 2 is the ADR-trigger (`Summary` change ripples into `save_raw_result`
 JSON, render T7, and the test suite) and the only phase needing live calls — gated on this ADR per
 CLAUDE.md ("do not skip review gates for LLM prompts"). Phase order **1 → 2 → 3 approved**.
+
+**Progress.**
+- **Phase 1 SHIPPED (`d13a373`).** Paragraphed overview (the 5031-char slab -> 8 paragraphs),
+  tightened `_dedup_strs` (word-order + ≥2-token containment near-dupes; themes 63→59, takeaways
+  221→221 on the validation artifact), and owner suppression. **Refinement vs the ADR (operator
+  decision 2026-06-26):** the ADR said "drop owner when EVERY item is unassigned"; the artifact was
+  mixed (24 `Не назначено` + 6 real names), so suppression is now **per-item** — a placeholder owner
+  is dropped on its own row, a named owner is always kept. Strictly better for mixed lists; same spirit.
+- **Phase 2 CODE DONE (`53b8bbb`), paid validation pending.** `emit_grouping` reduce sub-call +
+  `_assign_by_index` (verbatim reconstruction + completeness invariant + `Прочее`/`Other` catch-all) +
+  additive `PointGroup`/`SectionGroup` overlay on `Summary` + grouped MD/PDF render with flat fallback.
+  Built standalone (`summarize.group_summary`, works on a fresh OR reloaded Summary) and **NOT yet wired
+  into `summarize_auto`** — validation-first. Verified offline on the real 221-point artifact (221→221,
+  63→63, 69→69 verbatim). **Validate cheaply with `python scripts/regroup.py "<raw/*.json>"`** — one
+  small call (~pennies), no re-pay of the $1.5 map-reduce. Wire into the pipeline + update the N+1-call
+  cost copy AFTER the prompt is tuned on a real run.
+- **Phase 3 (next, no API spend):** format pass on the new hierarchy (re-render saved JSON).
 
 **When to open / close.** Active now. Close when all three phases land and a re-render (Phase 1+3) plus
 one paid grouped run (Phase 2) are operator-accepted. Stays inside the CLAUDE.md completeness principle —

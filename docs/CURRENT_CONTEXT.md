@@ -92,9 +92,15 @@ Three phases (full scope + the Phase-2 ADR in [TECHNICAL_DEBT.md](./TECHNICAL_DE
 
 ## Next
 
-- **TD-15 Phase 1 (next, no API spend):** render `owner`-suppression when all actions unassigned,
-  paragraphed overview, tighter near-dup dedup — then re-render the saved 221-point JSON for the operator.
-  Then Phase 2 (grouping, ADR approved, needs live calls), then Phase 3 (format pass, re-render).
+- **TD-15 Phase 1 SHIPPED (`d13a373`)** — paragraphed overview, tightened dedup (themes 63→59), and
+  **per-item** owner suppression (operator refinement 2026-06-26: drop a placeholder owner per row, keep
+  real names — the validation lecture was mixed, 24 placeholders + 6 names, not all-unassigned).
+- **TD-15 Phase 2 CODE DONE (`53b8bbb`), paid validation next** — `emit_grouping` index-assignment +
+  completeness invariant + `Прочее`/`Other` catch-all + additive `PointGroup`/`SectionGroup` overlay +
+  grouped render with flat fallback. Verified offline on the real 221-point artifact. NOT wired into
+  `summarize_auto` yet (validation-first). **Validate:** `python scripts/regroup.py "<raw/*.json>"` (one
+  small call, ~pennies, no $1.5 re-pay). Wire in + update N+1-call cost copy after the prompt is tuned.
+- **TD-15 Phase 3 (after, no API spend):** PDF/MD format pass on the new hierarchy (re-render saved JSON).
 - **No release work outstanding.**
 - **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock` on a
   fresh machine + cold first run (DLL/model provisioning). The accepted run was on an already-provisioned
@@ -113,8 +119,9 @@ PROACTIVE false.
 
 - **Blockers: none.**
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-15 readability follow-up (MEDIUM,
-  active — Phase 1 next)** · TD-5 chunked map-reduce (calibration resolved) · TD-7 non-TTY fallback UI
-  (LOW) · TD-9 dropped cheap-call Enter beat (LOW).
+  active — Phase 1 shipped, Phase 2 code done + paid validation next, Phase 3 after)** · TD-5 chunked
+  map-reduce (calibration resolved) · TD-7 non-TTY fallback UI (LOW) · TD-9 dropped cheap-call Enter
+  beat (LOW).
 - **Closed:** TD-1/2/3/4/6/8/10/11/12/13/14 (**TD-6 closed 2026-06-25** — title-language prompt fix
   confirmed by the v1.1.0 live gate).
 
