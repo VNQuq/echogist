@@ -1,13 +1,12 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.1.0 release prepped, tag held** — VERSION bumped 1.0.1→1.1.0 and
-CHANGELOG `[1.1.0]` dated 2026-06-25 with its release-link ref, both on `main`. Feature work
-(decisions + action_items; hardened system prompt: degraded-path, 3–7/2–6 list bounds, fixed
-`{unassigned}` label, `temperature=0`, TD-6 title language) is committed (`94d7e93`, `5c8fbd4`).
-**Tag `v1.1.0` and the GitHub Release are deliberately NOT cut yet** — they wait on the paid T10
-live gate (RU/EN quality + TD-6 cross-language title re-check), which is the one thing the prompt
-changes can't be verified without. Offline gate green. Also still pending: the 4060 Windows
-verification of the two 2026-06-25 console fixes + the deferred cold/clean-deploy pass)
+**Updated:** 2026-06-25 (**v1.1.0 RELEASED** — VERSION 1.1.0, CHANGELOG `[1.1.0] — 2026-06-25`, tag
+`v1.1.0` pushed, GitHub Release published via `scripts/release.py`. The paid **T10 live gate passed**
+(`2 passed` — RU/EN quality + TD-6 cross-language title confirmed against real Sonnet). Ships:
+decisions + action_items in the summary, and the hardened system prompt (degraded-path, 3–7/2–6 list
+bounds, fixed `{unassigned}` label, `temperature=0`, TD-6 title language). Still pending — NOT
+release-blocking: the 4060 Windows verification of the two 2026-06-25 console fixes + the deferred
+cold/clean-deploy pass)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
@@ -60,15 +59,8 @@ seams/unit tests only (WSL `os.name != nt`) — need a 4060 Windows pass.
 
 ## Next
 
-- **v1.1.0 release — finish the cut.** All artifacts are prepped on `main` (VERSION 1.1.0, CHANGELOG
-  `[1.1.0] — 2026-06-25` + link ref). The feature/prompt work is committed (`94d7e93`, `5c8fbd4`):
-  summary schema gained `decisions` ({decision, rationale}) and `action_items` ({task, owner,
-  estimate}) — rendered (PDF+MD) under localized RU/EN headings, empty for non-meeting material —
-  plus the hardened system prompt (degraded-path, 3–7/2–6 list bounds, fixed `{unassigned}` label,
-  `temperature=0`, TD-6 title language). **Blocked on the paid live gate (T10) for RU/EN quality +
-  the TD-6 cross-language title re-check** — the prompt changes are not offline-verifiable. Once T10
-  passes: `git tag -a v1.1.0`, `git push origin v1.1.0`, then `python3 scripts/release.py` to publish
-  the GitHub Release.
+- **v1.1.0 shipped — TD-6 closes.** The cross-language title fix passed the live gate, so TD-6 is
+  done (drop it from Open debts at next cleanup). No release work outstanding.
 - **Verify the two 2026-06-25 fixes on the 4060 Windows box:** does the bar advance during a real
   video→MP3, and does Explorer pop *behind* the console for MP3-only (`output/audio`) and stay put on
   Both (`output/transcripts`)?
