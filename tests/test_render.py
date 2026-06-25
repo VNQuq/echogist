@@ -11,6 +11,7 @@ missing-font / bad-format failure paths.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,61 @@ def test_markdown_action_item_omits_empty_owner_and_estimate(tmp_path: Path) -> 
     )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
     assert "- Lone task\n" in text  # no trailing " — " when owner+estimate empty
+
+
+def test_markdown_drops_owner_when_all_action_items_unassigned(tmp_path: Path) -> None:
+    # Solo lecture: every owner is the per-language placeholder -> the column is noise.
+    s = Summary(
+        title="Лекция",
+        overview="о",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        decisions=(),
+        action_items=(
+            ActionItem("Перечитать главу", "Не назначено", "1 ч"),
+            ActionItem("Сделать заметки", "Не назначено", ""),
+        ),
+        language="ru",
+    )
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    assert "Не назначено" not in text  # placeholder owner suppressed
+    assert "- Перечитать главу — оценка: 1 ч" in text  # estimate still shown
+    assert "- Сделать заметки\n" in text  # no owner, no estimate -> bare task
+
+
+def test_markdown_suppresses_placeholder_owner_per_item_keeping_real_names(tmp_path: Path) -> None:
+    # Mixed list: the real name is kept; the placeholder row sheds 'Не назначено'.
+    s = Summary(
+        title="Планёрка",
+        overview="о",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        decisions=(),
+        action_items=(
+            ActionItem("Задача А", "Анна", ""),
+            ActionItem("Задача Б", "Не назначено", ""),
+        ),
+        language="ru",
+    )
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    assert "- Задача А — Анна" in text  # real owner kept
+    assert "Не назначено" not in text  # placeholder dropped per item
+    assert "- Задача Б\n" in text  # placeholder row -> bare task
+
+
+def test_markdown_paragraphs_a_long_single_blob_overview(tmp_path: Path) -> None:
+    blob = "Первое предложение. Второе предложение! Третье предложение? Четвёртое."
+    s = replace(_summary(), overview=blob)
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    # >3 sentences -> split into >=2 paragraphs separated by a blank line; no text lost.
+    body = text.split("## Overview\n\n", 1)[1].split("\n##", 1)[0]
+    paras = [p for p in body.split("\n\n") if p.strip()]
+    assert len(paras) >= 2
+    assert "Первое предложение." in text and "Четвёртое." in text
 
 
 def test_markdown_skips_empty_sections(tmp_path: Path) -> None:

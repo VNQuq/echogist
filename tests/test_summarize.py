@@ -668,6 +668,31 @@ def test_dedup_keeps_distinct_drops_normalized_duplicates() -> None:
     assert summarize._dedup_strs(["A point.", "a  POINT.", "Other"]) == ("A point.", "Other")
 
 
+def test_dedup_collapses_word_order_and_separator_dupes() -> None:
+    # Same words, reordered and re-separated — the slash-list near-dup that survived
+    # the first paid run (TD-15). First copy kept verbatim.
+    out = summarize._dedup_strs(["хочу / надо / могу", "хочу/могу/надо"])
+    assert out == ("хочу / надо / могу",)
+
+
+def test_dedup_keeps_fuller_point_over_contained_restatement() -> None:
+    # The contained restatement is dropped; the fuller point wins and holds position.
+    points = ["внутренняя свобода", "внутренняя свобода независимо от обстоятельств", "страх"]
+    assert summarize._dedup_strs(points) == (
+        "внутренняя свобода независимо от обстоятельств",
+        "страх",
+    )
+
+
+def test_dedup_containment_floored_at_two_tokens() -> None:
+    # A distinct single-word theme is NOT swallowed just because its word appears in a
+    # longer phrase (conservative floor — only >=2-token runs count as containment).
+    assert summarize._dedup_strs(["свобода", "внутренняя свобода зрелости"]) == (
+        "свобода",
+        "внутренняя свобода зрелости",
+    )
+
+
 def test_merge_sections_unions_bullets_and_sorts_by_timecode() -> None:
     a = SectionMarker("[00:10:00]", "Costs", ("cheaper",))
     b = SectionMarker("[00:00:00]", "Intro", ("hi",))

@@ -33,12 +33,13 @@ so it is the always-available fallback.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from . import naming
-from .summarize import ActionItem, Decision, SectionMarker, Summary
+from .summarize import ActionItem, Decision, SectionMarker, Summary, _unassigned_label
 
 Logger = Callable[[str], object]
 
@@ -213,14 +214,60 @@ def _decision_text(item: Decision) -> str:
     return f"{item.decision} — {item.rationale}" if item.rationale else item.decision
 
 
-def _action_text(item: ActionItem, lab: dict[str, str]) -> str:
-    """An action item as one line: the task, then owner / labelled estimate when present."""
+def _action_text(item: ActionItem, lab: dict[str, str], *, unassigned: str = "") -> str:
+    """An action item as one line: the task, then owner / labelled estimate when present.
+
+    ``unassigned`` is the per-language 'no owner' placeholder (``Не назначено``); an
+    owner equal to it — or blank — is dropped per item (TD-15 Phase 1). On a solo
+    lecture the placeholder is identical noise on every row; on a mixed list (some real
+    owners, many placeholders) the named rows keep their names and only the placeholder
+    rows shed it. A real owner is never hidden.
+    """
     bits: list[str] = []
-    if item.owner:
+    if item.owner and item.owner != unassigned:
         bits.append(item.owner)
     if item.estimate:
         bits.append(f"{lab['estimate']}: {item.estimate}")
     return f"{item.task} — {', '.join(bits)}" if bits else item.task
+
+
+# --------------------------------------------------------------------------- #
+# Paragraphing — break a long single-blob field into readable paragraphs
+# --------------------------------------------------------------------------- #
+# Sentences per paragraph when the model emits the overview as one unbroken slab
+# (a 5k-char wall on a long lecture). Small, so the rendered overview breathes.
+_SENTENCES_PER_PARAGRAPH = 3
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split on sentence-ending punctuation followed by whitespace, keeping the
+    punctuation. Heuristic (no abbreviation handling) and language-agnostic — works
+    for RU and EN alike; a missed split just yields a longer paragraph, never lost
+    text."""
+    parts = re.split(r"(?<=[.!?…])\s+", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _paragraphs(text: str) -> list[str]:
+    """Reflow a long single-blob field (the overview) into readable paragraphs.
+
+    Respects blank-line breaks if the text already has them; otherwise groups
+    sentences a few at a time. Pure text reflow — no word is added or dropped, so the
+    completeness guarantee is untouched (TD-15 Phase 1).
+    """
+    text = text.strip()
+    if not text:
+        return []
+    explicit = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(explicit) > 1:  # the model/operator already paragraphed it — respect that
+        return explicit
+    sentences = _split_sentences(text)
+    if len(sentences) <= _SENTENCES_PER_PARAGRAPH:
+        return [text]
+    return [
+        " ".join(sentences[i : i + _SENTENCES_PER_PARAGRAPH])
+        for i in range(0, len(sentences), _SENTENCES_PER_PARAGRAPH)
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -231,7 +278,9 @@ def _markdown(summary: Summary) -> str:
     lab = _labels(summary.language)
     out: list[str] = [f"# {summary.title or _FALLBACK_TITLE}".rstrip(), ""]
     if summary.overview:
-        out += [f"## {lab['overview']}", "", summary.overview, ""]
+        out += [f"## {lab['overview']}", ""]
+        for para in _paragraphs(summary.overview):
+            out += [para, ""]  # blank line between paragraphs => separate <p> in MD
     if summary.key_takeaways:
         out += [f"## {lab['key_takeaways']}", "", *(f"- {t}" for t in summary.key_takeaways), ""]
     if summary.decisions:
@@ -239,8 +288,9 @@ def _markdown(summary: Summary) -> str:
         out += [f"- {_decision_text(d)}" for d in summary.decisions]
         out += [""]
     if summary.action_items:
+        unassigned = _unassigned_label(summary.language)
         out += [f"## {lab['action_items']}", ""]
-        out += [f"- {_action_text(a, lab)}" for a in summary.action_items]
+        out += [f"- {_action_text(a, lab, unassigned=unassigned)}" for a in summary.action_items]
         out += [""]
     if summary.section_timecodes:
         out += [f"## {lab['sections']}", ""]
@@ -300,7 +350,7 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
         _title(pdf, summary.title)
         if summary.overview:
             _heading(pdf, lab["overview"])
-            _body(pdf, summary.overview)
+            _paragraphed_body(pdf, summary.overview)
         if summary.key_takeaways:
             _heading(pdf, lab["key_takeaways"])
             for item in summary.key_takeaways:
@@ -310,9 +360,10 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
             for decision in summary.decisions:
                 _bullet(pdf, _decision_text(decision))
         if summary.action_items:
+            unassigned = _unassigned_label(summary.language)
             _heading(pdf, lab["action_items"])
             for action in summary.action_items:
-                _bullet(pdf, _action_text(action, lab))
+                _bullet(pdf, _action_text(action, lab, unassigned=unassigned))
         if summary.section_timecodes:
             _heading(pdf, lab["sections"])
             for marker in summary.section_timecodes:
@@ -366,6 +417,14 @@ def _heading(pdf: Any, text: str) -> None:
 def _body(pdf: Any, text: str) -> None:
     pdf.set_font(_FONT_FAMILY, "", 11)
     _line(pdf, 6, text)
+
+
+def _paragraphed_body(pdf: Any, text: str) -> None:
+    """Body text broken into paragraphs with a small gap between them (the overview)."""
+    for i, para in enumerate(_paragraphs(text)):
+        if i:
+            pdf.ln(2)
+        _body(pdf, para)
 
 
 def _bullet(pdf: Any, text: str) -> None:

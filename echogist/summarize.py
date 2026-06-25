@@ -40,6 +40,7 @@ never ``count_tokens`` (that is a network call — see the guard).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -740,21 +741,72 @@ def build_reduce_request(
 
 
 def _norm(s: str) -> str:
-    """Normalize for dedup: lowercased, whitespace-collapsed. Conservative — only
-    near-identical strings collide, so a genuinely distinct point is never merged away."""
+    """Normalize for exact dedup: lowercased, whitespace-collapsed. Conservative —
+    only near-identical strings collide on this key."""
     return " ".join(s.lower().split())
 
 
+def _tokens(s: str) -> tuple[str, ...]:
+    """Word tokens for near-dup matching: lowercased alphanumeric runs, punctuation
+    and separators dropped. ``\\w`` is Unicode-aware, so Cyrillic tokenizes like Latin
+    (``хочу / надо`` and ``хочу/надо`` both -> ``('хочу', 'надо')``)."""
+    return tuple(re.findall(r"\w+", s.lower()))
+
+
+def _is_sublist(short: tuple[str, ...], whole: tuple[str, ...]) -> bool:
+    """True if ``short`` is a contiguous run of tokens inside (and shorter than)
+    ``whole``. Token-level, so ``свобода`` never matches inside ``несвобода`` — only
+    whole-word containment counts. Generic; the dedup caller adds the length floor."""
+    n = len(short)
+    if not n or n >= len(whole):
+        return False
+    return any(whole[i : i + n] == short for i in range(len(whole) - n + 1))
+
+
 def _dedup_strs(items: Iterable[str]) -> tuple[str, ...]:
-    """Concatenate, dropping later exact (normalized) duplicates; order preserved."""
-    seen: set[str] = set()
-    out: list[str] = []
+    """Concatenate, dropping near-duplicates; order preserved, the fullest copy kept.
+
+    Three mechanical, never-re-summarize rules (TD-15 Phase 1), each a tightening of
+    the original exact-(normalized)-match dedup that let visible near-dupes survive a
+    real run:
+
+    * **exact** — same text after lowercasing + whitespace-collapse (the original rule).
+    * **word-order** — same multiset of word tokens (``хочу/надо/могу`` ==
+      ``хочу / могу / надо``). Slash/space/order differences are noise for the short
+      noun-phrase themes this runs on.
+    * **containment** — one point's words are a contiguous run inside another's
+      (``внутренняя свобода`` ⊂ ``внутренняя свобода независимо…``). The longer, more
+      complete point wins; the contained restatement is dropped. Floored at two tokens
+      so a distinct single-word theme is never swallowed just for sharing one word.
+
+    All three compare WORDS, never meaning — nothing is rewritten or summarized, so a
+    genuinely distinct point is never merged away (the TD-5 completeness guarantee).
+    """
+    kept: list[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = []
     for s in items:
-        key = _norm(s)
-        if key and key not in seen:
-            seen.add(key)
-            out.append(s)
-    return tuple(out)
+        norm = _norm(s)
+        if not norm:
+            continue
+        toks = _tokens(s)
+        skey = tuple(sorted(toks))
+        done = False
+        for i, (_orig, k_norm, k_toks, k_skey) in enumerate(kept):
+            if norm == k_norm:  # exact (normalized)
+                done = True
+                break
+            if toks and skey == k_skey:  # same words, reordered / re-separated
+                done = True
+                break
+            if len(toks) >= 2 and _is_sublist(toks, k_toks):  # contained in a fuller kept point
+                done = True
+                break
+            if len(k_toks) >= 2 and _is_sublist(k_toks, toks):  # this is the fuller version
+                kept[i] = (s, norm, toks, skey)  # keep it, drop the contained one, hold position
+                done = True
+                break
+        if not done:
+            kept.append((s, norm, toks, skey))
+    return tuple(k[0] for k in kept)
 
 
 def _tc_seconds(timecode: str) -> float:
