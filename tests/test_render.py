@@ -18,7 +18,14 @@ import pytest
 
 from echogist import render, summarize
 from echogist.render import RenderError
-from echogist.summarize import ActionItem, Decision, SectionMarker, Summary
+from echogist.summarize import (
+    ActionItem,
+    Decision,
+    PointGroup,
+    SectionGroup,
+    SectionMarker,
+    Summary,
+)
 
 
 def _summary(title: str = "AI in 2026", language: str = "en") -> Summary:
@@ -203,6 +210,55 @@ def test_pdf_renders_section_bullets_without_error(tmp_path: Path) -> None:
     pytest.importorskip("fpdf")
     path = render.render(_summary_with_bullets(), tmp_path, "pdf")
     assert path.read_bytes().startswith(b"%PDF")  # sub-bullet glyph + indent render clean
+
+
+# --------------------------------------------------------------------------- #
+# TD-15 Phase 2 — grouped overlay render (prefer groups, fall back to flat)
+# --------------------------------------------------------------------------- #
+def _grouped_summary() -> Summary:
+    return Summary(
+        title="Лекция",
+        overview="о",
+        key_takeaways=("t1", "t2", "t3"),
+        section_timecodes=(SectionMarker("[00:00:00]", "Intro", ("b1",)),),
+        recurring_themes=("th1", "th2"),
+        core_idea="ci",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        takeaway_groups=(PointGroup("Группа A", ("t1", "t2")), PointGroup("Группа B", ("t3",))),
+        theme_groups=(PointGroup("Темы", ("th1", "th2")),),
+        section_groups=(SectionGroup("Начало", (SectionMarker("[00:00:00]", "Intro", ("b1",)),)),),
+    )
+
+
+def test_markdown_renders_takeaways_under_group_subheadings(tmp_path: Path) -> None:
+    text = render.render(_grouped_summary(), tmp_path, "md").read_text(encoding="utf-8")
+    assert "## Ключевые выводы" in text  # the section heading stays
+    assert "### Группа A" in text and "### Группа B" in text  # group sub-headings
+    assert "- t1" in text and "- t2" in text and "- t3" in text  # every point still present
+    assert "### Начало" in text  # macro-section heading
+    assert "  - b1" in text  # section bullets stay nested under the regrouped marker
+
+
+def test_markdown_falls_back_to_flat_list_when_no_groups(tmp_path: Path) -> None:
+    # Default-empty overlay (a single-pass or pre-grouping summary) -> flat list, no ###.
+    text = render.render(_summary(), tmp_path, "md").read_text(encoding="utf-8")
+    assert "## Key takeaways" in text
+    assert "- Models got cheaper." in text
+    assert "###" not in text  # no group sub-headings when the overlay is empty
+
+
+def test_grouped_summary_round_trips_through_saved_json(tmp_path: Path) -> None:
+    original = _grouped_summary()
+    json_path = summarize.save_raw_result(original, tmp_path)
+    assert render.load_summary(json_path) == original  # overlay survives save -> load
+
+
+def test_pdf_renders_grouped_overlay_without_error(tmp_path: Path) -> None:
+    pytest.importorskip("fpdf")
+    path = render.render(_grouped_summary(), tmp_path, "pdf")
+    assert path.read_bytes().startswith(b"%PDF")  # sub-headings + nested bullets render clean
 
 
 # --------------------------------------------------------------------------- #

@@ -42,10 +42,10 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from . import naming
 from .chunk import Chunk, needs_chunking, plan_chunks, total_duration_seconds
@@ -63,6 +63,11 @@ _TOOL_NAME = "emit_summary"
 # mechanically and never pass through this call, so the merge cannot drop a point.
 _SYNTHESIS_TOOL_NAME = "emit_synthesis"
 
+# The forced-tool name for the GROUPING step (TD-15 Phase 2). It returns headings +
+# the INDICES of points under each — never the point text — so groups are rebuilt
+# verbatim by index and the grouping can structurally never drop or reword a point.
+_GROUPING_TOOL_NAME = "emit_grouping"
+
 # Human language names injected into the prompt's {language} token. settings
 # validation already restricts the code to these; an unknown code falls back to
 # itself so a hand-edited settings file never crashes the stage.
@@ -75,6 +80,11 @@ _LANGUAGE_NAMES = {"ru": "Russian", "en": "English"}
 # _LANGUAGE_NAMES — both are per-language prompt-substitution values. Unknown code
 # falls back to the English label, mirroring _language_name's fail-soft default.
 _UNASSIGNED_LABELS = {"ru": "Не назначено", "en": "Unassigned"}
+
+# The catch-all heading for points the grouping step left unplaced (TD-15 Phase 2).
+# Substituted at call time, per language, exactly like {unassigned} — never a hardcoded
+# literal, since it prints in the summary's target language. Unknown code -> English.
+_CATCHALL_LABELS = {"ru": "Прочее", "en": "Other"}
 
 
 class SummarizeError(Exception):
@@ -132,6 +142,32 @@ class ActionItem:
 
 
 @dataclass(frozen=True)
+class PointGroup:
+    """A grouping overlay (TD-15 Phase 2): a heading + the points placed under it.
+
+    ``points`` are reconstructed VERBATIM by index from the canonical flat list — the
+    grouping call only assigns indices, it never emits point text — so a group can
+    never reword or invent a point. Used for ``takeaway_groups`` / ``theme_groups``.
+    """
+
+    heading: str
+    points: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SectionGroup:
+    """A macro-section (TD-15 Phase 2): a heading + the original sections under it.
+
+    The 69 micro-sections of a long lecture are consolidated into a handful of
+    time-ordered macro-sections. ``sections`` are the original :class:`SectionMarker`
+    s (timecodes + bullets) verbatim, just regrouped — nothing is summarized away.
+    """
+
+    heading: str
+    sections: tuple[SectionMarker, ...]
+
+
+@dataclass(frozen=True)
 class Summary:
     """The structured summary every downstream stage (render T7) reads.
 
@@ -140,6 +176,14 @@ class Summary:
     fallback fills it when the model returns none. ``decisions`` / ``action_items``
     are the meeting/planning half: empty for material (a lecture, a monologue) that
     has none.
+
+    ``takeaway_groups`` / ``theme_groups`` / ``section_groups`` are the TD-15 Phase 2
+    grouping OVERLAY — additive and default-empty, so a single-pass summary and every
+    pre-grouping ``.json`` still construct unchanged. They reorganize the flat lists
+    (which stay canonical and complete) into headings for readability; render prefers
+    the groups and falls back to the flat list when they are empty. Grouping is
+    reconstruct-by-index (see :func:`group_summary`), so the overlay can never endanger
+    the completeness of the flat lists.
     """
 
     title: str
@@ -151,6 +195,9 @@ class Summary:
     decisions: tuple[Decision, ...]
     action_items: tuple[ActionItem, ...]
     language: str
+    takeaway_groups: tuple[PointGroup, ...] = ()
+    theme_groups: tuple[PointGroup, ...] = ()
+    section_groups: tuple[SectionGroup, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -345,6 +392,11 @@ def _unassigned_label(code: str) -> str:
     never crashes the stage (mirrors :func:`_language_name`'s fail-soft default).
     """
     return _UNASSIGNED_LABELS.get(code, "Unassigned")
+
+
+def _catchall_heading(code: str) -> str:
+    """The grouping catch-all heading for ``code`` (ru -> Прочее). Unknown -> English."""
+    return _CATCHALL_LABELS.get(code, "Other")
 
 
 def build_request(
@@ -1060,4 +1112,219 @@ def summarize_auto(
         today=today,
         caller=caller,
         log=log,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TD-15 Phase 2 — hierarchical grouping (assign by index, reconstruct verbatim)
+# --------------------------------------------------------------------------- #
+# Grouping ASSIGNS points to headings; it never REWRITES them. The grouping call sees
+# numbered flat lists and returns headings + the 1-based indices under each; the point
+# text is taken only from the original lists, so grouping structurally cannot reword,
+# merge, or invent a point. A completeness invariant places every index exactly once;
+# any index the model forgets falls into a language-aware catch-all, logged like the
+# TD-5 `extracted -> after dedup` line. The flat lists stay canonical; groups are an
+# additive overlay (render falls back to the flat list if grouping returns nothing).
+_T = TypeVar("_T")
+
+
+def _grouping_tool_schema() -> dict[str, Any]:
+    """The forced grouping tool: headings + INDICES for each flat list (never text)."""
+    group_array = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "heading": {
+                    "type": "string",
+                    "description": "Short, specific heading in the target language.",
+                },
+                "indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "1-based indices, into THIS list only, of the items under this "
+                        "heading. Every item's index must appear under exactly one heading."
+                    ),
+                },
+            },
+            "required": ["heading", "indices"],
+        },
+    }
+    return {
+        "name": _GROUPING_TOOL_NAME,
+        "description": "Group the numbered takeaways, themes, and sections by index.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "takeaway_groups": {
+                    **group_array,
+                    "description": "Headings grouping the TAKEAWAYS by index (aim for ~10-15).",
+                },
+                "theme_groups": {
+                    **group_array,
+                    "description": "Headings grouping the THEMES by index (fewer than takeaways).",
+                },
+                "section_groups": {
+                    **group_array,
+                    "description": "Time-ordered macro-sections grouping the SECTIONS by index.",
+                },
+            },
+            "required": ["takeaway_groups", "theme_groups", "section_groups"],
+        },
+    }
+
+
+def _serialize_for_grouping(summary: Summary) -> str:
+    """Render the flat lists as three independently 1-numbered lists for the grouping
+    call. Each list restarts at 1, so the model's per-list indices map straight back."""
+    lines: list[str] = ["TAKEAWAYS:"]
+    lines += [f"{i}. {t}" for i, t in enumerate(summary.key_takeaways, 1)] or ["(none)"]
+    lines.append("\nTHEMES:")
+    lines += [f"{i}. {t}" for i, t in enumerate(summary.recurring_themes, 1)] or ["(none)"]
+    lines.append("\nSECTIONS:")
+    lines += [
+        f"{i}. {m.timecode} {m.title}".rstrip() for i, m in enumerate(summary.section_timecodes, 1)
+    ] or ["(none)"]
+    return "\n".join(lines)
+
+
+def build_grouping_request(
+    summary: Summary, tier: ModelTier, cfg: SummarizeConfig
+) -> dict[str, Any]:
+    """The grouping request: assign the summary's flat lists to headings by index.
+
+    The language is the summary's own (it was already written in it). Mirrors
+    :func:`build_reduce_request` — forced single tool, ``temperature`` only when the
+    tier sets it. Pure; no network.
+    """
+    system = cfg.grouping_system_prompt.replace("{language}", _language_name(summary.language))
+    request: dict[str, Any] = {
+        "model": tier.model_id,
+        "max_tokens": cfg.max_output_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": _serialize_for_grouping(summary)}],
+        "tools": [_grouping_tool_schema()],
+        "tool_choice": {"type": "tool", "name": _GROUPING_TOOL_NAME},
+    }
+    if tier.temperature is not None:  # mirror build_request: omit on models that deprecate it
+        request["temperature"] = tier.temperature
+    return request
+
+
+def _assign_by_index(
+    items: tuple[_T, ...], spec: Any, *, catchall_heading: str
+) -> tuple[tuple[tuple[str, tuple[_T, ...]], ...], int]:
+    """Rebuild groups from ``{heading, indices}`` specs, VERBATIM by index.
+
+    The point text comes only from ``items`` (never the model), so a group cannot
+    reword or invent a point. Completeness invariant: every index ``1..N`` lands under
+    exactly one heading. An index is placed at most once (first kept group wins a
+    duplicate); a non-integer or out-of-range index is ignored; a group with an empty
+    heading or no valid members is dropped (its indices fall through to orphans). Any
+    index no kept group claims goes into the ``catchall_heading`` group so a forgotten
+    point is surfaced, never lost. Returns ``(groups, orphan_count)``.
+    """
+    n = len(items)
+    placed: set[int] = set()
+    groups: list[tuple[str, tuple[_T, ...]]] = []
+    for g in spec if isinstance(spec, list) else ():
+        if not isinstance(g, dict):
+            continue
+        heading = str(g.get("heading", "")).strip()
+        raw_idxs = g.get("indices")
+        members: list[int] = []
+        seen: set[int] = set()
+        for raw in raw_idxs if isinstance(raw_idxs, list) else ():
+            try:
+                i = int(raw)
+            except (ValueError, TypeError):
+                continue
+            if 1 <= i <= n and i not in placed and i not in seen:
+                seen.add(i)
+                members.append(i)
+        if heading and members:  # an empty heading or empty group is dropped -> orphans
+            placed.update(members)
+            groups.append((heading, tuple(items[i - 1] for i in members)))
+    orphans = tuple(items[i - 1] for i in range(1, n + 1) if i not in placed)
+    if orphans:
+        groups.append((catchall_heading, orphans))
+    return tuple(groups), len(orphans)
+
+
+def _group_points(
+    items: tuple[str, ...], spec: Any, *, catchall_heading: str
+) -> tuple[tuple[PointGroup, ...], int]:
+    """Group a flat string list into :class:`PointGroup`s; returns (groups, orphans)."""
+    grouped, orphans = _assign_by_index(items, spec, catchall_heading=catchall_heading)
+    return tuple(PointGroup(heading=h, points=pts) for h, pts in grouped), orphans
+
+
+def _group_sections(
+    sections: tuple[SectionMarker, ...], spec: Any, *, catchall_heading: str
+) -> tuple[tuple[SectionGroup, ...], int]:
+    """Group sections into time-ordered :class:`SectionGroup`s; returns (groups, orphans).
+
+    Sections within a macro-section are sorted by timecode, and the macro-sections are
+    ordered by their earliest timecode — the ADR's "time-ordered macro-sections"."""
+    grouped, orphans = _assign_by_index(sections, spec, catchall_heading=catchall_heading)
+    out = [
+        SectionGroup(heading=h, sections=tuple(sorted(secs, key=lambda m: _tc_seconds(m.timecode))))
+        for h, secs in grouped
+    ]
+    out.sort(key=lambda gp: _tc_seconds(gp.sections[0].timecode) if gp.sections else float("inf"))
+    return tuple(out), orphans
+
+
+def group_summary(
+    summary: Summary,
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    *,
+    api_key: str,
+    caller: Caller = _default_caller,
+    log: Logger = print,
+) -> SummarizeResult:
+    """Add the TD-15 grouping overlay to an already-complete ``summary``. One small call.
+
+    Works on ANY Summary — a fresh paid run OR one reloaded from a saved ``.json`` — so
+    grouping can be validated/iterated against the saved 221-point artifact for pennies,
+    without re-paying the map-reduce. The grouping call returns only headings + indices;
+    the points are reconstructed verbatim from the summary's own flat lists. Returns the
+    grouped summary plus the (small) token usage. A summary with nothing to group is
+    returned unchanged, no call made.
+    """
+    if not (summary.key_takeaways or summary.recurring_themes or summary.section_timecodes):
+        return SummarizeResult(summary=summary, input_tokens=0, output_tokens=0)
+
+    log("Grouping the extracted points into headings...")
+    outcome = caller(build_grouping_request(summary, tier, cfg), api_key)
+    if outcome.stop_reason == "max_tokens":
+        raise SummarizeError(
+            "The grouping step hit the output cap. Raise max_output_tokens in "
+            "models.toml, then retry from the saved summary."
+        )
+
+    catchall = _catchall_heading(summary.language)
+    spec = outcome.tool_input
+    tgroups, t_orphans = _group_points(
+        summary.key_takeaways, spec.get("takeaway_groups"), catchall_heading=catchall
+    )
+    thgroups, th_orphans = _group_points(
+        summary.recurring_themes, spec.get("theme_groups"), catchall_heading=catchall
+    )
+    sgroups, s_orphans = _group_sections(
+        summary.section_timecodes, spec.get("section_groups"), catchall_heading=catchall
+    )
+    log(
+        f"Grouped {len(summary.key_takeaways)} takeaways into {len(tgroups)} sections "
+        f"({t_orphans} orphaned), {len(summary.recurring_themes)} themes into "
+        f"{len(thgroups)} ({th_orphans} orphaned), {len(summary.section_timecodes)} "
+        f"sections into {len(sgroups)} ({s_orphans} orphaned)."
+    )
+    grouped = replace(
+        summary, takeaway_groups=tgroups, theme_groups=thgroups, section_groups=sgroups
+    )
+    return SummarizeResult(
+        summary=grouped, input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens
     )

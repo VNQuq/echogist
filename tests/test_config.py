@@ -168,9 +168,10 @@ def test_shipped_chunk_config_loads() -> None:
     assert cfg.chunk.quality_budget_seconds == 3_600
     assert cfg.chunk.target_chunk_tokens == 12_000
     assert cfg.chunk.overlap_seconds == 90
-    # The shipped reduce/map prompt scaffolding is present (prompt = data).
+    # The shipped reduce/map/grouping prompt scaffolding is present (prompt = data).
     assert "{language}" in cfg.summarize.reduce_system_prompt
     assert "{n}" in cfg.summarize.map_note_template
+    assert "{language}" in cfg.summarize.grouping_system_prompt  # TD-15 Phase 2
 
 
 def test_missing_chunk_table_uses_defaults(tmp_path: Path) -> None:
@@ -179,6 +180,7 @@ def test_missing_chunk_table_uses_defaults(tmp_path: Path) -> None:
     assert cfg.chunk.quality_budget_tokens == 40_000
     assert cfg.chunk.target_chunk_tokens == 12_000
     assert "{language}" in cfg.summarize.reduce_system_prompt  # defaulted, not crashed
+    assert "{language}" in cfg.summarize.grouping_system_prompt  # defaulted, not crashed
 
 
 def test_chunk_override_parses(tmp_path: Path) -> None:

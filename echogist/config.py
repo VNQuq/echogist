@@ -66,6 +66,21 @@ _DEFAULT_REDUCE_SYSTEM_PROMPT = (
     "title, a faithful overview, and the single core idea — as many sentences as the "
     "material needs, no upper limit. Call emit_synthesis exactly once."
 )
+# Grouping step (TD-15 Phase 2): organizes an already-extracted flat list into
+# headings WITHOUT rewriting any point. The model returns headings + the 1-based
+# INDICES of the points under each — never the point text — so reconstruction is
+# verbatim and a point can never be dropped or reworded. {language} is substituted
+# at call time. Code-level fallback so a minimal [summarize] table (or a fixture)
+# without the key still loads.
+_DEFAULT_GROUPING_SYSTEM_PROMPT = (
+    "You organize already-extracted points into a readable hierarchy, in {language}. "
+    "You are given numbered lists (takeaways, themes, sections). For each list, group "
+    "its items under a small set of clear, specific headings (~10-15 for takeaways, "
+    "fewer for themes; group sections into time-ordered macro-sections). Return ONLY "
+    "the headings and the 1-based INDICES of the items under each — never the item "
+    "text. Every index must appear under exactly ONE heading: do not drop, duplicate, "
+    "merge, or reword any item. Write headings in {language}. Call emit_grouping once."
+)
 
 
 class ConfigError(Exception):
@@ -127,6 +142,7 @@ class SummarizeConfig:
     max_output_tokens: int
     reduce_system_prompt: str = _DEFAULT_REDUCE_SYSTEM_PROMPT
     map_note_template: str = _DEFAULT_MAP_NOTE_TEMPLATE
+    grouping_system_prompt: str = _DEFAULT_GROUPING_SYSTEM_PROMPT
 
 
 @dataclass(frozen=True)
@@ -423,6 +439,9 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         ),
         map_note_template=_optional_nonempty_str(
             summarize_table, "map_note_template", _DEFAULT_MAP_NOTE_TEMPLATE
+        ),
+        grouping_system_prompt=_optional_nonempty_str(
+            summarize_table, "grouping_system_prompt", _DEFAULT_GROUPING_SYSTEM_PROMPT
         ),
     )
 

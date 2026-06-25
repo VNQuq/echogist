@@ -39,7 +39,15 @@ from pathlib import Path
 from typing import Any
 
 from . import naming
-from .summarize import ActionItem, Decision, SectionMarker, Summary, _unassigned_label
+from .summarize import (
+    ActionItem,
+    Decision,
+    PointGroup,
+    SectionGroup,
+    SectionMarker,
+    Summary,
+    _unassigned_label,
+)
 
 Logger = Callable[[str], object]
 
@@ -151,7 +159,46 @@ def load_summary(json_path: Path) -> Summary:
         decisions=decisions,
         action_items=actions,
         language=str(raw.get("language", "")),
+        takeaway_groups=_point_groups(raw.get("takeaway_groups")),
+        theme_groups=_point_groups(raw.get("theme_groups")),
+        section_groups=_section_groups(raw.get("section_groups")),
     )
+
+
+def _point_groups(value: Any) -> tuple[PointGroup, ...]:
+    """Reconstruct the TD-15 takeaway/theme grouping overlay from saved JSON (defensive).
+
+    Missing/garbage -> empty, so a pre-grouping ``.json`` (no overlay) loads as the
+    flat-list case and render falls back to the flat list — the additive contract.
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        PointGroup(heading=str(g.get("heading", "")), points=_str_tuple(g.get("points")))
+        for g in value
+        if isinstance(g, dict)
+    )
+
+
+def _section_groups(value: Any) -> tuple[SectionGroup, ...]:
+    """Reconstruct the TD-15 macro-section grouping overlay from saved JSON (defensive)."""
+    if not isinstance(value, list):
+        return ()
+    out: list[SectionGroup] = []
+    for g in value:
+        if not isinstance(g, dict):
+            continue
+        sections = tuple(
+            SectionMarker(
+                timecode=str(m.get("timecode", "")),
+                title=str(m.get("title", "")),
+                bullets=_str_tuple(m.get("bullets")),
+            )
+            for m in g.get("sections", [])
+            if isinstance(m, dict)
+        )
+        out.append(SectionGroup(heading=str(g.get("heading", "")), sections=sections))
+    return tuple(out)
 
 
 def _str_tuple(value: Any) -> tuple[str, ...]:
@@ -273,6 +320,42 @@ def _paragraphs(text: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Markdown (pure, no dependency — the always-available fallback)
 # --------------------------------------------------------------------------- #
+def _md_string_section(
+    heading: str, flat: tuple[str, ...], groups: tuple[PointGroup, ...]
+) -> list[str]:
+    """A flat string list (takeaways/themes) as Markdown — grouped under ``###`` sub-
+    headings when the TD-15 overlay is present, else the flat bullet list (fallback)."""
+    lines = [f"## {heading}", ""]
+    if groups:
+        for g in groups:
+            lines += [f"### {g.heading}".rstrip(), "", *(f"- {p}" for p in g.points), ""]
+    else:
+        lines += [*(f"- {t}" for t in flat), ""]
+    return lines
+
+
+def _md_sections(
+    heading: str, flat: tuple[SectionMarker, ...], groups: tuple[SectionGroup, ...]
+) -> list[str]:
+    """Section markers as Markdown — under macro-section ``###`` headings when the
+    TD-15 overlay is present, else the flat marker list (fallback). Bullets stay nested."""
+
+    def _markers(markers: tuple[SectionMarker, ...]) -> list[str]:
+        lines: list[str] = []
+        for m in markers:
+            lines.append(f"- `{m.timecode}` {m.title}".rstrip())
+            lines += [f"  - {b}" for b in m.bullets]  # indented sub-bullets = section content
+        return lines
+
+    lines = [f"## {heading}", ""]
+    if groups:
+        for g in groups:
+            lines += [f"### {g.heading}".rstrip(), "", *_markers(g.sections), ""]
+    else:
+        lines += [*_markers(flat), ""]
+    return lines
+
+
 def _markdown(summary: Summary) -> str:
     """Render the summary as GitHub-flavored Markdown (UTF-8, Cyrillic literal)."""
     lab = _labels(summary.language)
@@ -282,7 +365,9 @@ def _markdown(summary: Summary) -> str:
         for para in _paragraphs(summary.overview):
             out += [para, ""]  # blank line between paragraphs => separate <p> in MD
     if summary.key_takeaways:
-        out += [f"## {lab['key_takeaways']}", "", *(f"- {t}" for t in summary.key_takeaways), ""]
+        out += _md_string_section(
+            lab["key_takeaways"], summary.key_takeaways, summary.takeaway_groups
+        )
     if summary.decisions:
         out += [f"## {lab['decisions']}", ""]
         out += [f"- {_decision_text(d)}" for d in summary.decisions]
@@ -293,14 +378,11 @@ def _markdown(summary: Summary) -> str:
         out += [f"- {_action_text(a, lab, unassigned=unassigned)}" for a in summary.action_items]
         out += [""]
     if summary.section_timecodes:
-        out += [f"## {lab['sections']}", ""]
-        for m in summary.section_timecodes:
-            out.append(f"- `{m.timecode}` {m.title}".rstrip())
-            out += [f"  - {b}" for b in m.bullets]  # indented sub-bullets = section content
-        out += [""]
+        out += _md_sections(lab["sections"], summary.section_timecodes, summary.section_groups)
     if summary.recurring_themes:
-        out += [f"## {lab['recurring_themes']}", "", *(f"- {t}" for t in summary.recurring_themes)]
-        out += [""]
+        out += _md_string_section(
+            lab["recurring_themes"], summary.recurring_themes, summary.theme_groups
+        )
     if summary.core_idea:
         out += [f"## {lab['core_idea']}", "", summary.core_idea, ""]
     return "\n".join(out).rstrip() + "\n"
@@ -352,9 +434,9 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
             _heading(pdf, lab["overview"])
             _paragraphed_body(pdf, summary.overview)
         if summary.key_takeaways:
-            _heading(pdf, lab["key_takeaways"])
-            for item in summary.key_takeaways:
-                _bullet(pdf, item)
+            _pdf_string_section(
+                pdf, lab["key_takeaways"], summary.key_takeaways, summary.takeaway_groups
+            )
         if summary.decisions:
             _heading(pdf, lab["decisions"])
             for decision in summary.decisions:
@@ -365,15 +447,11 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
             for action in summary.action_items:
                 _bullet(pdf, _action_text(action, lab, unassigned=unassigned))
         if summary.section_timecodes:
-            _heading(pdf, lab["sections"])
-            for marker in summary.section_timecodes:
-                _bullet(pdf, f"{marker.timecode}  {marker.title}".rstrip())
-                for point in marker.bullets:  # section content as indented sub-bullets
-                    _subbullet(pdf, point)
+            _pdf_sections(pdf, lab["sections"], summary.section_timecodes, summary.section_groups)
         if summary.recurring_themes:
-            _heading(pdf, lab["recurring_themes"])
-            for item in summary.recurring_themes:
-                _bullet(pdf, item)
+            _pdf_string_section(
+                pdf, lab["recurring_themes"], summary.recurring_themes, summary.theme_groups
+            )
         if summary.core_idea:
             _heading(pdf, lab["core_idea"])
             _body(pdf, summary.core_idea)
@@ -436,3 +514,48 @@ def _subbullet(pdf: Any, text: str) -> None:
     """An indented second-level bullet (section content under a section marker)."""
     pdf.set_font(_FONT_FAMILY, "", 11)
     _line(pdf, 6, f"      ◦  {text}")  # leading spaces indent; U+25E6 in DejaVuSans
+
+
+def _subheading(pdf: Any, text: str) -> None:
+    """A group heading inside a section (the TD-15 grouping overlay) — smaller than a
+    section heading, bold, so the hierarchy reads ## section / ### group / • point."""
+    pdf.ln(1)
+    pdf.set_font(_FONT_FAMILY, "B", 11)
+    _line(pdf, 6, text)
+
+
+def _pdf_string_section(
+    pdf: Any, heading: str, flat: tuple[str, ...], groups: tuple[PointGroup, ...]
+) -> None:
+    """A flat string list (takeaways/themes) in the PDF — grouped under sub-headings
+    when the TD-15 overlay is present, else the flat bullet list (fallback)."""
+    _heading(pdf, heading)
+    if groups:
+        for g in groups:
+            _subheading(pdf, g.heading)
+            for point in g.points:
+                _bullet(pdf, point)
+    else:
+        for item in flat:
+            _bullet(pdf, item)
+
+
+def _pdf_sections(
+    pdf: Any, heading: str, flat: tuple[SectionMarker, ...], groups: tuple[SectionGroup, ...]
+) -> None:
+    """Section markers in the PDF — under macro-section sub-headings when the TD-15
+    overlay is present, else the flat marker list (fallback). Bullets stay indented."""
+
+    def emit(markers: tuple[SectionMarker, ...]) -> None:
+        for m in markers:
+            _bullet(pdf, f"{m.timecode}  {m.title}".rstrip())
+            for point in m.bullets:  # section content as indented sub-bullets
+                _subbullet(pdf, point)
+
+    _heading(pdf, heading)
+    if groups:
+        for g in groups:
+            _subheading(pdf, g.heading)
+            emit(g.sections)
+    else:
+        emit(flat)

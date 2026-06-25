@@ -138,6 +138,25 @@ it needs, no upper limit); and the single core idea a reader should leave with. 
 the emit_synthesis tool exactly once.
 """
 
+# Grouping step (TD-15 Phase 2): turns the flat walls (221 takeaways, dozens of themes
+# and micro-sections) into a readable hierarchy WITHOUT rewriting anything. The model
+# is given numbered lists and returns headings + the 1-based INDICES under each — never
+# the item text — so groups are reconstructed verbatim by index and a point can never be
+# dropped, merged, or reworded (the TD-5 completeness guarantee). Any index the model
+# forgets is collected into a language-aware catch-all heading; the run logs how many
+# were placed vs orphaned. {language} is substituted at call time.
+grouping_system_prompt = """
+You organize already-extracted points into a readable hierarchy, written entirely in \
+{language}. You are given numbered lists: TAKEAWAYS, THEMES, and SECTIONS. For each \
+list, group its items under a small set of clear, specific headings: aim for ~10-15 \
+headings for the takeaways, fewer for the themes, and consolidate the sections into \
+time-ordered macro-sections. Return ONLY each heading and the 1-based INDICES of the \
+items that belong under it — never the item text itself. Every index in a list must \
+appear under exactly ONE heading: do not drop, duplicate, merge, or reword any item, \
+and do not invent items. Write every heading in {language}. Call the emit_grouping \
+tool exactly once.
+"""
+
 [chunk]
 # Map-reduce summarization (TD-5). Chunking triggers on the QualityBudget — a single
 # pass is trusted only while the transcript is under BOTH limits; crossing either

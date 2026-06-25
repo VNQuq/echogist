@@ -29,6 +29,8 @@ from echogist.summarize import (
     ActionItem,
     CallOutcome,
     Decision,
+    PointGroup,
+    SectionGroup,
     SectionMarker,
     SummarizeError,
     SummarizeResult,
@@ -871,3 +873,149 @@ def test_summarize_auto_chunks_when_over_quality_budget() -> None:
         log=lambda _m: None,
     )
     assert calls["n"] >= 3  # >=2 map calls + 1 reduce (chunked, not single-pass)
+
+
+# --------------------------------------------------------------------------- #
+# TD-15 Phase 2 — grouping (assign by index, reconstruct verbatim)
+# --------------------------------------------------------------------------- #
+def test_assign_by_index_places_every_index_once_and_reconstructs_verbatim() -> None:
+    items = ("a", "b", "c", "d")
+    spec = [{"heading": "First", "indices": [1, 3]}, {"heading": "Second", "indices": [2, 4]}]
+    groups, orphans = summarize._assign_by_index(items, spec, catchall_heading="Other")
+    assert orphans == 0
+    assert groups == (("First", ("a", "c")), ("Second", ("b", "d")))
+
+
+def test_assign_by_index_orphans_unplaced_into_catchall() -> None:
+    items = ("a", "b", "c")
+    spec = [{"heading": "Only", "indices": [1]}]  # 2 and 3 forgotten by the model
+    groups, orphans = summarize._assign_by_index(items, spec, catchall_heading="Прочее")
+    assert orphans == 2
+    assert groups == (("Only", ("a",)), ("Прочее", ("b", "c")))
+
+
+def test_assign_by_index_ignores_duplicate_and_out_of_range_indices() -> None:
+    items = ("a", "b")
+    # 1 duplicated across groups (first wins), 9 out of range, "x" non-integer.
+    spec = [{"heading": "G1", "indices": [1, 9, "x"]}, {"heading": "G2", "indices": [1, 2]}]
+    groups, orphans = summarize._assign_by_index(items, spec, catchall_heading="Other")
+    assert orphans == 0
+    assert groups == (("G1", ("a",)), ("G2", ("b",)))
+
+
+def test_assign_by_index_drops_empty_heading_group_to_orphans() -> None:
+    items = ("a", "b")
+    spec = [{"heading": "", "indices": [1]}, {"heading": "Real", "indices": [2]}]
+    groups, orphans = summarize._assign_by_index(items, spec, catchall_heading="Other")
+    assert orphans == 1  # index 1 was in the dropped empty-heading group -> orphaned
+    assert groups == (("Real", ("b",)), ("Other", ("a",)))
+
+
+def test_group_sections_orders_within_and_across_macro_sections_by_timecode() -> None:
+    sections = (
+        SectionMarker("[00:20:00]", "Late"),
+        SectionMarker("[00:00:00]", "Early"),
+        SectionMarker("[00:40:00]", "Latest"),
+    )
+    # The model groups out of order; time-ordering is applied on reconstruction.
+    spec = [{"heading": "B", "indices": [3]}, {"heading": "A", "indices": [2, 1]}]
+    groups, orphans = summarize._group_sections(sections, spec, catchall_heading="Other")
+    assert orphans == 0
+    assert [g.heading for g in groups] == ["A", "B"]  # A starts at 00:00, B at 00:40
+    assert [m.timecode for m in groups[0].sections] == ["[00:00:00]", "[00:20:00]"]
+
+
+def test_build_grouping_request_forces_grouping_tool_and_numbers_lists() -> None:
+    s = _summary("Talk")
+    req = summarize.build_grouping_request(s, _tier(), _cfg())
+    assert req["tool_choice"] == {"type": "tool", "name": "emit_grouping"}
+    schema = req["tools"][0]["input_schema"]
+    assert set(schema["required"]) == {"takeaway_groups", "theme_groups", "section_groups"}
+    body = req["messages"][0]["content"]
+    assert "TAKEAWAYS:" in body and "THEMES:" in body and "SECTIONS:" in body
+
+
+def _grouping_summary() -> Summary:
+    return Summary(
+        title="Лекция",
+        overview="о",
+        key_takeaways=("t1", "t2", "t3"),
+        section_timecodes=(SectionMarker("[00:00:00]", "Intro"),),
+        recurring_themes=("th1", "th2"),
+        core_idea="ci",
+        decisions=(),
+        action_items=(),
+        language="ru",
+    )
+
+
+def test_group_summary_overlays_groups_keeping_flat_lists_canonical() -> None:
+    spec = {
+        "takeaway_groups": [
+            {"heading": "Группа A", "indices": [1, 2]},
+            {"heading": "Группа B", "indices": [3]},
+        ],
+        "theme_groups": [{"heading": "Темы", "indices": [1, 2]}],
+        "section_groups": [{"heading": "Начало", "indices": [1]}],
+    }
+    result = summarize.group_summary(
+        _grouping_summary(),
+        _tier(),
+        _cfg(),
+        api_key="k",
+        caller=_ok_caller(spec),
+        log=lambda _m: None,
+    )
+    g = result.summary
+    # Flat lists are untouched (still canonical + complete)...
+    assert g.key_takeaways == ("t1", "t2", "t3")
+    # ...and the overlay reconstructs verbatim by index.
+    assert g.takeaway_groups == (
+        PointGroup("Группа A", ("t1", "t2")),
+        PointGroup("Группа B", ("t3",)),
+    )
+    assert g.theme_groups == (PointGroup("Темы", ("th1", "th2")),)
+    assert g.section_groups == (SectionGroup("Начало", (SectionMarker("[00:00:00]", "Intro"),)),)
+    assert (result.input_tokens, result.output_tokens) == (1500, 400)
+
+
+def test_group_summary_routes_forgotten_points_to_russian_catchall() -> None:
+    spec = {
+        "takeaway_groups": [{"heading": "Группа A", "indices": [1]}],  # 2 and 3 forgotten
+        "theme_groups": [],
+        "section_groups": [],
+    }
+    g = summarize.group_summary(
+        _grouping_summary(),
+        _tier(),
+        _cfg(),
+        api_key="k",
+        caller=_ok_caller(spec),
+        log=lambda _m: None,
+    ).summary
+    assert g.takeaway_groups[-1] == PointGroup("Прочее", ("t2", "t3"))  # language-aware catch-all
+    # Empty model groupings -> empty overlay -> render falls back to the flat themes/sections.
+    assert g.theme_groups == (PointGroup("Прочее", ("th1", "th2")),)
+
+
+def test_group_summary_no_lists_makes_no_call() -> None:
+    bare = replace(_grouping_summary(), key_takeaways=(), recurring_themes=(), section_timecodes=())
+
+    def boom(request: dict[str, Any], api_key: str) -> CallOutcome:
+        raise AssertionError("group_summary must not call when there is nothing to group")
+
+    result = summarize.group_summary(
+        bare, _tier(), _cfg(), api_key="k", caller=boom, log=lambda _m: None
+    )
+    assert result.summary == bare
+    assert (result.input_tokens, result.output_tokens) == (0, 0)
+
+
+def test_group_summary_truncated_reply_fails_loud() -> None:
+    caller = _ok_caller(
+        {"takeaway_groups": [], "theme_groups": [], "section_groups": []}, stop_reason="max_tokens"
+    )
+    with pytest.raises(SummarizeError, match="grouping step hit the output cap"):
+        summarize.group_summary(
+            _grouping_summary(), _tier(), _cfg(), api_key="k", caller=caller, log=lambda _m: None
+        )
