@@ -1284,8 +1284,13 @@ def group_summary(
     api_key: str,
     caller: Caller = _default_caller,
     log: Logger = print,
+    raw_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> SummarizeResult:
     """Add the TD-15 grouping overlay to an already-complete ``summary``. One small call.
+
+    ``raw_sink``, if given, receives the model's raw grouping tool_input before
+    reconstruction — a diagnostic seam (the regroup validator dumps it) for tuning the
+    grouping prompt and seeing exactly how a model expressed its indices.
 
     Works on ANY Summary — a fresh paid run OR one reloaded from a saved ``.json`` — so
     grouping can be validated/iterated against the saved 221-point artifact for pennies,
@@ -1299,6 +1304,8 @@ def group_summary(
 
     log("Grouping the extracted points into headings...")
     outcome = caller(build_grouping_request(summary, tier, cfg), api_key)
+    if raw_sink is not None:  # diagnostic: the model's exact output, before reconstruction
+        raw_sink(outcome.tool_input)
     if outcome.stop_reason == "max_tokens":
         raise SummarizeError(
             "The grouping step hit the output cap. Raise max_output_tokens in "

@@ -58,7 +58,19 @@ def main(argv: list[str] | None = None) -> int:
     tier = model_config.tier(args.tier or settings.model_tier)
 
     summary = render.load_summary(json_path)
-    result = summarize.group_summary(summary, tier, model_config.summarize, api_key=api_key)
+
+    # Dump the model's RAW grouping output (headings + however it expressed indices)
+    # before reconstruction — the diagnostic for tuning the prompt / spotting a model
+    # that emitted indices in an unexpected shape.
+    raw_path = json_path.with_name(f"{json_path.stem}-grouping-raw.json")
+
+    def _dump_raw(spec: dict[str, object]) -> None:
+        raw_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote raw model output {raw_path}")
+
+    result = summarize.group_summary(
+        summary, tier, model_config.summarize, api_key=api_key, raw_sink=_dump_raw
+    )
 
     cost = (
         result.input_tokens / 1_000_000 * tier.price_in_per_mtok

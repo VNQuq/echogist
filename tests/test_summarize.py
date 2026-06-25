@@ -998,6 +998,25 @@ def test_group_summary_routes_forgotten_points_to_russian_catchall() -> None:
     assert g.theme_groups == (PointGroup("Прочее", ("th1", "th2")),)
 
 
+def test_group_summary_raw_sink_receives_model_output() -> None:
+    spec = {
+        "takeaway_groups": [{"heading": "A", "indices": [1, 2, 3]}],
+        "theme_groups": [],
+        "section_groups": [],
+    }
+    captured: list[dict[str, Any]] = []
+    summarize.group_summary(
+        _grouping_summary(),
+        _tier(),
+        _cfg(),
+        api_key="k",
+        caller=_ok_caller(spec),
+        log=lambda _m: None,
+        raw_sink=captured.append,
+    )
+    assert captured == [spec]  # the diagnostic seam gets the model's exact tool_input
+
+
 def test_group_summary_no_lists_makes_no_call() -> None:
     bare = replace(_grouping_summary(), key_takeaways=(), recurring_themes=(), section_timecodes=())
 
