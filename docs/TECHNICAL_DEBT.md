@@ -38,23 +38,6 @@ single 40K-token call costs ~$0.12, so "never re-pay" is pennies.
 
 **When to open.** When a real input trips the overflow guard, or very-long material becomes regular.
 
-### TD-6 — Summary title can leak the source language (not the target)
-
-Severity: LOW · Created 2026-06-16 · Prompt fix landed 2026-06-25 · Trigger: pending paid live re-validation · SoT: this file
-
-**What.** The `[summarize]` prompt asked for `title` "in {language}", but a German clip summarized
-to Russian returned a German title with a correctly-Russian body (`claude-haiku-4-5`, T13 smoke).
-The title anchored to the source language when source ≠ target — content was unaffected.
-
-**Fix landed (2026-06-25).** The `title` instruction in `config/models.toml` and the schema field
-description in `summarize.py` were hardened: the title must be written in the target language EVEN
-IF the material is spoken in another language; never copy a source-language phrase. Offline gate is
-green, but this is a prompt change — only a **paid live re-validation on a cross-language input**
-(source ≠ summary language) actually confirms it.
-
-**When to close.** Run a live summarize on a non-RU/EN-spoken clip targeted to RU (and vice versa);
-confirm the title returns in the target language. Then move TD-6 to Closed.
-
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
 Severity: LOW · Created 2026-06-17 (console-UX eng-review) · Trigger: a non-interactive (piped/redirected) run is ever genuinely needed · SoT: this file
@@ -88,6 +71,18 @@ Enter to summarize…")` in `menu._run_summary` before the cheap-path proceed �
 ---
 
 ## Closed debts
+
+### TD-6 — Summary title can leak the source language (not the target) ✓ CLOSED
+
+Severity (was): LOW · Created 2026-06-16 → Closed 2026-06-25 (v1.1.0 T10 live gate)
+
+The fork was that the `[summarize]` prompt asked for `title` "in {language}", but a German clip
+summarized to Russian returned a German title with a correctly-Russian body (`claude-haiku-4-5`, T13
+smoke) — the title anchored to the source language when source ≠ target. Decision: harden the `title`
+instruction in `config/models.toml` and the schema field description in `summarize.py` — the title must
+be written in the target language even if the material is spoken in another language; never copy a
+source-language phrase. The paid T10 live gate on real Sonnet (`2 passed`, cross-language input)
+confirmed the fix and shipped in v1.1.0. Commits: 94d7e93, 5c8fbd4.
 
 ### TD-10 — File input forced manual path typing (no picker) ✓ CLOSED
 
@@ -135,7 +130,7 @@ Windows run. **Extended 2026-06-25:** the reveal now also fires for the MP3-only
 (`output/audio`) — transcript flows still pop `output/transcripts`, one folder per launch by menu
 choice — and the once-deferred no-focus-steal open landed: `reveal_dir` uses
 `ShellExecuteW(SW_SHOWNOACTIVATE)` (falls back to `os.startfile`, and logs a `Folder ready:` line on
-failure instead of swallowing it). Pending a 4060 Windows verification pass.
+failure instead of swallowing it). 4060-Windows-verified 2026-06-25 — the folder pops behind the console.
 
 ### TD-12 — `.mp3` input offered MP3/Both actions (extraction is a no-op there) ✓ CLOSED
 
