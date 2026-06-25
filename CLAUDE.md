@@ -35,8 +35,15 @@ operator approval.
   No `job.json`, no history layer.
 - **Pure stages.** Each pipeline stage is pure over an in-memory object so the whole
   pipeline is unit-testable with `SUMMARIZE` mocked.
-- **Single-pass.** Summarize the whole transcript in one structured call; a hard
-  overflow guard stops cleanly above budget. No chunking until a real input trips it.
+- **Single-pass below the QualityBudget; map-reduce above it (TD-5).** Material under
+  the QualityBudget (tokens *and* duration) is summarized in one structured call.
+  Long/dense material that crosses it is split into balanced, overlapping chunks
+  (MAP); the extracted points are concatenated and conservatively deduped — never
+  re-summarized — and only title/overview/core_idea come from a synthesis call
+  (REDUCE). Completeness over a single shallow pass. *Operator-approved 2026-06-25;
+  supersedes the original single-pass-only rule. Per-chunk checkpointing stays cut —
+  a failed chunk fails the whole run loud and retries from the saved transcript (no
+  job engine).*
 - **Config is data, not code.** Model IDs, prices, model source URL, settings are
   editable without a code change.
 - **Fail loud, return to menu.** Every error path = human-readable message + clean

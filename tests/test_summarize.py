@@ -22,7 +22,8 @@ from typing import Any
 import pytest
 
 from echogist import summarize
-from echogist.config import ModelTier, SummarizeConfig
+from echogist.chunk import Chunk
+from echogist.config import ChunkConfig, ModelTier, SummarizeConfig
 from echogist.summarize import (
     ActionItem,
     CallOutcome,
@@ -213,6 +214,43 @@ def test_parse_coerces_non_list_arrays_to_empty() -> None:
     assert s.recurring_themes == ()
 
 
+def test_parse_reads_section_bullets() -> None:
+    # bullets carry the section's CONTENT (3-5 for long material); they parse onto
+    # the marker, trimmed and with empties dropped (via _str_list).
+    data = _full_tool_input() | {
+        "section_timecodes": [
+            {
+                "timecode": "[00:00:00]",
+                "title": "Intro",
+                "bullets": ["  First point  ", "", "Second point"],
+            },
+            {"timecode": "[00:12:30]", "title": "Costs"},  # missing bullets -> empty tuple
+        ]
+    }
+    s = summarize._parse_summary(data, "en", source_stem="x")
+    assert s.section_timecodes[0] == SectionMarker(
+        "[00:00:00]", "Intro", ("First point", "Second point")
+    )
+    assert s.section_timecodes[1].bullets == ()  # absent bullets degrade to empty, not crash
+
+
+def test_parse_coerces_non_list_bullets_to_empty() -> None:
+    data = _full_tool_input() | {
+        "section_timecodes": [{"timecode": "[00:01:00]", "title": "s", "bullets": "oops"}]
+    }
+    s = summarize._parse_summary(data, "en", source_stem="x")
+    assert s.section_timecodes[0].bullets == ()
+
+
+def test_no_upper_limit_in_schema_or_prompt() -> None:
+    # Regression for the truncation bug: the schema/prompt must not reimpose the old
+    # "3-7 / 2-6 / 2-4 / 1-2" element caps. Guards against a silent re-tightening.
+    schema = summarize._tool_schema()["input_schema"]["properties"]
+    blob = json.dumps(schema, ensure_ascii=False)
+    for capped in ("3-7", "2-6", "2-4", "1-2 sentence", "between 3 and 7", "between 2 and 6"):
+        assert capped not in blob, f"old element cap leaked back into the schema: {capped!r}"
+
+
 def test_parse_drops_decisions_without_a_statement() -> None:
     data = _full_tool_input() | {
         "decisions": [
@@ -322,7 +360,7 @@ def test_save_raw_result_writes_titled_json_no_date_prefix(tmp_path: Path) -> No
     assert path == tmp_path / "AI in 2026.json"  # no date prefix (plan §3)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["title"] == "AI in 2026"
-    assert data["section_timecodes"] == [{"timecode": "[00:00:00]", "title": "s"}]
+    assert data["section_timecodes"] == [{"timecode": "[00:00:00]", "title": "s", "bullets": []}]
 
 
 def test_save_raw_result_keeps_cyrillic_literal(tmp_path: Path) -> None:
@@ -524,3 +562,228 @@ def test_default_caller_status_error_is_recoverable(monkeypatch: pytest.MonkeyPa
     _install_fake(monkeypatch, mod)
     with pytest.raises(SummarizeError, match="402"):
         summarize._default_caller({"model": "m"}, "k")
+
+
+# --------------------------------------------------------------------------- #
+# TD-5 — map-reduce: request builders, merge/dedup, orchestration, dispatch
+# --------------------------------------------------------------------------- #
+def _chunk(text: str = "[00:00:00] hi", index: int = 1, total: int = 2) -> Chunk:
+    return Chunk(text=text, index=index, total=total, start_seconds=0.0, end_seconds=60.0)
+
+
+def _scripted_caller(map_outputs: list[dict[str, Any]], synthesis: dict[str, Any]) -> Any:
+    """A caller that returns the queued map outputs in order, and ``synthesis`` for the
+    reduce call (detected by the forced tool name in the request). Records call count."""
+
+    def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
+        name = request["tools"][0]["name"]
+        if name == "emit_synthesis":
+            return CallOutcome(
+                tool_input=synthesis, stop_reason="tool_use", input_tokens=10, output_tokens=20
+            )
+        out = map_outputs[caller.calls]  # type: ignore[attr-defined]
+        caller.calls += 1  # type: ignore[attr-defined]
+        return CallOutcome(
+            tool_input=out, stop_reason="tool_use", input_tokens=100, output_tokens=50
+        )
+
+    caller.calls = 0  # type: ignore[attr-defined]
+    return caller
+
+
+def test_build_map_request_marks_the_segment() -> None:
+    req = summarize.build_map_request(_chunk(index=2, total=5), _tier(), _cfg(), language="ru")
+    assert req["tools"][0]["name"] == "emit_summary"  # full extraction contract per chunk
+    assert "segment 2 of 5" in req["system"]  # map note injected ahead of the base prompt
+    assert "Summarize in" in req["system"]  # base prompt still present
+
+
+def test_build_reduce_request_forces_synthesis_tool() -> None:
+    req = summarize.build_reduce_request("KEY POINTS:\n- x", _tier(), _cfg(), language="en")
+    assert req["tool_choice"] == {"type": "tool", "name": "emit_synthesis"}
+    schema = req["tools"][0]["input_schema"]
+    assert set(schema["required"]) == {"title", "overview", "core_idea"}
+
+
+def test_dedup_keeps_distinct_drops_normalized_duplicates() -> None:
+    assert summarize._dedup_strs(["A point.", "a  POINT.", "Other"]) == ("A point.", "Other")
+
+
+def test_merge_sections_unions_bullets_and_sorts_by_timecode() -> None:
+    a = SectionMarker("[00:10:00]", "Costs", ("cheaper",))
+    b = SectionMarker("[00:00:00]", "Intro", ("hi",))
+    dup = SectionMarker("[00:10:00]", "Costs", ("cheaper", "and faster"))  # overlap dup, new bullet
+    merged = summarize._merge_sections([a, b, dup])
+    assert [m.timecode for m in merged] == ["[00:00:00]", "[00:10:00]"]  # sorted by time
+    assert merged[1].bullets == ("cheaper", "and faster")  # bullets unioned, none dropped
+
+
+def test_summarize_chunked_maps_each_chunk_then_reduces() -> None:
+    p1 = _full_tool_input() | {"key_takeaways": ["A", "B"], "recurring_themes": ["x"]}
+    p2 = _full_tool_input() | {"key_takeaways": ["B", "C"], "recurring_themes": ["x", "y"]}
+    synthesis = {"title": "Whole", "overview": "ov", "core_idea": "ci"}
+    caller = _scripted_caller([p1, p2], synthesis)
+    chunks = [_chunk(index=1, total=2), _chunk(index=2, total=2)]
+
+    result = summarize.summarize_chunked(
+        "ignored",
+        _tier(),
+        _cfg(),
+        chunks,
+        language="ru",
+        source_stem="talk",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert caller.calls == 2  # one MAP call per chunk...
+    # ...plus the reduce call: 3 total. Usage summed across all of them.
+    assert result.input_tokens == 100 + 100 + 10
+    assert result.output_tokens == 50 + 50 + 20
+    # Completeness: B is deduped, A and C survive; holistic fields come from synthesis.
+    assert result.summary.key_takeaways == ("A", "B", "C")
+    assert result.summary.recurring_themes == ("x", "y")
+    assert result.summary.title == "Whole"
+    assert result.summary.core_idea == "ci"
+
+
+def test_summarize_chunked_truncated_map_fails_loud_naming_segment() -> None:
+    def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
+        return CallOutcome(
+            tool_input=_full_tool_input(), stop_reason="max_tokens", input_tokens=1, output_tokens=1
+        )
+
+    with pytest.raises(SummarizeError, match="Segment 1/1"):
+        summarize.summarize_chunked(
+            "x",
+            _tier(),
+            _cfg(),
+            [_chunk(index=1, total=1)],
+            language="en",
+            source_stem="x",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+        )
+
+
+def test_summarize_auto_single_pass_for_short_input() -> None:
+    caller = _ok_caller(_full_tool_input())
+    # Budgets so high nothing trips -> single pass, exactly one call through the seam.
+    cfg = ChunkConfig(quality_budget_tokens=10_000_000, quality_budget_seconds=10_000_000)
+    result = summarize.summarize_auto(
+        "[00:00:00] short transcript",
+        _tier(),
+        _cfg(),
+        chunk_cfg=cfg,
+        language="ru",
+        source_stem="t",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert isinstance(result, SummarizeResult)
+
+
+def test_merge_sections_collapses_same_timecode_under_different_titles() -> None:
+    # Overlap re-feeds one boundary block to two chunks; at temperature=0 the model can
+    # still retitle that same-timecode section per chunk context. Keyed on timecode ALONE,
+    # the two copies collapse into ONE section (first title) with bullets unioned — not two
+    # sections at one timecode with their bullets split.
+    a = SectionMarker("[00:05:00]", "Pricing", ("tiered",))
+    b = SectionMarker("[00:05:00]", "Costs and pricing", ("tiered", "per seat"))
+    merged = summarize._merge_sections([a, b])
+    assert len(merged) == 1
+    assert merged[0].title == "Pricing"  # first title wins
+    assert merged[0].bullets == ("tiered", "per seat")  # bullets unioned, none split off
+
+
+def test_merge_decisions_backfills_missing_rationale_from_later_duplicate() -> None:
+    # Overlap order often puts the emptier copy first; the later rationale is back-filled
+    # onto the same (normalized) decision rather than discarded.
+    out = summarize._merge_decisions(
+        [
+            Decision("Adopt int8", ""),
+            Decision("adopt  INT8", "halves VRAM"),  # normalized-equal statement, has rationale
+            Decision("Hire", "growth"),
+        ]
+    )
+    assert [d.decision for d in out] == ["Adopt int8", "Hire"]  # deduped, order kept
+    assert out[0].rationale == "halves VRAM"  # back-filled, not lost
+
+
+def test_merge_decisions_keeps_present_rationale_over_later_duplicate() -> None:
+    out = summarize._merge_decisions(
+        [Decision("X", "first reason"), Decision("x", "second reason")]
+    )
+    assert out == (Decision("X", "first reason"),)  # an existing rationale is never overwritten
+
+
+def test_merge_action_items_backfills_missing_owner_and_estimate() -> None:
+    out = summarize._merge_action_items(
+        [ActionItem("Write spec", "", ""), ActionItem("write  SPEC", "Ann", "2d")]
+    )
+    assert out == (ActionItem("Write spec", "Ann", "2d"),)  # owner + estimate back-filled
+
+
+def test_summarize_chunked_truncated_synthesis_fails_loud() -> None:
+    # The reduce/synthesis call has its OWN truncation guard, distinct from the map guard.
+    def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
+        name = request["tools"][0]["name"]
+        if name == "emit_synthesis":
+            return CallOutcome(
+                tool_input={"title": "T", "overview": "o", "core_idea": "c"},
+                stop_reason="max_tokens",
+                input_tokens=1,
+                output_tokens=1,
+            )
+        return CallOutcome(
+            tool_input=_full_tool_input(), stop_reason="tool_use", input_tokens=1, output_tokens=1
+        )
+
+    with pytest.raises(SummarizeError, match="synthesis step hit the output cap"):
+        summarize.summarize_chunked(
+            "x",
+            _tier(),
+            _cfg(),
+            [_chunk(index=1, total=1)],
+            language="en",
+            source_stem="x",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+        )
+
+
+def test_summarize_auto_chunks_when_over_quality_budget() -> None:
+    calls = {"n": 0}
+
+    def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
+        calls["n"] += 1
+        name = request["tools"][0]["name"]
+        if name == "emit_synthesis":
+            return CallOutcome(
+                tool_input={"title": "T", "overview": "o", "core_idea": "c"},
+                stop_reason="tool_use",
+                input_tokens=1,
+                output_tokens=1,
+            )
+        return CallOutcome(
+            tool_input=_full_tool_input(), stop_reason="tool_use", input_tokens=1, output_tokens=1
+        )
+
+    # Force chunking on any input; a multi-block transcript so the planner splits it.
+    cfg = ChunkConfig(quality_budget_tokens=1, quality_budget_seconds=1, target_chunk_tokens=20)
+    text = "\n".join(f"[00:{m:02d}:00] word word word" for m in range(6))
+    summarize.summarize_auto(
+        text,
+        _tier(),
+        _cfg(),
+        chunk_cfg=cfg,
+        language="ru",
+        source_stem="t",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert calls["n"] >= 3  # >=2 map calls + 1 reduce (chunked, not single-pass)

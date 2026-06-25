@@ -24,16 +24,43 @@ verification (T7, operator, deferred) remains.
   keeps the killswitch CI offline/no-TTY. Files: `echogist/ui.py`, `echogist/theme.py`. File picker,
   screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu all built and Windows-accepted.
 - **v1.1.0** ships decisions + action_items in the summary plus a hardened `[summarize]` system prompt
-  (degraded-path, 3–7/2–6 list bounds, fixed `{unassigned}` label, `temperature=0`, TD-6 title language).
+  (degraded-path, fixed `{unassigned}` label, `temperature=0`, TD-6 title language). The 3–7/2–6 list
+  bounds it shipped were **removed in `[Unreleased]`** (see below).
 
 **Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **320 passed, 2 skipped** (the 2 live tests).
+`main` passes ruff + mypy --strict + tests. Current: **349 passed, 2 skipped** (the 2 live tests).
 
-**Unreleased (CHANGELOG `[Unreleased]`):** transcript timecodes coarsened — Whisper segments grouped
-into ~60s blocks (`[transcript] block_seconds` in models.toml), one `[HH:MM:SS]` per readable
-paragraph instead of per VAD segment (−95% timecode lines on a real lecture). Same fix aligns both
-SUMMARIZE paths: the fresh run now summarizes the saved checkpoint verbatim (was timecode-free
-`transcript.text`), so `section_timecodes` are citeable on fresh runs too, not just on re-summarize.
+**Unreleased (CHANGELOG `[Unreleased]`), two changes:**
+1. **Timecodes coarsened** — Whisper segments grouped into ~60s blocks (`[transcript] block_seconds`),
+   one `[HH:MM:SS]` per paragraph (−95% lines). Same fix aligns both SUMMARIZE paths: the fresh run now
+   summarizes the saved checkpoint verbatim (was timecode-free `transcript.text`), so `section_timecodes`
+   are citeable on fresh runs too. (Committed `105da22`.)
+2. **No-upper-limit summary + section bullets (anti-truncation).** Removed the 3–7/2–6/2–4/1–2 element
+   caps from both the schema (`summarize.py`) and the prompt (`models.toml`) — model must emit ALL
+   concepts (lower bounds kept). Added structural `bullets: list[str]` to `SectionMarker` (schema /
+   dataclass / parser / save-load / PDF+MD render): 3–5 theses per section for >20-min material.
+   `max_output_tokens` 4096→8192, `[guard] output_tokens_estimate` 2000→4000. No beta header needed at
+   this size. Archived `ENGINEERING_PLAN.md §135` ("summary length is roughly constant") is now a
+   deliberate deviation, left unedited (frozen spec).
+3. **Map-reduce for long/dense material (TD-5) — completeness guarantee.** New `echogist/chunk.py`
+   (pure/local): a transcript over the **QualityBudget** (`[chunk]` in models.toml — >40k tok OR >60 min,
+   below ContextBudget on purpose: single-pass loses the middle of a long context) is split into balanced,
+   ~90s-overlapping chunks on block boundaries. `summarize.summarize_chunked` MAPs each chunk (full
+   emit_summary contract, "segment N/M" note) then REDUCEs: list fields concatenated + conservatively
+   deduped (never re-summarized), a small `emit_synthesis` call writes only title/overview/core_idea.
+   `summarize_auto` dispatches single vs chunked; the menu shows chunk count + N+1-call cost and logs the
+   acceptance invariant (`extracted → after dedup`). The old single-pass "too long" refusal is retired.
+   Per-chunk checkpointing stays cut (fail-loud, retry from transcript — no job engine). Files touched:
+   `chunk.py` (new), `summarize.py`, `config.py` (`ChunkConfig` + `[chunk]` + reduce/map prompts),
+   `cost.py` (`estimate_cost_chunked`), `menu.py`, `config/models.toml`, `CLAUDE.md` (Single-pass
+   principle superseded, operator-approved), + tests (`test_chunk.py` new, summarize/config/menu).
+
+**Calibration gap (both #2 and #3 need ONE paid run on a real lecture, killswitch blocks live test):**
+`max_output_tokens=8192` per chunk, `target_chunk_tokens=12000`, and the two QualityBudgets are
+unverified on real RU material. The first real chunked run prints the `extracted → after dedup` numbers
+and per-call token usage — read those to confirm 12k is right and dedup isn't collapsing ideas; if a
+segment trips the loud `max_tokens` guard, raise `max_output_tokens` (and switch SUMMARIZE to streaming
+above ~16k). Map-stage is still lossy *within* a chunk; the reduce is not (that is the guarantee).
 
 ## Config / behavior notes
 

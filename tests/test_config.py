@@ -133,8 +133,50 @@ def test_blank_system_prompt_errors(tmp_path: Path) -> None:
 
 def test_shipped_summarize_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
-    assert cfg.summarize.max_output_tokens == 4096
+    assert cfg.summarize.max_output_tokens == 8192
     assert "{language}" in cfg.summarize.system_prompt
+
+
+# --------------------------------------------------------------------------- #
+# [chunk] — map-reduce config (TD-5): optional, defaulted, validated
+# --------------------------------------------------------------------------- #
+def test_shipped_chunk_config_loads() -> None:
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.chunk.quality_budget_tokens == 40_000
+    assert cfg.chunk.quality_budget_seconds == 3_600
+    assert cfg.chunk.target_chunk_tokens == 12_000
+    assert cfg.chunk.overlap_seconds == 90
+    # The shipped reduce/map prompt scaffolding is present (prompt = data).
+    assert "{language}" in cfg.summarize.reduce_system_prompt
+    assert "{n}" in cfg.summarize.map_note_template
+
+
+def test_missing_chunk_table_uses_defaults(tmp_path: Path) -> None:
+    # VALID_MODELS_TOML has no [chunk] / no reduce_system_prompt -> code defaults apply.
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.chunk.quality_budget_tokens == 40_000
+    assert cfg.chunk.target_chunk_tokens == 12_000
+    assert "{language}" in cfg.summarize.reduce_system_prompt  # defaulted, not crashed
+
+
+def test_chunk_override_parses(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML + "\n[chunk]\ntarget_chunk_tokens = 8000\noverlap_seconds = 0\n"
+    cfg = load_model_config(_write(tmp_path / "models.toml", text))
+    assert cfg.chunk.target_chunk_tokens == 8000
+    assert cfg.chunk.overlap_seconds == 0  # 0 overlap is valid (>= 0, not > 0)
+    assert cfg.chunk.quality_budget_tokens == 40_000  # untouched key keeps its default
+
+
+def test_chunk_invalid_value_fails_loud(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML + "\n[chunk]\ntarget_chunk_tokens = -5\n"
+    with pytest.raises(ConfigError, match="must be > 0"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
+def test_chunk_negative_overlap_fails_loud(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML + "\n[chunk]\noverlap_seconds = -1\n"
+    with pytest.raises(ConfigError, match="must be >= 0"):
+        load_model_config(_write(tmp_path / "models.toml", text))
 
 
 # --------------------------------------------------------------------------- #

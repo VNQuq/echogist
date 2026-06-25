@@ -101,6 +101,32 @@ def test_estimate_output_is_constant_regardless_of_input() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# estimate_cost_chunked (TD-5) — a true CEILING over N map calls + 1 reduce
+# --------------------------------------------------------------------------- #
+def test_estimate_cost_chunked_projects_every_call_at_the_output_cap() -> None:
+    # CEILING: each of the N+1 calls projected at the cap (not the smaller per-call
+    # estimate); the reduce INPUT is the merged map outputs, bounded by N * cap.
+    est = cost.estimate_cost_chunked([1000, 2000], _tier(), output_cap=8192)
+    assert est.input_tokens == 3000 + 2 * 8192  # sum(map inputs) + reduce input (N*cap)
+    assert est.output_tokens == 3 * 8192  # (N+1) calls, each at the cap
+    assert est.price_out_per_mtok == 15.0  # tier prices carried through
+
+
+def test_estimate_cost_chunked_single_chunk_is_two_capped_calls() -> None:
+    est = cost.estimate_cost_chunked([1000], _tier(), output_cap=4096)
+    assert est.input_tokens == 1000 + 4096  # one map input + reduce input (N=1)
+    assert est.output_tokens == 2 * 4096  # 1 map + 1 reduce
+
+
+def test_estimate_cost_chunked_is_a_ceiling_over_the_worst_case() -> None:
+    # The whole point of fix #4: the operator approves this quote, so even if every one
+    # of the N+1 calls maxes its output cap the bill cannot exceed the quote.
+    cap = 8192
+    est = cost.estimate_cost_chunked([5000, 5000, 5000], _tier(), output_cap=cap)
+    assert est.output_tokens >= 4 * cap  # 3 maps + 1 reduce all maxing the cap
+
+
+# --------------------------------------------------------------------------- #
 # actual_cost — from the audited response.usage counts
 # --------------------------------------------------------------------------- #
 def test_actual_cost_from_usage() -> None:

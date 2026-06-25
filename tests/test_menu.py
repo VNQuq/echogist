@@ -398,13 +398,32 @@ def test_missing_api_key_guides_and_skips_call(tmp_path: Path) -> None:  # F3
     assert calls["summarize"] == 0
 
 
-def test_overflow_guard_stops_before_call(tmp_path: Path) -> None:  # F6
-    _write_settings(tmp_path, model_tier="economy")  # smallest context window
-    big = "a" * 600_000  # est tokens > economy safe budget, all local
+def test_long_transcript_triggers_chunked_summary(tmp_path: Path) -> None:  # TD-5
+    # A long/dense transcript no longer hits the old "too long" refusal — it routes to
+    # map-reduce (chunked) so every idea is captured. The menu still makes ONE seam call
+    # (summarize_auto chunks internally); the chunking decision + message live in the menu.
+    _write_settings(tmp_path, model_tier="economy")
+    big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # ~70K tok, timecoded
     _seed_transcript(tmp_path, text=big)
     deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
-    assert "too long" in stub.log_text
+    assert "map-reduce" in stub.log_text  # routed to chunked summarization
+    assert "too long" not in stub.log_text  # the old refusal is gone
+    assert calls["summarize"] == 1  # reached the wire (chunking happens inside the seam)
+
+
+def test_chunked_path_still_guards_an_oversize_segment(tmp_path: Path) -> None:  # TD-5 / F6
+    # Chunking lowers the per-call input but does NOT repeal the overflow guard. A single
+    # un-splittable block (plan_chunks never cuts mid-block, K is clamped to len(blocks))
+    # that exceeds the tier context is caught locally, before any paid call — not sent to
+    # the wire to fail mid-run after partial spend.
+    _write_settings(tmp_path, model_tier="economy")  # safe_budget = 200000 * 0.8 = 160000
+    one_huge_block = "[00:00:00] " + "слово" * 60_000  # ~181K est tokens in ONE block
+    _seed_transcript(tmp_path, text=one_huge_block)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert "too large" in stub.log_text  # the F6-style oversize-segment guard fired
+    assert "safe budget" in stub.log_text
     assert calls["summarize"] == 0  # never reached the wire
 
 

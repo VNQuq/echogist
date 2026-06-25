@@ -24,9 +24,11 @@ config data (:attr:`SummarizeConfig.system_prompt`); the SCHEMA is code, here, s
 the two cannot drift (operator decision 2026-06-15: "prompt = data, schema = code").
 
 **Cap vs projection.** The request's ``max_tokens`` is :attr:`max_output_tokens`
-(~4096, real Cyrillic headroom) — separate from the ~2K cost projection. A reply
-that still hits the cap (``stop_reason == "max_tokens"``) yields truncated, invalid
-tool JSON, so it is caught and surfaced rather than parsed into a half-summary.
+(8192 — real headroom for a dense, no-upper-limit RU summary with per-section
+bullets) — separate from the :attr:`GuardConfig.output_tokens_estimate` cost
+projection. A reply that still hits the cap (``stop_reason == "max_tokens"``) yields
+truncated, invalid tool JSON, so it is caught and surfaced (the operator raises the
+cap in models.toml) rather than parsed into a half-summary.
 
 **F13 ordering.** :func:`save_raw_result` persists the raw structured result as
 ``output/summaries/raw/<title>.json`` (no date prefix, plan §3) and is meant to run
@@ -38,20 +40,27 @@ never ``count_tokens`` (that is a network call — see the guard).
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from . import naming
-from .config import ModelTier, SummarizeConfig
+from .chunk import Chunk, needs_chunking, plan_chunks, total_duration_seconds
+from .config import ChunkConfig, ModelTier, SummarizeConfig
+from .guard import estimate_input_tokens
 
 Logger = Callable[[str], object]
 
 # The forced-tool name. The model is pinned to call exactly this tool, and its
 # input becomes the structured summary.
 _TOOL_NAME = "emit_summary"
+
+# The forced-tool name for the REDUCE/synthesis step (TD-5 map-reduce). It emits only
+# the holistic fields (title/overview/core_idea); the list fields are merged
+# mechanically and never pass through this call, so the merge cannot drop a point.
+_SYNTHESIS_TOOL_NAME = "emit_synthesis"
 
 # Human language names injected into the prompt's {language} token. settings
 # validation already restricts the code to these; an unknown code falls back to
@@ -80,14 +89,19 @@ class SummarizeError(Exception):
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class SectionMarker:
-    """One section of the material: a transcript ``[HH:MM:SS]`` and a short title.
+    """One section of the material: a transcript ``[HH:MM:SS]``, a title, and bullets.
 
     Timecodes are copied from the transcript by the model (the prompt forbids
-    inventing them); we keep them as the raw string the model emitted.
+    inventing them); we keep them as the raw string the model emitted. ``bullets``
+    are the section's key points (3-5 for material longer than ~20 min, empty for
+    short material) — the structural way to surface section CONTENT instead of just
+    a label. Defaults to empty so a section is well-formed with no bullets and older
+    callers/tests that pass only timecode+title still construct.
     """
 
     timecode: str
     title: str
+    bullets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -192,11 +206,21 @@ def _tool_schema() -> dict[str, Any]:
                         "(not the spoken language). No date, no extension."
                     ),
                 },
-                "overview": {"type": "string", "description": "2-4 sentences of what it covers."},
+                "overview": {
+                    "type": "string",
+                    "description": (
+                        "What the material is and what it covers. As many sentences as the "
+                        "content needs to be faithful — no upper limit; never truncate."
+                    ),
+                },
                 "key_takeaways": {
                     "type": "array",
                     "items": string,
-                    "description": "Most important concrete points, one sentence each (3-7 items).",
+                    "description": (
+                        "EVERY important concrete point, one sentence each. Include ALL of "
+                        "them, however many there are — no upper limit; do not stop early or "
+                        "collapse distinct points. At least 3 when the material has that many."
+                    ),
                 },
                 "section_timecodes": {
                     "type": "array",
@@ -212,8 +236,18 @@ def _tool_schema() -> dict[str, Any]:
                                 "type": "string",
                                 "description": "Short section title, in the target language.",
                             },
+                            "bullets": {
+                                "type": "array",
+                                "items": string,
+                                "description": (
+                                    "Key points of THIS section, one short sentence each. For "
+                                    "material longer than ~20 minutes give 3-5 bullets per "
+                                    "section that actually convey its content; for short "
+                                    "material an empty list is fine."
+                                ),
+                            },
                         },
-                        "required": ["timecode", "title"],
+                        "required": ["timecode", "title", "bullets"],
                     },
                 },
                 "decisions": {
@@ -268,9 +302,18 @@ def _tool_schema() -> dict[str, Any]:
                 "recurring_themes": {
                     "type": "array",
                     "items": string,
-                    "description": "Recurring ideas as short noun phrases (2-6 words), 2-6 items.",
+                    "description": (
+                        "Recurring ideas as short noun phrases. Include ALL that genuinely "
+                        "recur — no upper limit; empty list if nothing does."
+                    ),
                 },
-                "core_idea": {"type": "string", "description": "1-2 sentences: the central point."},
+                "core_idea": {
+                    "type": "string",
+                    "description": (
+                        "The single central point a reader should leave with. As many "
+                        "sentences as it takes to state it fully; no upper limit."
+                    ),
+                },
             },
             "required": [
                 "title",
@@ -304,7 +347,12 @@ def _unassigned_label(code: str) -> str:
 
 
 def build_request(
-    transcript_text: str, tier: ModelTier, cfg: SummarizeConfig, *, language: str
+    transcript_text: str,
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    *,
+    language: str,
+    extra_system: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``messages.create`` kwargs (pure; no network).
 
@@ -315,11 +363,14 @@ def build_request(
     same transcript yields the same title (the title is the artifact filename stem
     via :func:`naming.summary_stem`; a drifting title would dedup into ``-2``/``-3``
     duplicates instead of overwriting on a re-run). ``tool_choice`` forces the one
-    tool, suppressing any prose preamble.
+    tool, suppressing any prose preamble. ``extra_system`` is prepended to the system
+    prompt — the map step uses it to mark "this is segment N of M" (TD-5 chunking).
     """
     system = cfg.system_prompt.replace("{language}", _language_name(language)).replace(
         "{unassigned}", _unassigned_label(language)
     )
+    if extra_system:
+        system = f"{extra_system.strip()}\n\n{system}"
     return {
         "model": tier.model_id,
         "max_tokens": cfg.max_output_tokens,
@@ -339,7 +390,12 @@ def _str_list(value: Any) -> tuple[str, ...]:
 
 
 def _markers(value: Any) -> tuple[SectionMarker, ...]:
-    """Coerce the section_timecodes array to markers; skip entries missing a timecode."""
+    """Coerce the section_timecodes array to markers; skip entries missing a timecode.
+
+    ``bullets`` is coerced through :func:`_str_list` (trimmed, empties dropped), so a
+    section with no bullets — or a malformed bullets field — degrades to an empty
+    tuple rather than crashing the stage.
+    """
     if not isinstance(value, list):
         return ()
     out: list[SectionMarker] = []
@@ -349,7 +405,13 @@ def _markers(value: Any) -> tuple[SectionMarker, ...]:
         timecode = str(item.get("timecode", "")).strip()
         if not timecode:  # a section with no real timecode is dropped, not faked
             continue
-        out.append(SectionMarker(timecode=timecode, title=str(item.get("title", "")).strip()))
+        out.append(
+            SectionMarker(
+                timecode=timecode,
+                title=str(item.get("title", "")).strip(),
+                bullets=_str_list(item.get("bullets")),
+            )
+        )
     return tuple(out)
 
 
@@ -560,4 +622,349 @@ def summarize(
         summary=summary,
         input_tokens=outcome.input_tokens,
         output_tokens=outcome.output_tokens,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TD-5 — map-reduce over chunks (the completeness path for long/dense material)
+# --------------------------------------------------------------------------- #
+# The single-pass `summarize` above stays the MAP primitive (one chunk -> one partial
+# Summary). The REDUCE step concatenates and DEDUPS the partials' list fields — it
+# never re-summarizes them, so a point a chunk extracted can't be dropped in the merge
+# — and a small synthesis call writes only the holistic title/overview/core_idea.
+def _reduce_tool_schema() -> dict[str, Any]:
+    """The synthesis tool: only the holistic fields, over already-extracted points."""
+    return {
+        "name": _SYNTHESIS_TOOL_NAME,
+        "description": "Return the overall title, overview, and core idea of the whole material.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "Short, specific, meaningful title for the WHOLE material in the "
+                        "target summary language. No date, no extension."
+                    ),
+                },
+                "overview": {
+                    "type": "string",
+                    "description": (
+                        "Faithful overview of the whole material. As many sentences as it "
+                        "needs — no upper limit; never truncate."
+                    ),
+                },
+                "core_idea": {
+                    "type": "string",
+                    "description": "The single central point a reader should leave with.",
+                },
+            },
+            "required": ["title", "overview", "core_idea"],
+        },
+    }
+
+
+def build_map_request(
+    chunk: Chunk, tier: ModelTier, cfg: SummarizeConfig, *, language: str
+) -> dict[str, Any]:
+    """The MAP request for one chunk: the normal summary call + a 'segment N of M' note.
+
+    Reuses the full emit_summary contract (so each chunk yields a complete partial
+    Summary), with ``cfg.map_note_template`` prepended to the system prompt to tell the
+    model this is one segment of a longer transcript and to extract everything.
+    """
+    note = (
+        cfg.map_note_template.replace("{n}", str(chunk.index))
+        .replace("{total}", str(chunk.total))
+        .replace("{span}", chunk.span)
+        .replace("{language}", _language_name(language))
+    )
+    return build_request(chunk.text, tier, cfg, language=language, extra_system=note)
+
+
+def build_reduce_request(
+    points_text: str, tier: ModelTier, cfg: SummarizeConfig, *, language: str
+) -> dict[str, Any]:
+    """The REDUCE/synthesis request: title+overview+core_idea over the merged points."""
+    system = cfg.reduce_system_prompt.replace("{language}", _language_name(language))
+    return {
+        "model": tier.model_id,
+        "max_tokens": cfg.max_output_tokens,
+        "temperature": 0,
+        "system": system,
+        "messages": [{"role": "user", "content": points_text}],
+        "tools": [_reduce_tool_schema()],
+        "tool_choice": {"type": "tool", "name": _SYNTHESIS_TOOL_NAME},
+    }
+
+
+def _norm(s: str) -> str:
+    """Normalize for dedup: lowercased, whitespace-collapsed. Conservative — only
+    near-identical strings collide, so a genuinely distinct point is never merged away."""
+    return " ".join(s.lower().split())
+
+
+def _dedup_strs(items: Iterable[str]) -> tuple[str, ...]:
+    """Concatenate, dropping later exact (normalized) duplicates; order preserved."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in items:
+        key = _norm(s)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(s)
+    return tuple(out)
+
+
+def _tc_seconds(timecode: str) -> float:
+    """Parse an ``[HH:MM:SS]`` timecode to seconds for ordering; unparseable -> inf
+    (sorts last, never crashes the merge)."""
+    digits = timecode.strip().strip("[]").split(":")
+    try:
+        h, m, s = (int(p) for p in digits)
+    except (ValueError, TypeError):
+        return float("inf")
+    return float(h * 3600 + m * 60 + s)
+
+
+def _merge_sections(markers: Iterable[SectionMarker]) -> tuple[SectionMarker, ...]:
+    """Concatenate section markers across chunks, dedup by TIMECODE, union their
+    bullets, and order by timecode. No bullet is dropped (bullets are unioned, not
+    summarized).
+
+    Keyed on the normalized timecode ALONE, not (timecode, title): the overlap window
+    re-feeds a boundary block to two adjacent chunks, and at temperature=0 the model
+    can still title that same-timecode section differently in each chunk's context. A
+    (timecode, title) key would let those slip through as two sections at one timecode
+    with their bullets split — the exact duplication the overlap-dedup exists to
+    prevent. The timecode is copied verbatim from the transcript, so it is the stable
+    identity of a section; the first title seen wins.
+    """
+    grouped: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for m in markers:
+        key = _norm(m.timecode)
+        if key not in grouped:
+            grouped[key] = [m.timecode, m.title, list(m.bullets), {_norm(b) for b in m.bullets}]
+            order.append(key)
+        else:
+            _, _, bullets, seen = grouped[key]
+            for b in m.bullets:
+                if _norm(b) not in seen:
+                    seen.add(_norm(b))
+                    bullets.append(b)
+    merged = [
+        SectionMarker(timecode=grouped[k][0], title=grouped[k][1], bullets=tuple(grouped[k][2]))
+        for k in order
+    ]
+    return tuple(sorted(merged, key=lambda mk: _tc_seconds(mk.timecode)))
+
+
+def _merge_decisions(decisions: Iterable[Decision]) -> tuple[Decision, ...]:
+    """Dedup decisions by their (normalized) statement, preferring the richer copy.
+
+    Overlap can emit the same decision in two adjacent chunks — once with an empty
+    rationale, once with one — and chunk order means the emptier copy often comes
+    first. So on a collision a missing rationale is back-filled from the later
+    duplicate rather than discarded; a present rationale is never overwritten.
+    """
+    index: dict[str, int] = {}
+    out: list[Decision] = []
+    for d in decisions:
+        key = _norm(d.decision)
+        if not key:
+            continue
+        if key not in index:
+            index[key] = len(out)
+            out.append(d)
+        elif not out[index[key]].rationale and d.rationale:
+            kept = out[index[key]]
+            out[index[key]] = Decision(decision=kept.decision, rationale=d.rationale)
+    return tuple(out)
+
+
+def _merge_action_items(items: Iterable[ActionItem]) -> tuple[ActionItem, ...]:
+    """Dedup action items by their (normalized) task, preferring the richer copy.
+
+    Like :func:`_merge_decisions`: on a collision a missing owner or estimate is
+    back-filled from the later duplicate (overlap can emit the same task twice, the
+    emptier copy often first); a value already present is never overwritten.
+    """
+    index: dict[str, int] = {}
+    out: list[ActionItem] = []
+    for a in items:
+        key = _norm(a.task)
+        if not key:
+            continue
+        if key not in index:
+            index[key] = len(out)
+            out.append(a)
+        else:
+            kept = out[index[key]]
+            owner = kept.owner or a.owner
+            estimate = kept.estimate or a.estimate
+            if (owner, estimate) != (kept.owner, kept.estimate):
+                out[index[key]] = ActionItem(task=kept.task, owner=owner, estimate=estimate)
+    return tuple(out)
+
+
+def _serialize_points(
+    takeaways: tuple[str, ...],
+    sections: tuple[SectionMarker, ...],
+    decisions: tuple[Decision, ...],
+    action_items: tuple[ActionItem, ...],
+    themes: tuple[str, ...],
+) -> str:
+    """Render the merged points as plain text for the reduce/synthesis call's input.
+
+    The synthesis model reads these to write a title/overview/core_idea; it does NOT
+    re-emit them, so the format only needs to be legible, not machine-parseable.
+    """
+    lines: list[str] = ["KEY POINTS:"]
+    lines += [f"- {t}" for t in takeaways] or ["- (none)"]
+    if sections:
+        lines.append("\nSECTIONS:")
+        for m in sections:
+            lines.append(f"- {m.timecode} {m.title}".rstrip())
+            lines += [f"  - {b}" for b in m.bullets]
+    if decisions:
+        lines.append("\nDECISIONS:")
+        lines += [f"- {_decision_for_points(d)}" for d in decisions]
+    if action_items:
+        lines.append("\nACTION ITEMS:")
+        lines += [f"- {a.task}" for a in action_items]
+    if themes:
+        lines.append("\nRECURRING THEMES:")
+        lines += [f"- {t}" for t in themes]
+    return "\n".join(lines)
+
+
+def _decision_for_points(d: Decision) -> str:
+    return f"{d.decision} — {d.rationale}" if d.rationale else d.decision
+
+
+def summarize_chunked(
+    transcript_text: str,
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    chunks: Sequence[Chunk],
+    *,
+    language: str,
+    source_stem: str,
+    api_key: str,
+    today: date | None = None,
+    caller: Caller = _default_caller,
+    log: Logger = print,
+) -> SummarizeResult:
+    """Map-reduce summarize over pre-planned ``chunks`` (TD-5). N map calls + 1 reduce.
+
+    MAP: each chunk -> a full partial Summary via the same forced-tool contract.
+    MERGE: the partials' list fields are concatenated and conservatively deduped — a
+    point any chunk extracted survives verbatim into the result. REDUCE: a synthesis
+    call writes only title/overview/core_idea over the merged points. Token usage is
+    summed across every call. ``transcript_text`` is unused for the calls (the chunks
+    carry the text) but kept in the signature for symmetry with :func:`summarize`.
+    A truncated reply on ANY call fails loud, naming the segment, transcript saved.
+    """
+    partials: list[Summary] = []
+    total_in = total_out = 0
+    for ch in chunks:
+        log(f"Summarizing segment {ch.index}/{ch.total} ({ch.span})...")
+        outcome = caller(build_map_request(ch, tier, cfg, language=language), api_key)
+        if outcome.stop_reason == "max_tokens":
+            raise SummarizeError(
+                f"Segment {ch.index}/{ch.total} hit the output cap and was cut off. "
+                "Raise max_output_tokens (or lower target_chunk_tokens) in models.toml, "
+                "then retry from the saved transcript."
+            )
+        partials.append(_parse_summary(outcome.tool_input, language, source_stem=source_stem))
+        total_in += outcome.input_tokens
+        total_out += outcome.output_tokens
+
+    takeaways = _dedup_strs(t for p in partials for t in p.key_takeaways)
+    themes = _dedup_strs(t for p in partials for t in p.recurring_themes)
+    sections = _merge_sections(m for p in partials for m in p.section_timecodes)
+    decisions = _merge_decisions(d for p in partials for d in p.decisions)
+    action_items = _merge_action_items(a for p in partials for a in p.action_items)
+
+    # The acceptance invariant (operator decision): map-stage idea count vs post-merge.
+    # Conservative dedup makes a sharp collapse structurally impossible; surfacing the
+    # numbers makes a regressive "meat-grinder" reduce visible on every run.
+    extracted = sum(len(p.key_takeaways) for p in partials)
+    log(
+        f"Merged {len(chunks)} segments: {extracted} key points extracted "
+        f"-> {len(takeaways)} after dedup ({len(sections)} sections, "
+        f"{len(decisions)} decisions, {len(action_items)} actions)."
+    )
+
+    points_text = _serialize_points(takeaways, sections, decisions, action_items, themes)
+    log("Synthesizing overall title, overview, and core idea...")
+    syn = caller(build_reduce_request(points_text, tier, cfg, language=language), api_key)
+    if syn.stop_reason == "max_tokens":
+        raise SummarizeError(
+            "The synthesis step hit the output cap. Raise max_output_tokens in "
+            "models.toml, then retry from the saved transcript."
+        )
+    total_in += syn.input_tokens
+    total_out += syn.output_tokens
+
+    title = str(syn.tool_input.get("title", "")).strip() or _fallback_title(source_stem, today)
+    summary = Summary(
+        title=title,
+        overview=str(syn.tool_input.get("overview", "")).strip(),
+        key_takeaways=takeaways,
+        section_timecodes=sections,
+        recurring_themes=themes,
+        core_idea=str(syn.tool_input.get("core_idea", "")).strip(),
+        decisions=decisions,
+        action_items=action_items,
+        language=language,
+    )
+    log(f"Summary ready: {summary.title}")
+    return SummarizeResult(summary=summary, input_tokens=total_in, output_tokens=total_out)
+
+
+def summarize_auto(
+    transcript_text: str,
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    *,
+    chunk_cfg: ChunkConfig,
+    language: str,
+    source_stem: str,
+    api_key: str,
+    today: date | None = None,
+    caller: Caller = _default_caller,
+    log: Logger = print,
+) -> SummarizeResult:
+    """Dispatch single-pass vs map-reduce on the QualityBudget (TD-5). The one entry
+    the menu calls. Chunking decision is local + deterministic (same inputs the menu
+    used for its cost estimate), so the path that runs matches the price shown."""
+    est = estimate_input_tokens(transcript_text)
+    duration = total_duration_seconds(transcript_text)
+    if needs_chunking(est, duration, chunk_cfg):
+        chunks = plan_chunks(transcript_text, chunk_cfg)
+        log(f"Long/dense transcript: summarizing in {len(chunks)} segments (map-reduce).")
+        return summarize_chunked(
+            transcript_text,
+            tier,
+            cfg,
+            chunks,
+            language=language,
+            source_stem=source_stem,
+            api_key=api_key,
+            today=today,
+            caller=caller,
+            log=log,
+        )
+    return summarize(
+        transcript_text,
+        tier,
+        cfg,
+        language=language,
+        source_stem=source_stem,
+        api_key=api_key,
+        today=today,
+        caller=caller,
+        log=log,
     )

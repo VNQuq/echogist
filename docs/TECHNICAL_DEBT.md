@@ -24,19 +24,43 @@ Deadline/Trigger · SoT) + **What** / **Why deferred** / **When to open**.
 
 ## Open debts
 
-### TD-5 — Chunked map-reduce summarization deferred from v1.0
+### TD-5 — Chunked map-reduce summarization — SHIPPED (Unreleased, 2026-06-25)
 
-Severity: LOW · Created 2026-06-14 (eng-review) · Trigger: first real transcript that exceeds the single-pass context budget · SoT: this file
+Severity: LOW · Created 2026-06-14 (eng-review) · **Built 2026-06-25 (operator-directed, for idea-completeness on dense material)** · SoT: this file
 
-**What.** v1.0 summarizes the whole transcript in one structured call. A 1.5–2.5h transcript
-(~35–40K tokens) fits one call in every tier, so chunked map-reduce + per-chunk checkpointing
-were cut. v1.0 instead estimates tokens against the model context and stops cleanly above a safe
-budget (F6). Deferred: chunked map-reduce, per-chunk checkpointing, chunk-level cost, reduce/merge.
+**Built.** Map-reduce now triggers on a **QualityBudget** (`[chunk]` in models.toml — tokens OR
+duration, below the ContextBudget on purpose: a single pass loses the middle of a long context well
+before the window fills). `echogist/chunk.py` plans balanced, ~90s-overlapping chunks on block
+boundaries; `summarize.summarize_chunked` MAPs each chunk and REDUCEs by concatenate + conservative
+dedup (list fields are never re-summarized; only title/overview/core_idea are synthesized).
+`summarize_auto` dispatches; cost reflects N+1 calls; the acceptance invariant (`extracted → after
+dedup`) is logged per run. Supersedes the original single-pass principle (CLAUDE.md, operator-approved).
 
-**Why deferred.** Builds rare-path machinery (~8h+ inputs) the common case never exercises; a
-single 40K-token call costs ~$0.12, so "never re-pay" is pennies.
+**Still cut (intentional).** Per-chunk checkpointing — a failed chunk fails the whole run loud and
+retries from the saved transcript (artifact recovery, not a job engine — CLAUDE.md).
 
-**When to open.** When a real input trips the overflow guard, or very-long material becomes regular.
+**Still open (calibration).** `target_chunk_tokens` (12k), `max_output_tokens` (8192/chunk), and the
+two QualityBudgets are unverified on real RU material (killswitch blocks a live test). One paid run on a
+real lecture should confirm them — read the logged idea-count + per-call usage; raise `max_output_tokens`
+(and stream above ~16k) if a segment trips the loud `max_tokens` guard. Map-stage remains lossy *within*
+a chunk; the reduce is not.
+
+**Review residuals (2026-06-25 `/review`, deferred LOW).** Four findings fixed in-branch (per-chunk
+overflow guard restored on the chunked path; `_merge_sections` keyed on timecode alone; merge dedup
+prefers the non-empty rationale/owner; `estimate_cost_chunked` made a true ceiling at `output_cap`).
+Five left open as LOW: (1) `section_timecodes.bullets` is schema-`required` — may nudge the model to
+invent bullets on a short overlap fragment, mitigated by prompt guidance; revisit if the live run shows
+bloated short-section bullets. (2) The overlap walk in `plan_chunks` spans all earlier blocks within
+`overlap_seconds`, not just the previous bin (harmless at the default 90s/~60s blocks; the inline "previous
+bin" comment overstates the bound) — only bites under a low `block_seconds` / high `overlap_seconds`
+config. (3) Wrapped PDF sub-bullets (`render._subbullet`) lose their indent on the continuation line
+(fpdf2 wraps to LMARGIN) — cosmetic, eyeball it in the first live PDF. (4) The chunking decision is
+computed twice (menu cost preview + `summarize_auto`) from the same deterministic inputs — no drift
+today, but a future estimator/overhead change must touch both; a shared `plan` threaded through `Deps`
+would make it one computation. (5) Exact-match dedup + the REDUCE dropping per-chunk overview/core_idea
+mean a near-duplicate overlap takeaway or a connecting idea that lived only in a chunk overview can
+survive/vanish — accepted as the conservative-over-lossy tradeoff, flagged here for honesty. Open any of
+these if the paid calibration run surfaces it.
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 

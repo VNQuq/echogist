@@ -111,6 +111,44 @@ def test_markdown_skips_empty_sections(tmp_path: Path) -> None:
     assert "## Core idea" not in text
 
 
+def _summary_with_bullets(language: str = "en") -> Summary:
+    return Summary(
+        title="Talk",
+        overview="ov",
+        key_takeaways=(),
+        section_timecodes=(
+            SectionMarker("[00:00:00]", "Intro", ("Why it matters", "What's covered")),
+            SectionMarker("[00:12:30]", "Costs"),  # no bullets -> just the marker line
+        ),
+        recurring_themes=(),
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language=language,
+    )
+
+
+def test_markdown_renders_section_bullets_indented(tmp_path: Path) -> None:
+    text = render.render(_summary_with_bullets(), tmp_path, "md").read_text(encoding="utf-8")
+    assert "- `[00:00:00]` Intro" in text
+    assert "  - Why it matters" in text  # two-space indent => nested sub-bullet
+    assert "  - What's covered" in text
+    # A section without bullets renders only its marker line, no orphan sub-bullets.
+    assert "- `[00:12:30]` Costs" in text
+
+
+def test_section_bullets_round_trip_through_saved_json(tmp_path: Path) -> None:
+    original = _summary_with_bullets(language="ru")
+    json_path = summarize.save_raw_result(original, tmp_path)
+    assert render.load_summary(json_path) == original  # bullets survive save -> load
+
+
+def test_pdf_renders_section_bullets_without_error(tmp_path: Path) -> None:
+    pytest.importorskip("fpdf")
+    path = render.render(_summary_with_bullets(), tmp_path, "pdf")
+    assert path.read_bytes().startswith(b"%PDF")  # sub-bullet glyph + indent render clean
+
+
 # --------------------------------------------------------------------------- #
 # Dispatch, dedup, base-stem grouping
 # --------------------------------------------------------------------------- #

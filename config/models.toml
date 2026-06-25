@@ -29,10 +29,11 @@ price_out_per_mtok = 25.0
 # Fraction of a tier's context window usable by one single-pass transcript+prompt.
 # The overflow guard (plan §4) stops cleanly above this. Biased to estimate high.
 safe_budget_fraction = 0.8
-# Fixed output allowance for cost estimation. Summary length is roughly constant
-# regardless of transcript length, so output is a fixed absolute, not a fraction
-# of input (plan §3, outside-voice #3).
-output_tokens_estimate = 2000
+# Output allowance for cost estimation — a fixed absolute (output does not scale
+# 1:1 with input), biased high. The summary contract is now no-upper-limit (all
+# concepts, full overview, per-section bullets), so dense long material produces a
+# substantial output; this estimate is sized for that, not a short fixed summary.
+output_tokens_estimate = 4000
 
 [summarize]
 # The ONE network stage (plan §3, T6). DATA, not code: edit the prompt TEXT here
@@ -45,10 +46,15 @@ output_tokens_estimate = 2000
 # Both are filled by build_request() in echogist/summarize.py.
 #
 # max_output_tokens is the API's hard max_tokens cap. Kept SEPARATE from and larger
-# than [guard].output_tokens_estimate (the ~2K cost projection): a flush cap would
+# than [guard].output_tokens_estimate (the cost projection): a flush cap would
 # truncate a long multi-section RU summary into invalid tool-use JSON and waste the
-# paid call, so it carries real headroom for Cyrillic tokenization.
-max_output_tokens = 4096
+# paid call, so it carries real headroom for Cyrillic tokenization. The summary
+# contract is no-upper-limit (all concepts, per-section bullets), so dense 2-3h RU
+# material needs room — 8192 is the floor for that. No beta header is required at
+# this size: Haiku 4.5 / Sonnet 4.6 cap at 64K output and Opus 4.8 at 128K. If a
+# real long transcript still trips the loud max_tokens guard, raise this to 16384;
+# above ~16000 the summarize call should switch to streaming to dodge SDK timeouts.
+max_output_tokens = 8192
 system_prompt = """
 You are a careful summarizer. Read the timestamped transcript the user provides and \
 produce ONE structured summary written entirely in {language}.
@@ -66,14 +72,19 @@ Call the emit_summary tool exactly once, filling every field:
 {language}. Write the title in {language} EVEN IF the material is spoken in a \
 different language; never copy a title or phrase in the source language. No file \
 extension, no date, no surrounding quotes.
-- overview: 2-4 sentences stating what the material is and what it covers.
-- key_takeaways: the most important concrete points, each a single sentence. Include \
-between 3 and 7 items; if fewer than 3 clear points exist, include as many as there are.
+- overview: state what the material is and what it covers. Use as many sentences as \
+the content needs to be faithful — there is NO upper limit; never cut it short.
+- key_takeaways: EVERY important concrete point, each a single sentence. Include ALL \
+of them, however many there are — do NOT stop at some round number, do NOT merge \
+distinct points to save space, and do NOT cap the list. If the material is dense with \
+20+ concepts, return 20+ takeaways. Include at least 3 when the material has that many.
 - section_timecodes: the major sections in order. For each, copy a timecode that \
 ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title \
 written in {language}, even if the spoken language differs. Never invent or \
 interpolate a timecode that is not present in the transcript; if you are unsure, omit \
-the section rather than guess.
+the section rather than guess. Also fill bullets: for material longer than ~20 minutes, \
+give 3-5 short bullet-point theses per section that actually convey what that section \
+covers (not just a label); for short material an empty bullets list is fine.
 - decisions: concrete decisions reached in the material, in order. For each, give the \
 decision and the rationale (the reasoning given for it). If the material is not a \
 meeting or no decisions were made, return an empty list — never invent one.
@@ -84,14 +95,54 @@ own best-effort planning estimate of the work the task implies, not a quote from
 transcript; keep it short (e.g. a number of hours or days). If the material has no \
 actions to take, return an empty list — never invent one.
 - recurring_themes: ideas, motifs, or threads that come up more than once. Each item \
-is a short noun phrase (2-6 words). Include between 2 and 6 items; return an empty \
-list if nothing genuinely recurs.
-- core_idea: 1-2 sentences naming the single central point a reader should leave with.
+is a short noun phrase. Include ALL that genuinely recur — no upper limit; return an \
+empty list if nothing genuinely recurs.
+- core_idea: name the single central point a reader should leave with. Use as many \
+sentences as it takes to state it fully — no upper limit.
 
 Be faithful to the transcript and add no facts that are not in it (effort estimates \
 on action_items are the one allowed exception — those are your planning judgment). \
 Write naturally in {language}, not a word-for-word translation.
 """
+
+# Map step (TD-5 chunking): prepended to the system prompt when summarizing ONE
+# segment of a long transcript. {n}/{total}/{span} are filled per chunk; {language}
+# is substituted like the main prompt. The goal is EXTRACTION (every idea), not a
+# compressed retelling — the reduce step concatenates and dedups, it does not
+# re-summarize, so anything a segment drops here is lost for good.
+map_note_template = """
+This is segment {n} of {total} ({span}) of a LONGER transcript that has been split \
+for summarization. Extract EVERY distinct idea, decision, and action that appears in \
+THIS segment — omit nothing, do not compress, and do not skim the middle. Use only \
+timecodes that actually appear in this segment. Another step will merge the segments; \
+your job is complete coverage of this one.
+"""
+
+# Reduce step (TD-5 chunking): synthesizes ONLY the holistic fields (title, overview,
+# core_idea) over the already-extracted points. The list fields (takeaways, decisions,
+# action_items, sections, themes) are concatenated + deduped mechanically and NEVER
+# pass through this call, so the merge cannot summarize a point away.
+reduce_system_prompt = """
+You are merging the already-extracted key points of several consecutive segments of \
+ONE transcript into a single coherent whole, written entirely in {language}. You are \
+given the merged points (takeaways, sections, decisions, actions, themes) — these are \
+final; do NOT drop, compress, or re-judge them. Produce only: a short specific overall \
+title in {language}; a faithful overview of the whole material (as many sentences as \
+it needs, no upper limit); and the single core idea a reader should leave with. Call \
+the emit_synthesis tool exactly once.
+"""
+
+[chunk]
+# Map-reduce summarization (TD-5). Chunking triggers on the QualityBudget — a single
+# pass is trusted only while the transcript is under BOTH limits; crossing either
+# (long OR dense) flips to map-reduce. This sits well below the tier ContextBudget
+# ([guard] safe_budget_fraction × context_window) on purpose: a single pass loses
+# fidelity in the middle of a long context ("lost in the middle") long before the
+# context window is actually full. All values are calibratable on a real lecture.
+quality_budget_tokens = 40000    # est. input tokens above this -> chunk
+quality_budget_seconds = 3600    # transcript duration above this (60 min) -> chunk
+target_chunk_tokens = 12000      # per-chunk size target (hyperparameter — calibrate)
+overlap_seconds = 90             # time-based overlap between chunks so straddling ideas survive
 
 [transcript]
 # Timecode granularity of the saved transcript (and the text the summarizer reads).

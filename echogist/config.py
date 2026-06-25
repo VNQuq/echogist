@@ -40,6 +40,33 @@ _SECRETS_API_KEY = "anthropic_api_key"
 # Kept in sync with echogist.transcribe._DEFAULT_BLOCK_SECONDS (the pure-stage default).
 _DEFAULT_BLOCK_SECONDS = 60.0
 
+# Defaults for the optional [chunk] table (map-reduce summarization, TD-5). A
+# missing table falls back to these so an existing models.toml keeps loading.
+# QualityBudget (tokens OR minutes) sits BELOW the tier's ContextBudget: a single
+# pass over a long transcript degrades ("lost in the middle") well before the
+# context fills, so chunking triggers early, on quality not just on overflow.
+_DEFAULT_QUALITY_BUDGET_TOKENS = 40_000
+_DEFAULT_QUALITY_BUDGET_SECONDS = 3_600.0  # 60 min
+_DEFAULT_TARGET_CHUNK_TOKENS = 12_000  # hyperparameter — calibrate on a real lecture
+_DEFAULT_OVERLAP_SECONDS = 90.0  # time-based boundary overlap so straddling ideas survive
+
+# Default reduce/map prompt scaffolding. Prompt text is DATA (shipped in
+# models.toml), but these code-level fallbacks keep a minimal [summarize] table (or
+# a test fixture) loading when the keys are absent. {language} is substituted at
+# call time; {n}/{total}/{span} are filled per chunk by the map step.
+_DEFAULT_MAP_NOTE_TEMPLATE = (
+    "This is segment {n} of {total} ({span}) of a LONGER transcript. Extract EVERY "
+    "distinct idea, decision, and action in THIS segment — omit nothing, do not "
+    "compress, do not skip the middle. Use only timecodes that appear in this segment."
+)
+_DEFAULT_REDUCE_SYSTEM_PROMPT = (
+    "You are merging the extracted points of several segments of one transcript into "
+    "a single coherent summary, written entirely in {language}. You are given the "
+    "already-extracted points; do NOT drop or compress them. Produce only an overall "
+    "title, a faithful overview, and the single core idea — as many sentences as the "
+    "material needs, no upper limit. Call emit_synthesis exactly once."
+)
+
 
 class ConfigError(Exception):
     """A recoverable, human-readable config problem. Print it, return to menu."""
@@ -84,13 +111,39 @@ class SummarizeConfig:
 
     ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately
     SEPARATE from, and larger than, ``GuardConfig.output_tokens_estimate`` (the
-    cost projection). A flush cap truncates a long multi-section RU summary into
-    invalid tool-use JSON and wastes the paid call, so the cap carries real
-    headroom for Cyrillic tokenization.
+    cost projection). The summary contract carries no upper limit on element counts
+    (all concepts, full overview, per-section bullets), so a flush cap would
+    truncate a dense RU summary into invalid tool-use JSON and waste the paid call;
+    the cap carries real headroom for Cyrillic tokenization.
     """
 
     system_prompt: str
     max_output_tokens: int
+    reduce_system_prompt: str = _DEFAULT_REDUCE_SYSTEM_PROMPT
+    map_note_template: str = _DEFAULT_MAP_NOTE_TEMPLATE
+
+
+@dataclass(frozen=True)
+class ChunkConfig:
+    """Map-reduce chunking knobs (DATA, not code) — TD-5.
+
+    Chunking triggers on the **QualityBudget**: a single pass is allowed only while
+    the transcript stays under BOTH ``quality_budget_tokens`` and
+    ``quality_budget_seconds``; crossing either one (long OR dense) flips to
+    map-reduce. This sits below the tier's ContextBudget (``GuardConfig.safe_budget``)
+    on purpose — a single pass loses fidelity in the middle of a long context well
+    before that context is full.
+
+    ``target_chunk_tokens`` is the per-chunk size target (a calibratable
+    hyperparameter, not a hard limit); ``overlap_seconds`` is the time-based overlap
+    carried between adjacent chunks so an idea straddling a cut is not lost (the
+    duplicate it creates is removed by the reduce step's conservative dedup).
+    """
+
+    quality_budget_tokens: int = _DEFAULT_QUALITY_BUDGET_TOKENS
+    quality_budget_seconds: float = _DEFAULT_QUALITY_BUDGET_SECONDS
+    target_chunk_tokens: int = _DEFAULT_TARGET_CHUNK_TOKENS
+    overlap_seconds: float = _DEFAULT_OVERLAP_SECONDS
 
 
 @dataclass(frozen=True)
@@ -126,6 +179,9 @@ class ModelConfig:
     summarize: SummarizeConfig
     asset: ModelAsset
     transcript: TranscriptConfig
+    # Defaulted (it is the last field): the loader always sets it from the optional
+    # [chunk] table; the default keeps minimal hand-built fixtures constructing.
+    chunk: ChunkConfig = ChunkConfig()
 
     def tier(self, name: str) -> ModelTier:
         """Resolve a tier by name. Unknown/deprecated -> guided ConfigError (F5)."""
@@ -225,6 +281,39 @@ def _as_positive_number(value: Any, key: str, where: str) -> float:
     return float(value)
 
 
+def _optional_nonempty_str(table: dict[str, Any], key: str, default: str) -> str:
+    """Return ``table[key]`` if present and a non-empty string, else ``default``.
+
+    Used for optional prompt-scaffolding keys: absent -> code default; present but
+    blank/non-string -> loud ConfigError (a hand-edited typo is caught, not ignored).
+    """
+    if key not in table:
+        return default
+    value = table[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in [summarize] must be a non-empty string.")
+    return value
+
+
+def _optional_positive(table: dict[str, Any], key: str, where: str, default: float) -> float:
+    """Return ``table[key]`` validated as a positive number, else ``default``."""
+    if key not in table:
+        return default
+    return _as_positive_number(table[key], key, where)
+
+
+def _optional_nonnegative(table: dict[str, Any], key: str, where: str, default: float) -> float:
+    """Return ``table[key]`` validated as a number >= 0, else ``default`` (0 allowed)."""
+    if key not in table:
+        return default
+    value = table[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in {where} must be a number.")
+    if value < 0:
+        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in {where} must be >= 0.")
+    return float(value)
+
+
 def _parse_tier(name: str, table: Any) -> ModelTier:
     where = f"[tiers.{name}]"
     if not isinstance(table, dict):
@@ -302,6 +391,14 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
                 "[summarize]",
             )
         ),
+        # Optional, defaulted: map-reduce prompt scaffolding. A minimal [summarize]
+        # table (or fixture) without these keeps the code-level fallbacks.
+        reduce_system_prompt=_optional_nonempty_str(
+            summarize_table, "reduce_system_prompt", _DEFAULT_REDUCE_SYSTEM_PROMPT
+        ),
+        map_note_template=_optional_nonempty_str(
+            summarize_table, "map_note_template", _DEFAULT_MAP_NOTE_TEMPLATE
+        ),
     )
 
     asset_table = raw.get("model_asset")
@@ -330,8 +427,41 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
             )
         )
 
+    # [chunk] is OPTIONAL like [transcript]: a missing table (or any missing key)
+    # falls back to the shipped defaults; a present-but-invalid value fails loud.
+    chunk_table = raw.get("chunk")
+    if chunk_table is None:
+        chunk = ChunkConfig()
+    elif not isinstance(chunk_table, dict):
+        raise ConfigError(f"{_MODELS_FILENAME}: [chunk] must be a table.")
+    else:
+        chunk = ChunkConfig(
+            quality_budget_tokens=int(
+                _optional_positive(
+                    chunk_table, "quality_budget_tokens", "[chunk]", _DEFAULT_QUALITY_BUDGET_TOKENS
+                )
+            ),
+            quality_budget_seconds=_optional_positive(
+                chunk_table, "quality_budget_seconds", "[chunk]", _DEFAULT_QUALITY_BUDGET_SECONDS
+            ),
+            target_chunk_tokens=int(
+                _optional_positive(
+                    chunk_table, "target_chunk_tokens", "[chunk]", _DEFAULT_TARGET_CHUNK_TOKENS
+                )
+            ),
+            # overlap may legitimately be 0 (no overlap), so it is not "positive-only".
+            overlap_seconds=_optional_nonnegative(
+                chunk_table, "overlap_seconds", "[chunk]", _DEFAULT_OVERLAP_SECONDS
+            ),
+        )
+
     return ModelConfig(
-        tiers=tiers, guard=guard, summarize=summarize, asset=asset, transcript=transcript
+        tiers=tiers,
+        guard=guard,
+        summarize=summarize,
+        asset=asset,
+        transcript=transcript,
+        chunk=chunk,
     )
 
 

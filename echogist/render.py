@@ -118,7 +118,11 @@ def load_summary(json_path: Path) -> Summary:
         raise RenderError(f"{json_path}: expected a JSON object (a saved summary).")
 
     markers = tuple(
-        SectionMarker(timecode=str(m.get("timecode", "")), title=str(m.get("title", "")))
+        SectionMarker(
+            timecode=str(m.get("timecode", "")),
+            title=str(m.get("title", "")),
+            bullets=_str_tuple(m.get("bullets")),
+        )
         for m in raw.get("section_timecodes", [])
         if isinstance(m, dict)
     )
@@ -240,7 +244,9 @@ def _markdown(summary: Summary) -> str:
         out += [""]
     if summary.section_timecodes:
         out += [f"## {lab['sections']}", ""]
-        out += [f"- `{m.timecode}` {m.title}".rstrip() for m in summary.section_timecodes]
+        for m in summary.section_timecodes:
+            out.append(f"- `{m.timecode}` {m.title}".rstrip())
+            out += [f"  - {b}" for b in m.bullets]  # indented sub-bullets = section content
         out += [""]
     if summary.recurring_themes:
         out += [f"## {lab['recurring_themes']}", "", *(f"- {t}" for t in summary.recurring_themes)]
@@ -311,6 +317,8 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
             _heading(pdf, lab["sections"])
             for marker in summary.section_timecodes:
                 _bullet(pdf, f"{marker.timecode}  {marker.title}".rstrip())
+                for point in marker.bullets:  # section content as indented sub-bullets
+                    _subbullet(pdf, point)
         if summary.recurring_themes:
             _heading(pdf, lab["recurring_themes"])
             for item in summary.recurring_themes:
@@ -363,3 +371,9 @@ def _body(pdf: Any, text: str) -> None:
 def _bullet(pdf: Any, text: str) -> None:
     pdf.set_font(_FONT_FAMILY, "", 11)
     _line(pdf, 6, f"•  {text}")  # DejaVuSans carries U+2022, so no tofu bullet
+
+
+def _subbullet(pdf: Any, text: str) -> None:
+    """An indented second-level bullet (section content under a section marker)."""
+    pdf.set_font(_FONT_FAMILY, "", 11)
+    _line(pdf, 6, f"      ◦  {text}")  # leading spaces indent; U+25E6 in DejaVuSans

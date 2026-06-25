@@ -39,7 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import config, cost, extract, guard, provision, render, summarize, transcribe
+from . import chunk, config, cost, extract, guard, provision, render, summarize, transcribe
 from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
 from .model_asset import ProvisionError
@@ -94,7 +94,7 @@ class Deps:
     # External / heavy stages — stubbed in tests.
     extract_audio: ExtractFn = extract.extract_audio
     transcribe: TranscribeFn = transcribe.transcribe
-    summarize: SummarizeFn = summarize.summarize
+    summarize: SummarizeFn = summarize.summarize_auto
     render: RenderFn = render.render
     get_api_key: ApiKeyFn = config.get_api_key
     # App root (holds ``output/``) and the settings file location.
@@ -133,6 +133,23 @@ def _resolve_typed_path(deps: Deps, typed: str) -> Path | None:
     return path
 
 
+def _oversize_segment_message(c: chunk.Chunk, est: int, budget: int, tier: config.ModelTier) -> str:
+    """F6 message when one map segment still overflows the tier context (TD-5).
+
+    Reached only when a single transcript block is so large that ``plan_chunks``
+    (which never cuts mid-block) cannot get it under the tier's safe budget — not a
+    normal long lecture, but an abnormally coarse/large block. Guides the operator to
+    the two real levers (bigger-context tier, or a finer-timecoded re-save).
+    """
+    return (
+        f"Even split into segments, segment {c.index}/{c.total} ({c.span}) is too large "
+        f"for the '{tier.name}' tier (estimated {est:,} input tokens vs a safe budget of "
+        f"{budget:,}). One transcript block is abnormally large to summarize on its own — "
+        f"choose a larger-context model in Settings, or re-save the transcript with finer "
+        f"timecodes. Your transcript is saved."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The one summary sub-flow, shared by every summary-producing path
 # --------------------------------------------------------------------------- #
@@ -153,17 +170,49 @@ def _run_summary(
     ui = _ui(deps)
     tier = model_config.tier(settings.model_tier)  # ConfigError (F5) → loop backstop
 
-    verdict = guard.check_overflow(transcript_text, tier, model_config.guard)
-    if verdict.over_budget:  # F6 — local, offline, before the wire
-        ui.warn(guard.overflow_message(verdict, tier))
-        return
+    # TD-5: decide single-pass vs map-reduce on the QualityBudget, locally + before
+    # the wire. The same deterministic inputs are used by summarize_auto, so the path
+    # that runs matches the cost shown. Chunked replaces the old single-pass "too long"
+    # overflow stop — long/dense material is summarized in segments, not refused.
+    est_tokens = guard.estimate_input_tokens(transcript_text)
+    duration_s = chunk.total_duration_seconds(transcript_text)
+    chunking = chunk.needs_chunking(est_tokens, duration_s, model_config.chunk)
+    if chunking:
+        plan = chunk.plan_chunks(transcript_text, model_config.chunk)
+        map_inputs = [guard.estimate_input_tokens(c.text) for c in plan]
+        # F6 on the chunked path: chunking lowers the per-call input, but it does NOT
+        # repeal the overflow guard. A single un-splittable block (plan_chunks caps
+        # K at len(blocks)) can still exceed the tier context; catch it locally,
+        # before the wire, instead of paying for a doomed call mid-run.
+        budget = model_config.guard.safe_budget(tier)
+        oversized = next(
+            ((c, est) for c, est in zip(plan, map_inputs, strict=True) if est > budget), None
+        )
+        if oversized is not None:
+            c, est = oversized
+            ui.warn(_oversize_segment_message(c, est, budget, tier))
+            return
+        estimate = cost.estimate_cost_chunked(
+            map_inputs, tier, output_cap=model_config.summarize.max_output_tokens
+        )
+    else:
+        verdict = guard.check_overflow(transcript_text, tier, model_config.guard)
+        if verdict.over_budget:  # F6 — single chunk that still overflows context (pathological)
+            ui.warn(guard.overflow_message(verdict, tier))
+            return
+        estimate = cost.estimate_cost(verdict.est_input_tokens, tier, model_config.guard)
 
     api_key = deps.get_api_key()
     if api_key is None:  # F3 — never reach the wire without a key
         ui.warn(_API_KEY_HELP)
         return
 
-    estimate = cost.estimate_cost(verdict.est_input_tokens, tier, model_config.guard)
+    if chunking:
+        ui.info(
+            f"Long/dense transcript (~{duration_s / 60:.0f} min): summarizing in "
+            f"{len(plan)} overlapping segments (map-reduce) so no ideas are dropped — "
+            f"{len(plan) + 1} cloud calls."
+        )
     ui.info(cost.estimate_message(estimate, tier))
 
     def _confirm(prompt: str, default: bool) -> bool:  # adapt ui.confirm's kw-only default
@@ -173,12 +222,16 @@ def _run_summary(
         ui.info("Summarization cancelled; your transcript is saved.")
         return
 
-    with ui.spinner("Summarizing (one cloud call)") as sp:
+    spin_label = (
+        f"Summarizing ({len(plan) + 1} cloud calls)" if chunking else "Summarizing (one cloud call)"
+    )
+    with ui.spinner(spin_label) as sp:
         try:
             result = deps.summarize(
                 transcript_text,
                 tier,
                 model_config.summarize,
+                chunk_cfg=model_config.chunk,
                 language=settings.summary_language,
                 source_stem=source_stem,
                 api_key=api_key,
