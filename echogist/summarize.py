@@ -517,13 +517,24 @@ def _summary_json(summary: Summary) -> str:
 # --------------------------------------------------------------------------- #
 # The network call (lazy anthropic import; covered by stub-driven unit tests)
 # --------------------------------------------------------------------------- #
-def _extract_tool_input(content: Any) -> dict[str, Any]:
-    """Pull the forced tool's input out of the SDK response content blocks."""
+def _extract_tool_input(content: Any, tool_name: str = "") -> dict[str, Any]:
+    """Pull the forced tool's input out of the SDK response content blocks.
+
+    ``tool_name`` is the tool the request forced via ``tool_choice``: the MAP /
+    single-pass path forces ``emit_summary``, the REDUCE path forces
+    ``emit_synthesis``. The caller is SHARED across both, so we match the block by
+    the forced name rather than a hardcoded one — otherwise a valid synthesis
+    tool_use is skipped and the reduce step fails loud with a false "no tool call".
+    An empty ``tool_name`` (no forced tool) accepts the first tool_use block.
+    """
     for block in content or ():
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", "") == _TOOL_NAME:
-            tool_input = getattr(block, "input", None)
-            if isinstance(tool_input, dict):
-                return tool_input
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        if tool_name and getattr(block, "name", "") != tool_name:
+            continue
+        tool_input = getattr(block, "input", None)
+        if isinstance(tool_input, dict):
+            return tool_input
     raise SummarizeError(
         "The model did not return a structured summary (no tool call). "
         "Your transcript is saved — retry, or pick another model in Settings."
@@ -600,9 +611,11 @@ def _default_caller(request: dict[str, Any], api_key: str) -> CallOutcome:
             f"The summarization call failed: {exc}. Your transcript is saved — retry from it."
         ) from exc
 
+    tool_choice = request.get("tool_choice")
+    forced_tool = str(tool_choice.get("name", "") or "") if isinstance(tool_choice, dict) else ""
     usage = response.usage
     return CallOutcome(
-        tool_input=_extract_tool_input(response.content),
+        tool_input=_extract_tool_input(response.content, forced_tool),
         stop_reason=str(getattr(response, "stop_reason", "") or ""),
         input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
         output_tokens=int(getattr(usage, "output_tokens", 0) or 0),

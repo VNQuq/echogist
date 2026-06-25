@@ -500,6 +500,23 @@ def test_default_caller_success_extracts_input_and_usage(
     assert out.output_tokens == 350
 
 
+def test_default_caller_extracts_the_forced_reduce_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The shared caller must extract whatever tool the request forced. The reduce
+    # request forces emit_synthesis; a hardcoded emit_summary match skips the valid
+    # synthesis block and fails loud with a false "no tool call" (the live regression).
+    synthesis = {"title": "T", "overview": "O", "core_idea": "C"}
+
+    def create(**kwargs: Any) -> Any:
+        return _FakeResponse([_FakeBlock("tool_use", "emit_synthesis", synthesis)])
+
+    _install_fake(monkeypatch, _fake_anthropic(create=create))
+    request = {"model": "m", "tool_choice": {"type": "tool", "name": "emit_synthesis"}}
+    out = summarize._default_caller(request, "sk-test")
+    assert out.tool_input == synthesis
+
+
 def test_default_caller_no_tool_block_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
     def create(**kwargs: Any) -> Any:
         return _FakeResponse([_FakeBlock("text", "", {})])  # model emitted prose, no tool call
