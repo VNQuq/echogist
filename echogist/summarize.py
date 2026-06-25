@@ -526,6 +526,28 @@ def _extract_tool_input(content: Any) -> dict[str, Any]:
     )
 
 
+def _api_error_detail(exc: Exception) -> str:
+    """Best-effort human-readable reason from an Anthropic API error.
+
+    A 4xx from Anthropic always explains itself — a low credit balance, a bad
+    max_tokens, a rejected tool schema, a model the org can't access — in the
+    response body (``error.message``) and on ``exc.message`` / ``str(exc)``. We
+    surface it so a live failure is diagnosable instead of a bare status code
+    (CLAUDE.md "fail loud" means a HUMAN-READABLE message, not just a number).
+    Never raises; falls back to a generic phrase. No secret is echoed — Anthropic
+    error bodies carry the reason, never the API key.
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message", "")).strip()
+            if msg:
+                return msg
+    text = str(getattr(exc, "message", "") or exc).strip()
+    return text or "no detail provided by the API"
+
+
 def _default_caller(request: dict[str, Any], api_key: str) -> CallOutcome:
     """Make the real Anthropic call and normalize it to a :class:`CallOutcome`.
 
@@ -566,7 +588,7 @@ def _default_caller(request: dict[str, Any], api_key: str) -> CallOutcome:
         ) from exc
     except anthropic.APIStatusError as exc:  # any other 4xx/5xx incl. billing 400s (F4-adjacent)
         raise SummarizeError(
-            f"The API returned an error ({exc.status_code}). "
+            f"The API returned an error ({exc.status_code}): {_api_error_detail(exc)} "
             "Your transcript is saved — retry from it later."
         ) from exc
     except anthropic.APIError as exc:  # base class catch-all, still recoverable

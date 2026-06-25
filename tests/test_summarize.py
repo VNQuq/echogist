@@ -423,9 +423,11 @@ def _fake_anthropic(*, create: Any) -> types.ModuleType:
         pass
 
     class APIStatusError(APIError):
-        def __init__(self, message: str = "", status_code: int = 400) -> None:
+        def __init__(self, message: str = "", status_code: int = 400, body: Any = None) -> None:
             super().__init__(message)
             self.status_code = status_code
+            self.message = message
+            self.body = body
 
     class _Messages:
         def create(self, **kwargs: Any) -> Any:
@@ -560,7 +562,34 @@ def test_default_caller_status_error_is_recoverable(monkeypatch: pytest.MonkeyPa
     mod = _fake_anthropic(create=create)
     holder["mod"] = mod
     _install_fake(monkeypatch, mod)
-    with pytest.raises(SummarizeError, match="402"):
+    with pytest.raises(SummarizeError, match=r"402.*billing"):  # status AND the API's own reason
+        summarize._default_caller({"model": "m"}, "k")
+
+
+def test_default_caller_status_error_surfaces_api_body_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A 400 from Anthropic explains itself in the response body; we must not swallow it
+    # behind a bare status code (CLAUDE.md "fail loud" = human-readable, not a number).
+    holder: dict[str, Any] = {}
+
+    def create(**kwargs: Any) -> Any:
+        raise holder["mod"].APIStatusError(
+            "Error code: 400",
+            status_code=400,
+            body={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Your credit balance is too low to access the Anthropic API.",
+                },
+            },
+        )
+
+    mod = _fake_anthropic(create=create)
+    holder["mod"] = mod
+    _install_fake(monkeypatch, mod)
+    with pytest.raises(SummarizeError, match="credit balance is too low"):
         summarize._default_caller({"model": "m"}, "k")
 
 
