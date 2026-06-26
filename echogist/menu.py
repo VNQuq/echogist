@@ -35,11 +35,12 @@ whole menu is unit-testable with no model, no key, no network.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import chunk, config, cost, extract, guard, provision, render, summarize, transcribe
+from . import chunk, config, cost, extract, guard, naming, provision, render, summarize, transcribe
 from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
 from .model_asset import ProvisionError
@@ -133,21 +134,48 @@ def _resolve_typed_path(deps: Deps, typed: str) -> Path | None:
     return path
 
 
-def _oversize_segment_message(c: chunk.Chunk, est: int, budget: int, tier: config.ModelTier) -> str:
-    """F6 message when one map segment still overflows the tier context (TD-5).
+def _oversize_phase_message(p: chunk.Phase, est: int, budget: int, tier: config.ModelTier) -> str:
+    """F6 message when one synthesis phase still overflows the tier context (TD-16 v2).
 
-    Reached only when a single transcript block is so large that ``plan_chunks``
-    (which never cuts mid-block) cannot get it under the tier's safe budget — not a
-    normal long lecture, but an abnormally coarse/large block. Guides the operator to
-    the two real levers (bigger-context tier, or a finer-timecoded re-save).
+    Reached only when a single transcript block is so large that ``plan_phases``
+    (which never cuts mid-block, K clamped to len(blocks)) cannot get it under the tier's
+    safe budget — not a normal long lecture, but an abnormally coarse/large block. Guides
+    the operator to the two real levers (bigger-context tier, or a finer-timecoded re-save).
     """
     return (
-        f"Even split into segments, segment {c.index}/{c.total} ({c.span}) is too large "
+        f"Even split into phases, phase {p.index}/{p.total} ({p.span}) is too large "
         f"for the '{tier.name}' tier (estimated {est:,} input tokens vs a safe budget of "
         f"{budget:,}). One transcript block is abnormally large to summarize on its own — "
         f"choose a larger-context model in Settings, or re-save the transcript with finer "
         f"timecodes. Your transcript is saved."
     )
+
+
+def _load_resume(resume_path: Path, k: int, ui: UI) -> summarize.Summary | None:
+    """Load a within-run phase partial, if one is a valid PREFIX of this K-phase plan.
+
+    Artifact-resume (decision #2): a prior run that died mid-way left its completed phases
+    at ``resume_path``. Reuse it only when its synthesis is a strict, non-empty prefix
+    (``0 < len < k``); a stale partial (e.g. the transcript changed so K shifted) or a
+    complete one is ignored and the run starts fresh. Best-effort — any read/parse failure
+    falls back to a fresh run rather than blocking the operator.
+    """
+    if not resume_path.is_file():
+        return None
+    try:
+        partial = render.load_summary(resume_path)
+    except (OSError, ValueError, RenderError):  # unreadable/corrupt partial -> fresh run
+        return None
+    if not (0 < len(partial.synthesis) < k):  # stale (K shifted) or already complete
+        return None
+    ui.info(f"Resuming a previous run: {len(partial.synthesis)}/{k} phases already saved.")
+    return partial
+
+
+def _clear_resume(resume_path: Path) -> None:
+    """Delete the within-run phase partial once the durable .json exists (best-effort)."""
+    with contextlib.suppress(OSError):
+        resume_path.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,48 +198,37 @@ def _run_summary(
     ui = _ui(deps)
     tier = model_config.tier(settings.model_tier)  # ConfigError (F5) → loop backstop
 
-    # TD-5: decide single-pass vs map-reduce on the QualityBudget, locally + before
-    # the wire. The same deterministic inputs are used by summarize_auto, so the path
-    # that runs matches the cost shown. Chunked replaces the old single-pass "too long"
-    # overflow stop — long/dense material is summarized in segments, not refused.
-    est_tokens = guard.estimate_input_tokens(transcript_text)
-    duration_s = chunk.total_duration_seconds(transcript_text)
-    chunking = chunk.needs_chunking(est_tokens, duration_s, model_config.chunk)
-    if chunking:
-        plan = chunk.plan_chunks(transcript_text, model_config.chunk)
-        map_inputs = [guard.estimate_input_tokens(c.text) for c in plan]
-        # F6 on the chunked path: chunking lowers the per-call input, but it does NOT
-        # repeal the overflow guard. A single un-splittable block (plan_chunks caps
-        # K at len(blocks)) can still exceed the tier context; catch it locally,
-        # before the wire, instead of paying for a doomed call mid-run.
-        budget = model_config.guard.safe_budget(tier)
-        oversized = next(
-            ((c, est) for c, est in zip(plan, map_inputs, strict=True) if est > budget), None
-        )
-        if oversized is not None:
-            c, est = oversized
-            ui.warn(_oversize_segment_message(c, est, budget, tier))
-            return
-        estimate = cost.estimate_cost_chunked(
-            map_inputs, tier, output_cap=model_config.summarize.max_output_tokens
-        )
-    else:
-        verdict = guard.check_overflow(transcript_text, tier, model_config.guard)
-        if verdict.over_budget:  # F6 — single chunk that still overflows context (pathological)
-            ui.warn(guard.overflow_message(verdict, tier))
-            return
-        estimate = cost.estimate_cost(verdict.est_input_tokens, tier, model_config.guard)
+    # TD-16 v2: split the transcript into K contiguous synthesis phases, locally + before
+    # the wire. The same deterministic plan_phases is used inside summarize_auto, so the K
+    # that runs matches the cost shown. ALL material runs this path — short collapses to K=1.
+    plan = chunk.plan_phases(transcript_text, model_config.chunk)
+    phase_inputs = [guard.estimate_input_tokens(p.text) for p in plan]
+    # F6: phase-split lowers the per-call input but does NOT repeal the overflow guard. A
+    # single un-splittable block (plan_phases caps K at len(blocks)) can still exceed the
+    # tier context; catch it locally, before the wire, not mid-run after partial spend.
+    budget = model_config.guard.safe_budget(tier)
+    oversized = next(
+        ((p, est) for p, est in zip(plan, phase_inputs, strict=True) if est > budget), None
+    )
+    if oversized is not None:
+        p, est = oversized
+        ui.warn(_oversize_phase_message(p, est, budget, tier))
+        return
+    estimate = cost.estimate_cost_synthesis(
+        phase_inputs, tier, output_cap=model_config.summarize.max_output_tokens
+    )
 
     api_key = deps.get_api_key()
     if api_key is None:  # F3 — never reach the wire without a key
         ui.warn(_API_KEY_HELP)
         return
 
-    if chunking:
+    k = len(plan)
+    calls = k + (1 if k > 1 else 0)  # K phase calls + 1 reconcile when K>1 (matches the cost)
+    if k > 1:
         ui.info(
-            f"Long/dense transcript (~{duration_s / 60:.0f} min): summarizing in "
-            f"{len(plan)} overlapping segments (map-reduce) so no ideas are dropped — "
-            f"{len(plan) + 1} cloud calls."
+            f"Synthesizing the transcript in {k} phases (+1 reconcile) so it reads as one "
+            f"faithful document — {calls} cloud calls."
         )
     ui.info(cost.estimate_message(estimate, tier))
 
@@ -222,9 +239,21 @@ def _run_summary(
         ui.info("Summarization cancelled; your transcript is saved.")
         return
 
-    spin_label = (
-        f"Summarizing ({len(plan) + 1} cloud calls)" if chunking else "Summarizing (one cloud call)"
-    )
+    summaries_dir = deps.base / "output" / "summaries"
+    # Artifact-resume (decision #2): completed phases persist to a STABLE per-source path
+    # under raw/.resume/; a re-run reloads it and skips the phases already on disk (no job
+    # engine — just "phase N on disk -> skip"). The transcript is the checkpoint; this is a
+    # within-run partial that is deleted once the durable .json exists.
+    resume_stem = naming.summary_stem(source_stem, fallback="transcript")
+    resume_path = summaries_dir / "raw" / ".resume" / f"{resume_stem}.json"
+    resume_from = _load_resume(resume_path, k, ui)
+
+    def _persist(partial: summarize.Summary) -> None:
+        # best-effort: a state-write failure must never abort a paid run
+        with contextlib.suppress(OSError):
+            summarize.write_summary_json(partial, resume_path)
+
+    spin_label = f"Summarizing ({calls} cloud calls)" if k > 1 else "Summarizing (one cloud call)"
     with ui.spinner(spin_label) as sp:
         try:
             result = deps.summarize(
@@ -236,6 +265,8 @@ def _run_summary(
                 source_stem=source_stem,
                 api_key=api_key,
                 log=ui.info,
+                on_phase=_persist,
+                resume_from=resume_from,
             )
         except SummarizeError as exc:  # F2 / F4 / F5 — message carried by the stage
             sp.done(ok=False, message="Summarization failed")
@@ -245,10 +276,10 @@ def _run_summary(
 
     ui.info(cost.actual_message(cost.actual_cost(result, tier)))
 
-    summaries_dir = deps.base / "output" / "summaries"
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
     json_path = summarize.save_raw_result(result.summary, summaries_dir / "raw")  # BEFORE render
+    _clear_resume(resume_path)  # durable artifact exists — the within-run partial is spent
     try:
         out_path = deps.render(
             result.summary,

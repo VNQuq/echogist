@@ -132,6 +132,41 @@ def estimate_cost_chunked(
     )
 
 
+def estimate_cost_synthesis(
+    phase_input_tokens: Sequence[int],
+    tier: ModelTier,
+    *,
+    output_cap: int,
+) -> CostEstimate:
+    """Pre-call cost estimate for the v2 direct-synthesis path (TD-16): K phases + reconcile.
+
+    ``phase_input_tokens`` is the per-phase input estimate (one per synthesis call, each
+    already including the prompt overhead via :func:`echogist.guard.estimate_input_tokens`).
+
+    A true CEILING the operator approves against, never below the bill (the "estimate high"
+    rule on the expensive output side). Each of the K phase calls can emit up to
+    ``output_cap`` (the request's ``max_tokens``); on a no-upper-limit prose contract a
+    dense phase really can approach it, and output is priced ~5× input. When K>1 a single
+    reconcile call follows: its INPUT (the phase prose fed to it) is unknowable pre-run but
+    bounded by the K phase outputs, i.e. ``K × output_cap`` at the ceiling, and it emits up
+    to one more ``output_cap``. K=1 is degenerate — one phase, its heading is the title, no
+    reconcile call — so neither the reconcile input nor its output is added. The exact cost
+    still comes from the summed ``response.usage`` after the calls; this only governs the
+    pre-call quote.
+    """
+    k = len(phase_input_tokens)
+    has_reconcile = k > 1
+    reconcile_input = k * output_cap if has_reconcile else 0  # phase prose fed to reconcile
+    total_input = sum(phase_input_tokens) + reconcile_input
+    total_output = (k + (1 if has_reconcile else 0)) * output_cap  # K phases + reconcile
+    return CostEstimate(
+        input_tokens=total_input,
+        output_tokens=total_output,
+        price_in_per_mtok=tier.price_in_per_mtok,
+        price_out_per_mtok=tier.price_out_per_mtok,
+    )
+
+
 def actual_cost(result: SummarizeResult, tier: ModelTier) -> CostEstimate:
     """Post-call actual cost from the audited ``response.usage`` counts (plan §3).
 

@@ -24,9 +24,9 @@ from typing import Any
 
 import pytest
 
-from echogist import config, menu
+from echogist import config, menu, naming, summarize
 from echogist.render import RenderError
-from echogist.summarize import SummarizeError, SummarizeResult, Summary
+from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
 from echogist.transcribe import Segment, Transcript
 from echogist.ui import StubUI
 
@@ -398,23 +398,24 @@ def test_missing_api_key_guides_and_skips_call(tmp_path: Path) -> None:  # F3
     assert calls["summarize"] == 0
 
 
-def test_long_transcript_triggers_chunked_summary(tmp_path: Path) -> None:  # TD-5
-    # A long/dense transcript no longer hits the old "too long" refusal — it routes to
-    # map-reduce (chunked) so every idea is captured. The menu still makes ONE seam call
-    # (summarize_auto chunks internally); the chunking decision + message live in the menu.
+def test_long_transcript_synthesizes_in_phases(tmp_path: Path) -> None:  # TD-16 v2
+    # A long transcript no longer hits the old "too long" refusal — it phase-splits and
+    # synthesizes directly (K>1, plus a reconcile pass). The menu makes ONE seam call
+    # (summarize_auto phase-splits internally); the phase count + message live in the menu.
     _write_settings(tmp_path, model_tier="economy")
     big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # ~70K tok, timecoded
     _seed_transcript(tmp_path, text=big)
     deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
-    assert "map-reduce" in stub.log_text  # routed to chunked summarization
+    assert "phases (+1 reconcile)" in stub.log_text  # multi-phase synthesis copy
+    assert "map-reduce" not in stub.log_text  # the old map-reduce path is gone
     assert "too long" not in stub.log_text  # the old refusal is gone
-    assert calls["summarize"] == 1  # reached the wire (chunking happens inside the seam)
+    assert calls["summarize"] == 1  # reached the wire (phase-split happens inside the seam)
 
 
-def test_chunked_path_still_guards_an_oversize_segment(tmp_path: Path) -> None:  # TD-5 / F6
-    # Chunking lowers the per-call input but does NOT repeal the overflow guard. A single
-    # un-splittable block (plan_chunks never cuts mid-block, K is clamped to len(blocks))
+def test_phase_path_still_guards_an_oversize_phase(tmp_path: Path) -> None:  # TD-16 v2 / F6
+    # Phase-split lowers the per-call input but does NOT repeal the overflow guard. A single
+    # un-splittable block (plan_phases never cuts mid-block, K is clamped to len(blocks))
     # that exceeds the tier context is caught locally, before any paid call — not sent to
     # the wire to fail mid-run after partial spend.
     _write_settings(tmp_path, model_tier="economy")  # safe_budget = 200000 * 0.8 = 160000
@@ -422,9 +423,49 @@ def test_chunked_path_still_guards_an_oversize_segment(tmp_path: Path) -> None: 
     _seed_transcript(tmp_path, text=one_huge_block)
     deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
-    assert "too large" in stub.log_text  # the F6-style oversize-segment guard fired
+    assert "too large" in stub.log_text  # the F6-style oversize-phase guard fired
     assert "safe budget" in stub.log_text
     assert calls["summarize"] == 0  # never reached the wire
+
+
+def test_resume_partial_loaded_passed_to_seam_then_cleared(tmp_path: Path) -> None:  # TD-16 v2
+    # Artifact-resume: a within-run partial that is a strict prefix of the K-phase plan is
+    # reloaded and handed to the seam as resume_from (so a re-run skips done phases), then
+    # deleted once the durable .json is written.
+    _write_settings(tmp_path, model_tier="economy")
+    big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # K>1
+    src = _seed_transcript(tmp_path, text=big)
+    stem = naming.summary_stem(src.stem, fallback="transcript")
+    resume_path = tmp_path / "output" / "summaries" / "raw" / ".resume" / f"{stem}.json"
+    partial = summarize._running_summary(
+        [SynthesisSection("Done phase", "prior prose", ("[00:00:00]",))], [], [], "ru"
+    )
+    summarize.write_summary_json(partial, resume_path)
+    assert resume_path.is_file()
+
+    captured: dict[str, Any] = {}
+
+    def summarize_fn(
+        text: str, tier: Any, cfg: Any, *, resume_from: Any = None, **_kw: Any
+    ) -> SummarizeResult:
+        captured["resume_from"] = resume_from
+        return SummarizeResult(summary=_summary(), input_tokens=1, output_tokens=1)
+
+    def render_fn(summary: Any, out_dir: Path, fmt: str, *, base: str, **_kw: Any) -> Path:
+        return Path(out_dir) / f"{base}.{fmt}"
+
+    deps = menu.Deps(
+        ui=StubUI(["2", "0", "4"]),
+        summarize=summarize_fn,
+        render=render_fn,
+        get_api_key=lambda: "sk-test",
+        base=tmp_path,
+        settings_path=tmp_path / "settings.json",
+    )
+    assert menu.run_menu(deps) == 0
+    rf = captured["resume_from"]
+    assert rf is not None and len(rf.synthesis) == 1  # the prefix partial was loaded
+    assert not resume_path.exists()  # cleared once the durable .json exists
 
 
 def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F13

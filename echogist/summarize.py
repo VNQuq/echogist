@@ -52,12 +52,9 @@ from .chunk import (
     Chunk,
     Phase,
     block_timecodes,
-    needs_chunking,
-    plan_chunks,
-    total_duration_seconds,
+    plan_phases,
 )
 from .config import ChunkConfig, ModelTier, SummarizeConfig
-from .guard import estimate_input_tokens
 
 Logger = Callable[[str], object]
 
@@ -626,6 +623,19 @@ def _summary_json(summary: Summary) -> str:
     return json.dumps(asdict(summary), ensure_ascii=False, indent=2) + "\n"
 
 
+def write_summary_json(summary: Summary, path: Path) -> None:
+    """Write ``summary`` to ``path`` as UTF-8 JSON, overwriting in place (TD-16 v2).
+
+    The artifact-resume partial-save seam (decision #2): unlike :func:`save_raw_result`
+    (which names by title and dedups into ``-2``/``-3``), this writes to a STABLE path so
+    a re-run finds the same partial and skips the phases already on it. Reuses the same
+    ``_summary_json`` round-trip :func:`echogist.render.load_summary` reads back, so the
+    persisted partial reconstructs verbatim. The menu owns the path and the cleanup.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_summary_json(summary), encoding="utf-8")
+
+
 # --------------------------------------------------------------------------- #
 # The network call (lazy anthropic import; covered by stub-driven unit tests)
 # --------------------------------------------------------------------------- #
@@ -1152,29 +1162,19 @@ def summarize_auto(
     today: date | None = None,
     caller: Caller = _default_caller,
     log: Logger = print,
+    on_phase: Callable[[Summary], None] | None = None,
+    resume_from: Summary | None = None,
 ) -> SummarizeResult:
-    """Dispatch single-pass vs map-reduce on the QualityBudget (TD-5). The one entry
-    the menu calls. Chunking decision is local + deterministic (same inputs the menu
-    used for its cost estimate), so the path that runs matches the price shown."""
-    est = estimate_input_tokens(transcript_text)
-    duration = total_duration_seconds(transcript_text)
-    if needs_chunking(est, duration, chunk_cfg):
-        chunks = plan_chunks(transcript_text, chunk_cfg)
-        log(f"Long/dense transcript: summarizing in {len(chunks)} segments (map-reduce).")
-        return summarize_chunked(
-            transcript_text,
-            tier,
-            cfg,
-            chunks,
-            language=language,
-            source_stem=source_stem,
-            api_key=api_key,
-            today=today,
-            caller=caller,
-            log=log,
-        )
-    return summarize(
-        transcript_text,
+    """Phase-split + synthesize the transcript directly (TD-16 v2). The one entry the menu
+    calls. ALL material runs through the same path: ``plan_phases`` partitions the
+    transcript into a computed K contiguous phases (short material -> K=1, the whole
+    transcript in one call), then :func:`synthesize_summary` writes faithful prose with
+    anchors. The phase plan is local + deterministic (the same inputs the menu used for its
+    cost estimate), so the K that runs matches the price shown. ``on_phase`` / ``resume_from``
+    are the artifact-resume seams, forwarded straight through."""
+    phases = plan_phases(transcript_text, chunk_cfg)
+    return synthesize_summary(
+        phases,
         tier,
         cfg,
         language=language,
@@ -1183,6 +1183,8 @@ def summarize_auto(
         today=today,
         caller=caller,
         log=log,
+        on_phase=on_phase,
+        resume_from=resume_from,
     )
 
 
@@ -1717,6 +1719,32 @@ def validate_anchors(
     return replace(summary, synthesis=sections, decisions=decisions, action_items=actions)
 
 
+def _running_summary(
+    sections: Sequence[SynthesisSection],
+    decisions: Sequence[Decision],
+    actions: Sequence[ActionItem],
+    language: str,
+) -> Summary:
+    """A partial Summary of the phases synthesized so far (artifact-resume persist seam).
+
+    Carries the RAW (un-merged, un-validated) sections/decisions/actions accumulated to
+    this point so a re-run can reload it and continue. The final merge + anchor validation
+    run once at the end over the full set; persisting raw keeps that single source of truth.
+    """
+    return Summary(
+        title="",
+        overview="",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        decisions=tuple(decisions),
+        action_items=tuple(actions),
+        language=language,
+        synthesis=tuple(sections),
+    )
+
+
 def synthesize_summary(
     phases: Sequence[Phase],
     tier: ModelTier,
@@ -1728,7 +1756,8 @@ def synthesize_summary(
     today: date | None = None,
     caller: Caller = _default_caller,
     log: Logger = print,
-    on_phase: Callable[[int, SynthesisSection], None] | None = None,
+    on_phase: Callable[[Summary], None] | None = None,
+    resume_from: Summary | None = None,
 ) -> SummarizeResult:
     """Synthesize ``phases`` sequentially into one transcript-grounded Summary (TD-16 v2).
 
@@ -1738,16 +1767,31 @@ def synthesize_summary(
     in one call). Per-phase decisions/actions are merged with the existing anchor-
     preserving primitives, and every anchor is validated against the real transcript
     timecodes before returning. A truncated reply on ANY call fails loud, naming the
-    phase; the transcript is already saved. ``on_phase`` (if given) fires after each phase
-    completes — the seam T5 uses to persist a phase for artifact-resume.
+    phase; the transcript is already saved.
+
+    **Artifact-resume (decision #2).** ``on_phase`` (if given) fires after each phase with
+    the running partial Summary — the menu persists it. ``resume_from`` (a previously
+    persisted partial) seeds the already-done phases when its synthesis is a valid PREFIX
+    of this plan (``0 < len < K``); those phases are skipped (no re-pay) but still feed
+    forward as prior context. A stale/complete partial (length 0 or >= K) is ignored and
+    the run starts fresh — no job engine, just "phase N on disk -> skip."
     """
     if not phases:
         raise SummarizeError("No transcript phases to synthesize (empty transcript?).")
     sections: list[SynthesisSection] = []
     decisions: list[Decision] = []
     actions: list[ActionItem] = []
+    done = 0
+    if resume_from is not None and 0 < len(resume_from.synthesis) < len(phases):
+        sections = list(resume_from.synthesis)
+        decisions = list(resume_from.decisions)
+        actions = list(resume_from.action_items)
+        done = len(sections)
+        log(f"Resuming: {done}/{len(phases)} phases already on disk — skipping them.")
     total_in = total_out = 0
     for ph in phases:
+        if ph.index <= done:  # already synthesized in a prior run (resume), no re-pay
+            continue
         log(f"Synthesizing phase {ph.index}/{ph.total} ({ph.span})...")
         request = build_synthesis_request(
             ph, tier, cfg, language=language, prior_context=_prior_context(sections)
@@ -1765,8 +1809,8 @@ def synthesize_summary(
         actions.extend(_action_items(outcome.tool_input.get("action_items")))
         total_in += outcome.input_tokens
         total_out += outcome.output_tokens
-        if on_phase is not None:  # artifact-resume seam (T5 persists the phase here)
-            on_phase(ph.index, section)
+        if on_phase is not None:  # artifact-resume seam (T5 persists the running partial)
+            on_phase(_running_summary(sections, decisions, actions, language))
 
     title = core_idea = ""
     main_themes: tuple[str, ...] = ()

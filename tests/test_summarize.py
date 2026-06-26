@@ -754,10 +754,11 @@ def test_summarize_chunked_truncated_map_fails_loud_naming_segment() -> None:
         )
 
 
-def test_summarize_auto_single_pass_for_short_input() -> None:
-    caller = _ok_caller(_full_tool_input())
-    # Budgets so high nothing trips -> single pass, exactly one call through the seam.
-    cfg = ChunkConfig(quality_budget_tokens=10_000_000, quality_budget_seconds=10_000_000)
+def test_summarize_auto_single_phase_for_short_input() -> None:
+    # TD-16 v2: short material collapses to K=1 — one synthesis call, no reconcile. Its
+    # heading becomes the document title.
+    caller = _seq_caller(_outcome(_phase_ti("Only", "Only prose.", anchors=["[00:00:00]"])))
+    cfg = ChunkConfig(phase_target_tokens=10_000_000)  # everything fits in one phase
     result = summarize.summarize_auto(
         "[00:00:00] short transcript",
         _tier(),
@@ -770,6 +771,8 @@ def test_summarize_auto_single_pass_for_short_input() -> None:
         log=lambda _m: None,
     )
     assert isinstance(result, SummarizeResult)
+    assert len(caller.requests) == 1  # type: ignore[attr-defined]  # one phase, no reconcile
+    assert result.summary.title == "Only"
 
 
 def test_merge_sections_collapses_same_timecode_under_different_titles() -> None:
@@ -842,25 +845,31 @@ def test_summarize_chunked_truncated_synthesis_fails_loud() -> None:
         )
 
 
-def test_summarize_auto_chunks_when_over_quality_budget() -> None:
-    calls = {"n": 0}
+def test_summarize_auto_runs_multi_phase_synthesis() -> None:
+    # TD-16 v2: summarize_auto always phase-splits and synthesizes directly. A tiny
+    # phase target forces K>1 (one phase per block), so we see several emit_phase calls
+    # plus exactly one emit_reconcile — no map-reduce, no emit_summary.
+    calls = {"phase": 0, "reconcile": 0}
 
     def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
-        calls["n"] += 1
         name = request["tools"][0]["name"]
-        if name == "emit_synthesis":
+        if name == "emit_reconcile":
+            calls["reconcile"] += 1
             return CallOutcome(
-                tool_input={"title": "T", "overview": "o", "core_idea": "c"},
+                tool_input={"title": "T", "core_idea": "c", "main_themes": []},
                 stop_reason="tool_use",
                 input_tokens=1,
                 output_tokens=1,
             )
+        calls["phase"] += 1
         return CallOutcome(
-            tool_input=_full_tool_input(), stop_reason="tool_use", input_tokens=1, output_tokens=1
+            tool_input=_phase_ti(f"P{calls['phase']}", "prose"),
+            stop_reason="tool_use",
+            input_tokens=1,
+            output_tokens=1,
         )
 
-    # Force chunking on any input; a multi-block transcript so the planner splits it.
-    cfg = ChunkConfig(quality_budget_tokens=1, quality_budget_seconds=1, target_chunk_tokens=20)
+    cfg = ChunkConfig(phase_target_tokens=1)  # K clamps to len(blocks) -> one phase/block
     text = "\n".join(f"[00:{m:02d}:00] word word word" for m in range(6))
     summarize.summarize_auto(
         text,
@@ -873,7 +882,8 @@ def test_summarize_auto_chunks_when_over_quality_budget() -> None:
         caller=caller,
         log=lambda _m: None,
     )
-    assert calls["n"] >= 3  # >=2 map calls + 1 reduce (chunked, not single-pass)
+    assert calls["phase"] >= 2  # multi-phase synthesis
+    assert calls["reconcile"] == 1  # the reconcile pass fires once when K>1
 
 
 # --------------------------------------------------------------------------- #
@@ -1231,7 +1241,7 @@ def test_synthesize_on_phase_callback_fires_per_phase() -> None:
         _outcome(_phase_ti("Body", "b")),
         _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
     )
-    seen: list[tuple[int, str]] = []
+    seen: list[tuple[str, ...]] = []
     summarize.synthesize_summary(
         phases,
         _tier(),
@@ -1241,9 +1251,76 @@ def test_synthesize_on_phase_callback_fires_per_phase() -> None:
         api_key="k",
         caller=caller,
         log=lambda _m: None,
-        on_phase=lambda idx, section: seen.append((idx, section.heading)),
+        # The seam fires with the RUNNING partial after each phase (T5 artifact-resume):
+        # the menu persists it, so it grows one synthesis section per call.
+        on_phase=lambda partial: seen.append(tuple(s.heading for s in partial.synthesis)),
     )
-    assert seen == [(1, "Intro"), (2, "Body")]  # the artifact-resume persistence seam (T5)
+    assert seen == [("Intro",), ("Intro", "Body")]  # partial accumulates each phase
+
+
+def test_synthesize_resumes_from_partial_skips_done_phases() -> None:
+    # TD-16 v2 artifact-resume: a partial whose synthesis is a strict prefix of the plan
+    # seeds the done phases; only the remaining phase (+ reconcile) hits the wire, and the
+    # resumed phase's decisions + tail prose carry through.
+    phases = _two_phases()
+    resume = summarize._running_summary(
+        [SynthesisSection("Intro", "Prior prose.", ("[00:00:00]",))],
+        [Decision("D1", "r", "[00:00:00]")],
+        [],
+        "en",
+    )
+    caller = _seq_caller(
+        _outcome(_phase_ti("Body", "Body prose.", anchors=["[00:10:00]"])),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": ["x"]}),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+        resume_from=resume,
+    )
+    assert len(caller.requests) == 2  # type: ignore[attr-defined]  # phase 2 + reconcile only
+    assert [s.heading for s in result.summary.synthesis] == ["Intro", "Body"]
+    assert any(d.decision == "D1" for d in result.summary.decisions)  # resumed decision kept
+    assert "Prior prose." in caller.requests[0]["system"]  # type: ignore[attr-defined]
+
+
+def test_synthesize_ignores_stale_partial_and_runs_fresh() -> None:
+    # A partial that is NOT a strict prefix (here: already complete, len == K) is ignored —
+    # the run starts fresh, all K phases + reconcile re-run. No job engine; just skip-if-prefix.
+    phases = _two_phases()
+    stale = summarize._running_summary(
+        [
+            SynthesisSection("A", "a", ()),
+            SynthesisSection("B", "b", ()),
+        ],
+        [],
+        [],
+        "en",
+    )
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "fresh1")),
+        _outcome(_phase_ti("Body", "fresh2")),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+        resume_from=stale,
+    )
+    assert len(caller.requests) == 3  # type: ignore[attr-defined]  # 2 phases + reconcile, fresh
+    assert [s.heading for s in result.summary.synthesis] == ["Intro", "Body"]
 
 
 def test_synthesize_empty_phases_fails_loud() -> None:
