@@ -1,139 +1,97 @@
 # Current Context
 
-**Updated:** 2026-06-25 (**v1.1.0 RELEASED**; **TD-5 map-reduce validated on a real paid run** — see
-"TD-5 validated" below — and the **readability follow-up is now the active work: TD-15**, phase order
-1 → 2 → 3 approved. The paid **T10 live gate passed** (`2 passed`, real Sonnet); the console fixes are
-**4060-Windows-verified**. Deferred T7 cold/clean-deploy pass remains.)
+**Updated:** 2026-06-26 (**TD-16 v2 "direct transcript synthesis" is the active build.** Plan
+locked + eng-reviewed (`~/.claude/plans/elegant-prancing-journal.md`); **T1–T4 shipped additively**
+on `main` (`7ad2185`). Next: **T5 menu wire-in + the isolated map-reduce deletion commit.**
+v1.1.0 remains the last release.)
 **Authority:** [CLAUDE.md](../CLAUDE.md)
 **Max length:** ≤ 2 pages (≈ 60–70 lines).
 
 ---
 
-## Active scope
+## Active scope — TD-16 v2: direct transcript synthesis
 
-EchoGist is **released through v1.1.0** — both build phases of the
-[engineering plan](./archive/ENGINEERING_PLAN.md) shipped on `main`, all GitHub Releases published with
-notes from [CHANGELOG.md](../CHANGELOG.md). The 4060 Windows acceptance passed. Only a cold/clean-deploy
-verification (T7, operator, deferred) remains.
+**Principle reversal (operator, eng-reviewed):** fidelity > completeness. The TRANSCRIPT is ground
+truth, read directly (one hop). A faithful SYNTHESIS is the product; the manual operator re-check
+against the recording is the fidelity gate — no LLM-judge, no coverage checker, no map-extraction.
+This supersedes the TD-5 "single-pass-below / map-reduce-above" rule and TD-15 "group, keep-all".
 
-- **Phase 1 — pipeline** (ENGINEERING_PLAN §1–§5): pure-stage pipeline, artifact-based recovery (saved
-  transcript = checkpoint), single-pass summarize. GUARD + cost are LOCAL/offline; `SUMMARIZE` is the one
-  network stage.
-- **Phase 2 — console UX** (ENGINEERING_PLAN §6): questionary + rich (arrow-key nav, styled panels, %/ETA
-  bar) behind a `UI` Protocol injected via `Deps` (prod `RichQuestionaryUI`, tests `StubUI`) — the seam
-  keeps the killswitch CI offline/no-TTY. Files: `echogist/ui.py`, `echogist/theme.py`. File picker,
-  screen-clear, `← Back`, Explorer pop, trimmed `.mp3` menu all built and Windows-accepted.
-- **v1.1.0** ships decisions + action_items in the summary plus a hardened `[summarize]` system prompt
-  (degraded-path, fixed `{unassigned}` label, `temperature=0`, TD-6 title language). The 3–7/2–6 list
-  bounds it shipped were **removed in `[Unreleased]`** (see below).
+**Pipeline:** transcript → deterministic phase-split (`chunk.plan_phases`, computed K, contiguous,
+overlap=0; short = K=1) → `summarize.synthesize_summary` ×K sequential forward-only (each phase reads
+its span + prior headings + the prior phase's TAIL PROSE in a "do-not-restate" section) → reuse
+`_merge_decisions`/`_merge_action_items` (anchor-preserving) → reconcile pass (title/core_idea/
+main_themes + contradiction flag, K>1 only) → deterministic `validate_anchors` (accept/snap/drop vs
+real block timecodes — the only live fidelity check) → one readable doc (~3–5 pp). ≈5 calls for 3h,
+≈1 for short. Cheaper than map-reduce.
 
-**Workflow:** develop directly on `main` (operator decision 2026-06-15). Gate holds — every push to
-`main` passes ruff + mypy --strict + tests. Current: **349 passed, 2 skipped** (the 2 live tests).
-
-**Unreleased (CHANGELOG `[Unreleased]`), two changes:**
-1. **Timecodes coarsened** — Whisper segments grouped into ~60s blocks (`[transcript] block_seconds`),
-   one `[HH:MM:SS]` per paragraph (−95% lines). Same fix aligns both SUMMARIZE paths: the fresh run now
-   summarizes the saved checkpoint verbatim (was timecode-free `transcript.text`), so `section_timecodes`
-   are citeable on fresh runs too. (Committed `105da22`.)
-2. **No-upper-limit summary + section bullets (anti-truncation).** Removed the 3–7/2–6/2–4/1–2 element
-   caps from both the schema (`summarize.py`) and the prompt (`models.toml`) — model must emit ALL
-   concepts (lower bounds kept). Added structural `bullets: list[str]` to `SectionMarker` (schema /
-   dataclass / parser / save-load / PDF+MD render): 3–5 theses per section for >20-min material.
-   `max_output_tokens` 4096→8192, `[guard] output_tokens_estimate` 2000→4000. No beta header needed at
-   this size. Archived `ENGINEERING_PLAN.md §135` ("summary length is roughly constant") is now a
-   deliberate deviation, left unedited (frozen spec).
-3. **Map-reduce for long/dense material (TD-5) — completeness guarantee.** New `echogist/chunk.py`
-   (pure/local): a transcript over the **QualityBudget** (`[chunk]` in models.toml — >40k tok OR >60 min,
-   below ContextBudget on purpose: single-pass loses the middle of a long context) is split into balanced,
-   ~90s-overlapping chunks on block boundaries. `summarize.summarize_chunked` MAPs each chunk (full
-   emit_summary contract, "segment N/M" note) then REDUCEs: list fields concatenated + conservatively
-   deduped (never re-summarized), a small `emit_synthesis` call writes only title/overview/core_idea.
-   `summarize_auto` dispatches single vs chunked; the menu shows chunk count + N+1-call cost and logs the
-   acceptance invariant (`extracted → after dedup`). The old single-pass "too long" refusal is retired.
-   Per-chunk checkpointing stays cut (fail-loud, retry from transcript — no job engine). Files touched:
-   `chunk.py` (new), `summarize.py`, `config.py` (`ChunkConfig` + `[chunk]` + reduce/map prompts),
-   `cost.py` (`estimate_cost_chunked`), `menu.py`, `config/models.toml`, `CLAUDE.md` (Single-pass
-   principle superseded, operator-approved), + tests (`test_chunk.py` new, summarize/config/menu).
-
-**TD-5 validated (first paid run, 2026-06-25) + calibration LOCKED.** A 179-min RU lecture
-(flagship/opus-4-8) ran clean: 7 chunks at `target_chunk_tokens=12000` / 90s overlap, no segment tripped
-the `max_tokens` guard (`max_output_tokens=8192` held), 221 takeaways extracted → 221 after dedup (no
-collapse), actual **$1.46 vs the $2.35 estimate** (high-bias estimate confirmed). 12k / 90s / 8192 are
-locked for real RU material. Two live bugs fixed in the run: `temperature` is now an optional per-tier
-`models.toml` field (the whole Claude 4.x family 400s on it — commit 1c49248); and the shared caller now
-extracts the forced tool from `tool_choice` so the REDUCE `emit_synthesis` reply isn't skipped (was a
-false "no tool call" — commit 53898f4). Map-stage is still lossy *within* a chunk; the reduce is not.
-
-**Readability follow-up (TD-15, active) — the new bottleneck.** Operator read of the run: completeness
-is met but the output is a flat wall (221 takeaways ≈ 10+ PDF pages, 5k-char single-paragraph overview,
-69 micro-sections, 63 flat themes, `Не назначено` on all 30 actions). Operator-approved direction:
-**group, keep all — NOT compress** (stays inside the CLAUDE.md completeness principle, no amendment).
-Three phases (full scope + the Phase-2 ADR in [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) TD-15):
-- **Phase 1 — quick wins, NO paid call** (re-renders the saved `raw/*.json`): drop `owner` when all
-  actions are unassigned; paragraph the overview; tighten dedup to substring/word-order near-dupes.
-- **Phase 2 — hierarchical grouping, NEEDS live calls** (ADR-trigger): `emit_grouping` reduce sub-call
-  returns headings + point **indices**; groups are **reconstructed verbatim by index**; completeness
-  invariant (every index placed once, orphans → a language-aware catch-all heading like `{unassigned}`,
-  logged); additive `takeaway_groups` overlay
-  with flat-list fallback — grouping never re-summarizes. `Summary` data-model change.
-- **Phase 3 — PDF/MD format pass, NO paid call** (re-renders saved JSON): render the hierarchy, polish.
+**Shipped T1–T4 (`7ad2185`, additive — old paths still live until T5):**
+- **T1** `config/models.toml` + `config.py`: `synthesis_system_prompt` + `reconcile_system_prompt`
+  ({language}/{interpretation} tokens), defaulted + loader-wired.
+- **T2** `chunk.py`: shared `_bin_count`/`_bin_blocks` binning core; `plan_chunks` refactored onto it
+  (behavior identical); new standalone `Phase` + `plan_phases` (overlap=0); `block_timecodes`;
+  `[chunk] phase_target_tokens = 24000` (~4 phases for the validated 84k-token 3h lecture).
+- **T3** `summarize.py`: `SynthesisSection`; `Summary.synthesis`/`main_themes`; `Decision`/`ActionItem`
+  `.anchor`; `emit_phase`/`emit_reconcile` schemas; `_interpretation_label`
+  (`интерпретация`/`interpretation`); `build_synthesis_request`/`build_reconcile_request`;
+  `synthesize_summary` (max_tokens fail-loud per phase, `on_phase` resume seam); `validate_anchors`.
+- **T4** `render.py`: `_markdown_synthesis` + `_pdf_synthesis_body` (core idea → phases w/ anchor line
+  → main themes → anchored decisions/actions); flat/grouped fallback kept; `load_summary` round-trips
+  the new fields; FPDFException catch retained.
+- **Review fix (`/review` adversarial, P1):** `_merge_*` back-fill rebuilt the dataclass without
+  `anchor`, silently zeroing it before `validate_anchors`; fixed + regression tests.
 
 ## Config / behavior notes
 
-- **Default model tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings. T10 live gate is pinned
-  to `balanced` (Sonnet).
-- **Output layout:** F13 recovery `.json` → `output/summaries/raw/`; `output/summaries/` holds only the
-  readable `.pdf`/`.md`. The triplet shares one stem.
-- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml` (`anthropic_api_key`)
-  fallback — see `config/secrets.toml.example`.
-- **LLM prompt is data:** edit `config/models.toml` `[summarize] system_prompt` (two tokens substituted:
-  `{language}` and `{unassigned}`); output schema is code in `summarize.py`. `build_request` pins
-  `temperature=0` so the title (the artifact filename stem) is stable across re-runs.
+- New tool names `emit_phase`/`emit_reconcile` are distinct from the soon-deleted
+  `emit_summary`/`emit_synthesis`/`emit_grouping` — no collision during the T5 transition.
+- `{interpretation}` is substituted exactly like `{unassigned}` (per-language label dict in
+  `summarize.py`); the inline `[интерпретация]:` marker is plain text, survives MD+PDF.
+- **Default model tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings.
+- **Output layout:** F13 recovery `.json` → `output/summaries/raw/`; readable `.pdf`/`.md` →
+  `output/summaries/`; triplet shares one stem.
+- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`. Not set in WSL —
+  paid reference runs are operator-run on Windows.
+- **LLM prompt is data:** edit `config/models.toml`; the tool SCHEMAs stay in `summarize.py`.
 
 ## Next
 
-- **TD-15 Phase 1 SHIPPED (`d13a373`)** — paragraphed overview, tightened dedup (themes 63→59), and
-  **per-item** owner suppression (operator refinement 2026-06-26: drop a placeholder owner per row, keep
-  real names — the validation lecture was mixed, 24 placeholders + 6 names, not all-unassigned).
-- **TD-15 Phase 2 CODE DONE (`53b8bbb`), paid validation next** — `emit_grouping` index-assignment +
-  completeness invariant + `Прочее`/`Other` catch-all + additive `PointGroup`/`SectionGroup` overlay +
-  grouped render with flat fallback. Verified offline on the real 221-point artifact. NOT wired into
-  `summarize_auto` yet (validation-first). **Validate:** `python scripts/regroup.py "<raw/*.json>"` (one
-  small call, ~pennies, no $1.5 re-pay). Wire in + update N+1-call cost copy after the prompt is tuned.
-- **TD-15 Phase 3 (after, no API spend):** PDF/MD format pass on the new hierarchy (re-render saved JSON).
-- **No release work outstanding.**
-- **T7 cold/clean-deploy (operator, deferred):** `pip install --require-hashes -r requirements.lock` on a
-  fresh machine + cold first run (DLL/model provisioning). The accepted run was on an already-provisioned
-  box; this is the one honest gap.
+- **T5 (P2) menu wire-in + isolated deletion.** Wire `summarize_auto` (all tiers) to phase-split +
+  synthesis; cost preview = K (+1 fixed reconcile allowance when K>1); artifact-resume via `on_phase`
+  (skip phases already on disk). Then the SEPARATE, git-revertable commit deleting map-reduce +
+  grouping + the retired single-pass `emit_summary` (decision #1/#9: revert if reference-run
+  acceptance fails). Update `cost.py` cost copy.
+- **T6 (P2)** `CLAUDE.md` + `TECHNICAL_DEBT`: record the principle reversal + the 5 fidelity
+  properties + "every anchor resolves to a real timecode"; close TD-15 keep-all, open/close TD-16.
+- **T7–T9 (P3, TODO):** offline LLM-judge eval; parallel synthesis (ThreadPool); confirm map retired.
+- **Reference acceptance (operator, Windows):** one 3h-lecture paid run; check the 5 fidelity
+  properties by eye, jump each anchor to the recording, confirm ≤5 pp.
+- **T7 cold/clean-deploy (deferred):** `pip install --require-hashes` on a fresh box + cold first run.
 
 ## Dev env
 
-WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Linux loads cuDNN/cuBLAS via
-`LD_LIBRARY_PATH` (`scripts/dev-loop`); Windows via the win32 shim. PyPI + GitHub reachable from WSL;
-huggingface.co is not (no VPN). `ANTHROPIC_API_KEY` not set here (live gate:
-`ECHOGIST_LIVE_EVAL=1 .venv/bin/pytest -m live`). `anthropic` + `fpdf2` + `questionary==2.1.1` +
-`rich==15.0.0` installed (match the lock); all lazy/offline so the killswitch holds. Telemetry off,
-PROACTIVE false.
+WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Gate: `bash scripts/dev-loop` (ruff +
+mypy --strict + pytest). Current: **419 passed, 2 skipped** (the 2 live tests). `ANTHROPIC_API_KEY`
+not set here. All network libs lazy/offline so the killswitch holds. Telemetry off, PROACTIVE false.
+`/cp` is standing commit+push authorization.
 
 ## Open blockers / debts
 
 - **Blockers: none.**
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-15 readability follow-up (MEDIUM,
-  active — Phase 1 shipped, Phase 2 code done + paid validation next, Phase 3 after)** · TD-5 chunked
-  map-reduce (calibration resolved) · TD-7 non-TTY fallback UI (LOW) · TD-9 dropped cheap-call Enter
-  beat (LOW).
-- **Closed:** TD-1/2/3/4/6/8/10/11/12/13/14 (**TD-6 closed 2026-06-25** — title-language prompt fix
-  confirmed by the v1.1.0 live gate).
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16 v2 (active — T1–T4 shipped, T5
+  next)** supersedes TD-15 (readability) and the TD-5 map-reduce direction · TD-7 non-TTY fallback UI
+  (LOW) · TD-9 dropped cheap-call Enter beat (LOW).
+- **Closed:** TD-1/2/3/4/6/8/10/11/12/13/14.
 
 ## Relevant SoT
 
-- Build spec (locked): [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (pipeline + console UX).
-- Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md) ·
-  operator playbook (RU): [`OPERATOR_TESTING_PLAYBOOK.md`](./archive/OPERATOR_TESTING_PLAYBOOK.md).
+- Current plan: `~/.claude/plans/elegant-prancing-journal.md` (TD-16 v2, eng-cleared).
+- Build spec (locked): [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) — note TD-16 deviates from
+  its single-pass/map-reduce model (operator-approved reversal).
+- Original SOW: [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
 
 ## Hard constraints (carry-over)
 
 - API key from env / local config only; never in code/committed.
-- Killswitch: `SUMMARIZE` is the only network stage; everything left of it is offline + unit-testable
-  against a stub. (Model fetch is one-time provisioning, not a stage.)
+- Killswitch: `SUMMARIZE` (incl. synthesis/reconcile) is the only network stage; everything left of it
+  is offline + unit-testable against a stub. Phase-split, anchor validation, render are local.
 - Every push to `main` must pass: ruff + mypy + tests. (Development is on `main` directly.)
