@@ -61,101 +61,6 @@ output_tokens_estimate = 4000
 # real long transcript still trips the loud max_tokens guard, raise this to 16384;
 # above ~16000 the summarize call should switch to streaming to dodge SDK timeouts.
 max_output_tokens = 8192
-system_prompt = """
-You are a careful summarizer. Read the timestamped transcript the user provides and \
-produce ONE structured summary written entirely in {language}.
-
-If the transcript is garbled, repetitive noise, or clearly not intelligible speech \
-(e.g. the same phrase repeated many times, only filler sounds, or near-zero \
-meaningful content), set overview to a single sentence noting that the source audio \
-could not be meaningfully summarized, leave key_takeaways / section_timecodes / \
-decisions / action_items / recurring_themes as empty lists, set core_idea to an \
-empty string, and set title using the filename if it appears in the transcript or \
-else "Unrecognized audio".
-
-Call the emit_summary tool exactly once, filling every field:
-- title: a short, specific, human-meaningful title for the material, written in \
-{language}. Write the title in {language} EVEN IF the material is spoken in a \
-different language; never copy a title or phrase in the source language. No file \
-extension, no date, no surrounding quotes.
-- overview: state what the material is and what it covers. Use as many sentences as \
-the content needs to be faithful — there is NO upper limit; never cut it short.
-- key_takeaways: EVERY important concrete point, each a single sentence. Include ALL \
-of them, however many there are — do NOT stop at some round number, do NOT merge \
-distinct points to save space, and do NOT cap the list. If the material is dense with \
-20+ concepts, return 20+ takeaways. Include at least 3 when the material has that many.
-- section_timecodes: the major sections in order. For each, copy a timecode that \
-ACTUALLY APPEARS in the transcript (formatted [HH:MM:SS]) and give it a short title \
-written in {language}, even if the spoken language differs. Never invent or \
-interpolate a timecode that is not present in the transcript; if you are unsure, omit \
-the section rather than guess. Also fill bullets: for material longer than ~20 minutes, \
-give 3-5 short bullet-point theses per section that actually convey what that section \
-covers (not just a label); for short material an empty bullets list is fine.
-- decisions: concrete decisions reached in the material, in order. For each, give the \
-decision and the rationale (the reasoning given for it). If the material is not a \
-meeting or no decisions were made, return an empty list — never invent one.
-- action_items: concrete next actions in planning format, in order. For each, give the \
-task, the owner (the responsible person if the transcript names one, otherwise use \
-exactly the word "{unassigned}"), and a rough effort estimate. The estimate is your \
-own best-effort planning estimate of the work the task implies, not a quote from the \
-transcript; keep it short (e.g. a number of hours or days). If the material has no \
-actions to take, return an empty list — never invent one.
-- recurring_themes: ideas, motifs, or threads that come up more than once. Each item \
-is a short noun phrase. Include ALL that genuinely recur — no upper limit; return an \
-empty list if nothing genuinely recurs.
-- core_idea: name the single central point a reader should leave with. Use as many \
-sentences as it takes to state it fully — no upper limit.
-
-Be faithful to the transcript and add no facts that are not in it (effort estimates \
-on action_items are the one allowed exception — those are your planning judgment). \
-Write naturally in {language}, not a word-for-word translation.
-"""
-
-# Map step (TD-5 chunking): prepended to the system prompt when summarizing ONE
-# segment of a long transcript. {n}/{total}/{span} are filled per chunk; {language}
-# is substituted like the main prompt. The goal is EXTRACTION (every idea), not a
-# compressed retelling — the reduce step concatenates and dedups, it does not
-# re-summarize, so anything a segment drops here is lost for good.
-map_note_template = """
-This is segment {n} of {total} ({span}) of a LONGER transcript that has been split \
-for summarization. Extract EVERY distinct idea, decision, and action that appears in \
-THIS segment — omit nothing, do not compress, and do not skim the middle. Use only \
-timecodes that actually appear in this segment. Another step will merge the segments; \
-your job is complete coverage of this one.
-"""
-
-# Reduce step (TD-5 chunking): synthesizes ONLY the holistic fields (title, overview,
-# core_idea) over the already-extracted points. The list fields (takeaways, decisions,
-# action_items, sections, themes) are concatenated + deduped mechanically and NEVER
-# pass through this call, so the merge cannot summarize a point away.
-reduce_system_prompt = """
-You are merging the already-extracted key points of several consecutive segments of \
-ONE transcript into a single coherent whole, written entirely in {language}. You are \
-given the merged points (takeaways, sections, decisions, actions, themes) — these are \
-final; do NOT drop, compress, or re-judge them. Produce only: a short specific overall \
-title in {language}; a faithful overview of the whole material (as many sentences as \
-it needs, no upper limit); and the single core idea a reader should leave with. Call \
-the emit_synthesis tool exactly once.
-"""
-
-# Grouping step (TD-15 Phase 2): turns the flat walls (221 takeaways, dozens of themes
-# and micro-sections) into a readable hierarchy WITHOUT rewriting anything. The model
-# is given numbered lists and returns headings + the 1-based INDICES under each — never
-# the item text — so groups are reconstructed verbatim by index and a point can never be
-# dropped, merged, or reworded (the TD-5 completeness guarantee). Any index the model
-# forgets is collected into a language-aware catch-all heading; the run logs how many
-# were placed vs orphaned. {language} is substituted at call time.
-grouping_system_prompt = """
-You organize already-extracted points into a readable hierarchy, written entirely in \
-{language}. You are given numbered lists: TAKEAWAYS, THEMES, and SECTIONS. For each \
-list, group its items under a small set of clear, specific headings: aim for ~10-15 \
-headings for the takeaways, fewer for the themes, and consolidate the sections into \
-time-ordered macro-sections. Return ONLY each heading and the 1-based INDICES of the \
-items that belong under it — never the item text itself. Every index in a list must \
-appear under exactly ONE heading: do not drop, duplicate, merge, or reword any item, \
-and do not invent items. Write every heading in {language}. Call the emit_grouping \
-tool exactly once.
-"""
 
 # Synthesis step (TD-16 v2 direct synthesis): synthesize ONE phase (a contiguous time
 # span) of the transcript into faithful, readable prose. The transcript is ground truth,
@@ -212,16 +117,6 @@ contradiction in core_idea rather than silently choosing one.
 """
 
 [chunk]
-# Map-reduce summarization (TD-5). Chunking triggers on the QualityBudget — a single
-# pass is trusted only while the transcript is under BOTH limits; crossing either
-# (long OR dense) flips to map-reduce. This sits well below the tier ContextBudget
-# ([guard] safe_budget_fraction × context_window) on purpose: a single pass loses
-# fidelity in the middle of a long context ("lost in the middle") long before the
-# context window is actually full. All values are calibratable on a real lecture.
-quality_budget_tokens = 40000    # est. input tokens above this -> chunk
-quality_budget_seconds = 3600    # transcript duration above this (60 min) -> chunk
-target_chunk_tokens = 12000      # per-chunk size target (hyperparameter — calibrate)
-overlap_seconds = 90             # time-based overlap between chunks so straddling ideas survive
 # TD-16 v2 direct synthesis: target tokens per CONTIGUOUS phase (no overlap). K is
 # computed = ceil(total_tokens / this), so it scales with length (NOT a 3-4 cap); ~2x
 # the map target lands the validated ~84k-token 3h lecture at ~4 phases.

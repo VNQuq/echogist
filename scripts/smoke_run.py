@@ -161,10 +161,11 @@ def run_smoke(
     verdict = guard.check_overflow(transcript.text, tier, model_config.guard)
     if verdict.over_budget:  # a ~2-min smoke clip should never trip this
         raise SmokeError(guard.overflow_message(verdict, tier))
-    result = summarize.summarize(
+    result = summarize.summarize_auto(
         transcript.text,
         tier,
         model_config.summarize,
+        chunk_cfg=model_config.chunk,
         language=settings.summary_language,
         source_stem=clip.stem,
         api_key=api_key,

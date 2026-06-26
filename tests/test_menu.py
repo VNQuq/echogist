@@ -37,14 +37,12 @@ from echogist.ui import StubUI
 def _summary() -> Summary:
     return Summary(
         title="Test Summary",
-        overview="o",
-        key_takeaways=("k",),
-        section_timecodes=(),
-        recurring_themes=("t",),
         core_idea="c",
         decisions=(),
         action_items=(),
         language="ru",
+        synthesis=(SynthesisSection("H", "prose", ("[00:00:00]",)),),
+        main_themes=("t",),
     )
 
 

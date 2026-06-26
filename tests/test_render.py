@@ -1,12 +1,12 @@
-"""Render-stage tests (T7) — PDF (fpdf2 + bundled DejaVuSans) / Markdown / dedup.
+"""Render-stage tests (T7 / TD-16 v2) — synthesis document, PDF / Markdown / dedup.
 
 Render is local and offline, so everything runs for real: Markdown is pure string
 output, and the PDF path renders an actual file with fpdf2 (installed in the dev
 venv) and asserts the bundled Unicode font is embedded — the structural proxy for
 "Cyrillic, no tofu" (the visual confirmation is the §12 Windows smoke). Coverage:
-format dispatch + dedup, base-stem grouping with the F13 ``.json``, localized
-headings, the F13 ``load_summary`` round-trip, Cyrillic survival, and the
-missing-font / bad-format failure paths.
+the v2 synthesis document (phases + anchors + main themes), decisions/actions
+formatting, format dispatch + dedup, base-stem grouping with the F13 ``.json``, the
+F13 ``load_summary`` round-trip, Cyrillic survival, and the failure paths.
 """
 
 from __future__ import annotations
@@ -18,82 +18,75 @@ import pytest
 
 from echogist import render, summarize
 from echogist.render import RenderError
-from echogist.summarize import (
-    ActionItem,
-    Decision,
-    PointGroup,
-    SectionGroup,
-    SectionMarker,
-    Summary,
-)
+from echogist.summarize import ActionItem, Decision, Summary, SynthesisSection
 
 
-def _summary(title: str = "AI in 2026", language: str = "en") -> Summary:
+def _summary(title: str = "The Talk", language: str = "en") -> Summary:
+    """A representative TD-16 v2 summary: phases + anchors + header + decisions/actions."""
     return Summary(
         title=title,
-        overview="A talk about where AI is heading.",
-        key_takeaways=("Models got cheaper.", "Local inference matters."),
-        section_timecodes=(
-            SectionMarker("[00:00:00]", "Intro"),
-            SectionMarker("[00:12:30]", "Costs"),
-        ),
-        recurring_themes=("efficiency", "access"),
         core_idea="AI is becoming infrastructure.",
-        decisions=(Decision("Ship local inference first.", "Lower cost."),),
-        action_items=(ActionItem("Benchmark int8.", "Pat", "1 day"),),
+        decisions=(Decision("Ship local first.", "Lower cost.", anchor="[00:00:00]"),),
+        action_items=(ActionItem("Benchmark int8.", "Pat", "1 day", anchor="[00:10:00]"),),
         language=language,
+        synthesis=(
+            SynthesisSection("Intro", "First idea here.", ("[00:00:00]",)),
+            SynthesisSection("Body", "Second idea here.", ("[00:10:00]",)),
+        ),
+        main_themes=("efficiency", "access"),
     )
 
 
 # --------------------------------------------------------------------------- #
-# Markdown — pure, no dependency
+# Markdown — the v2 synthesis document
 # --------------------------------------------------------------------------- #
-def test_markdown_has_title_headings_and_bullets(tmp_path: Path) -> None:
-    path = render.render(_summary(), tmp_path, "md", log=lambda _m: None)
-    assert path == tmp_path / "AI in 2026.md"
-    text = path.read_text(encoding="utf-8")
-    assert text.startswith("# AI in 2026\n")
-    assert "## Key takeaways" in text
-    assert "- Models got cheaper." in text
-    assert "- `[00:00:00]` Intro" in text
+def test_markdown_synthesis_renders_phases_anchors_and_themes(tmp_path: Path) -> None:
+    text = render.render(_summary(), tmp_path, "md", log=lambda _m: None).read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith("# The Talk\n")
+    assert "## Core idea" in text and "AI is becoming infrastructure." in text
+    assert "## Intro" in text and "First idea here." in text  # phase heading + prose
+    assert "*[00:00:00]*" in text  # the phase's validated anchor line
+    assert "## Main themes" in text and "- efficiency" in text
+    # decisions/actions carry their anchor in parentheses (TD-16 v2)
+    assert "- Ship local first. — Lower cost.  ([00:00:00])" in text
+    assert "- Benchmark int8. — Pat, estimate: 1 day  ([00:10:00])" in text
     assert text.endswith("\n")
 
 
-def test_markdown_uses_russian_headings_for_ru_summary(tmp_path: Path) -> None:
-    path = render.render(_summary(title="Состояние ИИ", language="ru"), tmp_path, "md")
-    text = path.read_text(encoding="utf-8")
-    assert "## Обзор" in text  # localized heading, not "Overview"
-    assert "## Ключевые выводы" in text
+def test_markdown_synthesis_uses_russian_headings(tmp_path: Path) -> None:
+    text = render.render(_summary(title="Состояние ИИ", language="ru"), tmp_path, "md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Главная мысль" in text  # core idea
+    assert "## Основные темы" in text  # main themes
+    assert "## Принятые решения" in text  # decisions
+    assert "## Пункты к выполнению" in text  # action items
     assert "Состояние ИИ" in text  # Cyrillic stays literal, not \\u-escaped
 
 
-def test_markdown_renders_decisions_and_action_items(tmp_path: Path) -> None:
-    text = render.render(_summary(), tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Decisions" in text
-    assert "- Ship local inference first. — Lower cost." in text  # decision — rationale
-    assert "## Action items" in text
-    assert "- Benchmark int8. — Pat, estimate: 1 day" in text  # task — owner, estimate: X
-
-
-def test_markdown_localizes_meeting_headings_for_ru(tmp_path: Path) -> None:
-    s = _summary(title="Планёрка", language="ru")
+def test_markdown_decision_without_anchor_has_no_parens(tmp_path: Path) -> None:
+    s = Summary(
+        title="T",
+        core_idea="",
+        decisions=(Decision("Adopt int8.", "Halves VRAM."),),  # no anchor
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection("Phase", "Prose.", ()),),
+    )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Принятые решения" in text
-    assert "## Пункты к выполнению" in text
-    assert "оценка: 1 day" in text  # estimate label localized, value verbatim
+    assert "- Adopt int8. — Halves VRAM.\n" in text  # no trailing "  (...)" without an anchor
 
 
 def test_markdown_action_item_omits_empty_owner_and_estimate(tmp_path: Path) -> None:
     s = Summary(
         title="T",
-        overview="o",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
         core_idea="",
         decisions=(),
         action_items=(ActionItem("Lone task", "", ""),),
         language="en",
+        synthesis=(SynthesisSection("Phase", "Prose.", ()),),
     )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
     assert "- Lone task\n" in text  # no trailing " — " when owner+estimate empty
@@ -103,10 +96,6 @@ def test_markdown_drops_owner_when_all_action_items_unassigned(tmp_path: Path) -
     # Solo lecture: every owner is the per-language placeholder -> the column is noise.
     s = Summary(
         title="Лекция",
-        overview="о",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
         core_idea="",
         decisions=(),
         action_items=(
@@ -114,6 +103,7 @@ def test_markdown_drops_owner_when_all_action_items_unassigned(tmp_path: Path) -
             ActionItem("Сделать заметки", "Не назначено", ""),
         ),
         language="ru",
+        synthesis=(SynthesisSection("Фаза", "Текст.", ()),),
     )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
     assert "Не назначено" not in text  # placeholder owner suppressed
@@ -125,10 +115,6 @@ def test_markdown_suppresses_placeholder_owner_per_item_keeping_real_names(tmp_p
     # Mixed list: the real name is kept; the placeholder row sheds 'Не назначено'.
     s = Summary(
         title="Планёрка",
-        overview="о",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
         core_idea="",
         decisions=(),
         action_items=(
@@ -136,6 +122,7 @@ def test_markdown_suppresses_placeholder_owner_per_item_keeping_real_names(tmp_p
             ActionItem("Задача Б", "Не назначено", ""),
         ),
         language="ru",
+        synthesis=(SynthesisSection("Фаза", "Текст.", ()),),
     )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
     assert "- Задача А — Анна" in text  # real owner kept
@@ -143,12 +130,19 @@ def test_markdown_suppresses_placeholder_owner_per_item_keeping_real_names(tmp_p
     assert "- Задача Б\n" in text  # placeholder row -> bare task
 
 
-def test_markdown_paragraphs_a_long_single_blob_overview(tmp_path: Path) -> None:
+def test_markdown_paragraphs_a_long_single_blob_phase(tmp_path: Path) -> None:
     blob = "Первое предложение. Второе предложение! Третье предложение? Четвёртое."
-    s = replace(_summary(), overview=blob)
+    s = Summary(
+        title="T",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        synthesis=(SynthesisSection("Фаза", blob, ()),),
+    )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
     # >3 sentences -> split into >=2 paragraphs separated by a blank line; no text lost.
-    body = text.split("## Overview\n\n", 1)[1].split("\n##", 1)[0]
+    body = text.split("## Фаза\n\n", 1)[1]
     paras = [p for p in body.split("\n\n") if p.strip()]
     assert len(paras) >= 2
     assert "Первое предложение." in text and "Четвёртое." in text
@@ -157,108 +151,35 @@ def test_markdown_paragraphs_a_long_single_blob_overview(tmp_path: Path) -> None
 def test_markdown_skips_empty_sections(tmp_path: Path) -> None:
     bare = Summary(
         title="Bare",
-        overview="just an overview",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
         core_idea="",
         decisions=(),
         action_items=(),
         language="en",
+        synthesis=(SynthesisSection("Only phase", "Just prose.", ()),),
     )
     text = render.render(bare, tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Overview" in text
-    assert "## Key takeaways" not in text  # empty arrays produce no heading
+    assert "## Only phase" in text
+    assert "## Core idea" not in text  # empty core_idea -> no heading
+    assert "## Main themes" not in text
     assert "## Decisions" not in text
     assert "## Action items" not in text
-    assert "## Core idea" not in text
 
 
-def _summary_with_bullets(language: str = "en") -> Summary:
-    return Summary(
-        title="Talk",
-        overview="ov",
-        key_takeaways=(),
-        section_timecodes=(
-            SectionMarker("[00:00:00]", "Intro", ("Why it matters", "What's covered")),
-            SectionMarker("[00:12:30]", "Costs"),  # no bullets -> just the marker line
-        ),
-        recurring_themes=(),
-        core_idea="",
-        decisions=(),
-        action_items=(),
-        language=language,
-    )
-
-
-def test_markdown_renders_section_bullets_indented(tmp_path: Path) -> None:
-    text = render.render(_summary_with_bullets(), tmp_path, "md").read_text(encoding="utf-8")
-    assert "- `[00:00:00]` Intro" in text
-    assert "  - Why it matters" in text  # two-space indent => nested sub-bullet
-    assert "  - What's covered" in text
-    # A section without bullets renders only its marker line, no orphan sub-bullets.
-    assert "- `[00:12:30]` Costs" in text
-
-
-def test_section_bullets_round_trip_through_saved_json(tmp_path: Path) -> None:
-    original = _summary_with_bullets(language="ru")
-    json_path = summarize.save_raw_result(original, tmp_path)
-    assert render.load_summary(json_path) == original  # bullets survive save -> load
-
-
-def test_pdf_renders_section_bullets_without_error(tmp_path: Path) -> None:
-    pytest.importorskip("fpdf")
-    path = render.render(_summary_with_bullets(), tmp_path, "pdf")
-    assert path.read_bytes().startswith(b"%PDF")  # sub-bullet glyph + indent render clean
+def test_markdown_phase_anchorless_omits_the_anchor_line(tmp_path: Path) -> None:
+    s = replace(_summary(), synthesis=(SynthesisSection("Phase", "Prose only.", ()),))
+    text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
+    assert "## Phase" in text and "Prose only." in text
+    assert "*[" not in text  # no anchor italic line when the phase cites none
 
 
 # --------------------------------------------------------------------------- #
-# TD-15 Phase 2 — grouped overlay render (prefer groups, fall back to flat)
+# PDF — the v2 synthesis document renders a real file
 # --------------------------------------------------------------------------- #
-def _grouped_summary() -> Summary:
-    return Summary(
-        title="Лекция",
-        overview="о",
-        key_takeaways=("t1", "t2", "t3"),
-        section_timecodes=(SectionMarker("[00:00:00]", "Intro", ("b1",)),),
-        recurring_themes=("th1", "th2"),
-        core_idea="ci",
-        decisions=(),
-        action_items=(),
-        language="ru",
-        takeaway_groups=(PointGroup("Группа A", ("t1", "t2")), PointGroup("Группа B", ("t3",))),
-        theme_groups=(PointGroup("Темы", ("th1", "th2")),),
-        section_groups=(SectionGroup("Начало", (SectionMarker("[00:00:00]", "Intro", ("b1",)),)),),
-    )
-
-
-def test_markdown_renders_takeaways_under_group_subheadings(tmp_path: Path) -> None:
-    text = render.render(_grouped_summary(), tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Ключевые выводы" in text  # the section heading stays
-    assert "### Группа A" in text and "### Группа B" in text  # group sub-headings
-    assert "- t1" in text and "- t2" in text and "- t3" in text  # every point still present
-    assert "### Начало" in text  # macro-section heading
-    assert "  - b1" in text  # section bullets stay nested under the regrouped marker
-
-
-def test_markdown_falls_back_to_flat_list_when_no_groups(tmp_path: Path) -> None:
-    # Default-empty overlay (a single-pass or pre-grouping summary) -> flat list, no ###.
-    text = render.render(_summary(), tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Key takeaways" in text
-    assert "- Models got cheaper." in text
-    assert "###" not in text  # no group sub-headings when the overlay is empty
-
-
-def test_grouped_summary_round_trips_through_saved_json(tmp_path: Path) -> None:
-    original = _grouped_summary()
-    json_path = summarize.save_raw_result(original, tmp_path)
-    assert render.load_summary(json_path) == original  # overlay survives save -> load
-
-
-def test_pdf_renders_grouped_overlay_without_error(tmp_path: Path) -> None:
+def test_pdf_synthesis_renders_a_file(tmp_path: Path) -> None:
     pytest.importorskip("fpdf")
-    path = render.render(_grouped_summary(), tmp_path, "pdf")
-    assert path.read_bytes().startswith(b"%PDF")  # sub-headings + nested bullets render clean
+    path = render.render(_summary(), tmp_path, "pdf", log=lambda _m: None)
+    assert path.exists() and path.stat().st_size > 0
+    assert path.read_bytes().startswith(b"%PDF")
 
 
 # --------------------------------------------------------------------------- #
@@ -272,8 +193,8 @@ def test_unknown_format_fails_loud(tmp_path: Path) -> None:
 def test_dedup_adds_numeric_suffix(tmp_path: Path) -> None:
     p1 = render.render(_summary(), tmp_path, "md")
     p2 = render.render(_summary(), tmp_path, "md")
-    assert p1.name == "AI in 2026.md"
-    assert p2.name == "AI in 2026-2.md"
+    assert p1.name == "The Talk.md"
+    assert p2.name == "The Talk-2.md"
 
 
 def test_base_argument_groups_with_the_saved_json(tmp_path: Path) -> None:
@@ -302,7 +223,7 @@ def test_load_summary_round_trips_a_saved_json(tmp_path: Path) -> None:
     original = _summary(title="Состояние ИИ", language="ru")
     json_path = summarize.save_raw_result(original, tmp_path)
     loaded = render.load_summary(json_path)
-    assert loaded == original  # exact reconstruction incl. tuples + markers
+    assert loaded == original  # exact reconstruction incl. synthesis + anchors
 
 
 def test_load_summary_bad_json_fails_loud(tmp_path: Path) -> None:
@@ -324,28 +245,28 @@ def test_load_summary_tolerates_missing_fields(tmp_path: Path) -> None:
     partial.write_text('{"title": "Only a title"}', encoding="utf-8")
     loaded = render.load_summary(partial)
     assert loaded.title == "Only a title"
-    assert loaded.key_takeaways == ()
-    assert loaded.section_timecodes == ()
+    assert loaded.synthesis == ()
+    assert loaded.decisions == () and loaded.main_themes == ()
 
 
-def test_load_summary_filters_non_dict_markers(tmp_path: Path) -> None:
+def test_load_summary_filters_non_dict_synthesis(tmp_path: Path) -> None:
     p = tmp_path / "m.json"
     p.write_text(
-        '{"title":"T","section_timecodes":'
-        '[{"timecode":"[00:00:00]","title":"Intro"},"junk",{"title":"NoTime"}]}',
+        '{"title":"T","synthesis":'
+        '[{"heading":"Intro","prose":"p","anchors":["[00:00:00]"]},"junk",{"prose":"x"}]}',
         encoding="utf-8",
     )
     loaded = render.load_summary(p)
-    assert len(loaded.section_timecodes) == 2  # the bare string is dropped
-    assert loaded.section_timecodes[0] == SectionMarker("[00:00:00]", "Intro")
-    assert loaded.section_timecodes[1].timecode == ""  # missing key coerces to ""
+    assert len(loaded.synthesis) == 2  # the bare string is dropped
+    assert loaded.synthesis[0] == SynthesisSection("Intro", "p", ("[00:00:00]",))
+    assert loaded.synthesis[1].heading == ""  # missing key coerces to ""
 
 
 # --------------------------------------------------------------------------- #
 # Empty-title fallback parity (load_summary can rebuild an empty title)
 # --------------------------------------------------------------------------- #
 def test_markdown_empty_title_uses_fallback(tmp_path: Path) -> None:
-    s = Summary("", "ov", (), (), (), "", (), (), "en")
+    s = Summary("", "", (), (), "en", (SynthesisSection("Phase", "Prose.", ()),))
     text = render.render(s, tmp_path, "md", base="x").read_text(encoding="utf-8")
     assert text.startswith("# Summary\n")  # not a bare "# "
 
@@ -414,61 +335,3 @@ def test_pdf_missing_fpdf_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(RenderError, match="fpdf2 is not installed"):
         render.render(_summary(), tmp_path, "pdf")
-
-
-# --------------------------------------------------------------------------- #
-# TD-16 v2 — synthesis-document render (prose + anchors + main themes)
-# --------------------------------------------------------------------------- #
-def _synthesis_summary(language: str = "en") -> Summary:
-    return Summary(
-        title="The Talk",
-        overview="",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
-        core_idea="AI is becoming infrastructure.",
-        decisions=(Decision("Ship local first.", "Lower cost.", anchor="[00:00:00]"),),
-        action_items=(ActionItem("Benchmark int8.", "Pat", "1 day", anchor="[00:10:00]"),),
-        language=language,
-        synthesis=(
-            summarize.SynthesisSection("Intro", "First idea here.", ("[00:00:00]",)),
-            summarize.SynthesisSection("Body", "Second idea here.", ("[00:10:00]",)),
-        ),
-        main_themes=("efficiency", "access"),
-    )
-
-
-def test_markdown_synthesis_renders_phases_anchors_and_themes(tmp_path: Path) -> None:
-    text = render.render(_synthesis_summary(), tmp_path, "md", log=lambda _m: None).read_text(
-        encoding="utf-8"
-    )
-    assert text.startswith("# The Talk\n")
-    assert "## Core idea" in text and "AI is becoming infrastructure." in text
-    assert "## Intro" in text and "First idea here." in text  # phase heading + prose
-    assert "*[00:00:00]*" in text  # the phase's validated anchor line
-    assert "## Main themes" in text and "- efficiency" in text
-    # decisions/actions carry their anchor in parentheses (TD-16 v2)
-    assert "- Ship local first. — Lower cost.  ([00:00:00])" in text
-    assert "- Benchmark int8. — Pat, estimate: 1 day  ([00:10:00])" in text
-    # the retired structured headings are absent on the v2 path
-    assert "## Key takeaways" not in text and "## Overview" not in text
-
-
-def test_markdown_synthesis_uses_russian_headings(tmp_path: Path) -> None:
-    text = render.render(_synthesis_summary(language="ru"), tmp_path, "md").read_text(
-        encoding="utf-8"
-    )
-    assert "## Главная мысль" in text  # core idea
-    assert "## Основные темы" in text  # main themes
-
-
-def test_pdf_synthesis_renders_a_file(tmp_path: Path) -> None:
-    path = render.render(_synthesis_summary(), tmp_path, "pdf", log=lambda _m: None)
-    assert path.exists() and path.stat().st_size > 0
-    assert path.read_bytes().startswith(b"%PDF")
-
-
-def test_load_summary_round_trips_a_synthesis_json(tmp_path: Path) -> None:
-    original = _synthesis_summary()
-    json_path = summarize.save_raw_result(original, tmp_path)
-    assert render.load_summary(json_path) == original  # synthesis + anchors survive save -> load

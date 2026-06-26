@@ -32,7 +32,6 @@ output_tokens_estimate = 2000
 
 [summarize]
 max_output_tokens = 4096
-system_prompt = "Summarize in {language}. Call emit_summary once."
 
 [model_asset]
 name = "large-v3-int8_float16"
@@ -144,35 +143,18 @@ def test_missing_summarize_errors(tmp_path: Path) -> None:
         load_model_config(_write(tmp_path / "models.toml", text))
 
 
-def test_blank_system_prompt_errors(tmp_path: Path) -> None:
-    text = VALID_MODELS_TOML.replace(
-        'system_prompt = "Summarize in {language}. Call emit_summary once."',
-        'system_prompt = "   "',
-    )
-    with pytest.raises(ConfigError, match="non-empty string"):
-        load_model_config(_write(tmp_path / "models.toml", text))
-
-
 def test_shipped_summarize_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
     assert cfg.summarize.max_output_tokens == 8192
-    assert "{language}" in cfg.summarize.system_prompt
+    assert "{language}" in cfg.summarize.synthesis_system_prompt
 
 
 # --------------------------------------------------------------------------- #
-# [chunk] — map-reduce config (TD-5): optional, defaulted, validated
+# [chunk] — phase-split config (TD-16 v2): optional, defaulted, validated
 # --------------------------------------------------------------------------- #
 def test_shipped_chunk_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
-    assert cfg.chunk.quality_budget_tokens == 40_000
-    assert cfg.chunk.quality_budget_seconds == 3_600
-    assert cfg.chunk.target_chunk_tokens == 12_000
-    assert cfg.chunk.overlap_seconds == 90
     assert cfg.chunk.phase_target_tokens == 24_000  # TD-16 v2 phase-split target
-    # The shipped reduce/map/grouping prompt scaffolding is present (prompt = data).
-    assert "{language}" in cfg.summarize.reduce_system_prompt
-    assert "{n}" in cfg.summarize.map_note_template
-    assert "{language}" in cfg.summarize.grouping_system_prompt  # TD-15 Phase 2
     # TD-16 v2 synthesis/reconcile prompts present, with their substitution tokens.
     assert "{language}" in cfg.summarize.synthesis_system_prompt
     assert "{interpretation}" in cfg.summarize.synthesis_system_prompt
@@ -180,14 +162,10 @@ def test_shipped_chunk_config_loads() -> None:
 
 
 def test_missing_chunk_table_uses_defaults(tmp_path: Path) -> None:
-    # VALID_MODELS_TOML has no [chunk] / no reduce_system_prompt -> code defaults apply.
+    # VALID_MODELS_TOML has no [chunk] / no synthesis_system_prompt -> code defaults apply.
     cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
-    assert cfg.chunk.quality_budget_tokens == 40_000
-    assert cfg.chunk.target_chunk_tokens == 12_000
     assert cfg.chunk.phase_target_tokens == 24_000  # TD-16 v2 default applies
-    assert "{language}" in cfg.summarize.reduce_system_prompt  # defaulted, not crashed
-    assert "{language}" in cfg.summarize.grouping_system_prompt  # defaulted, not crashed
-    # TD-16 v2 prompts default in too when the keys are absent.
+    # TD-16 v2 prompts default in when the keys are absent (not crashed).
     assert "{interpretation}" in cfg.summarize.synthesis_system_prompt
     assert "{language}" in cfg.summarize.reconcile_system_prompt
 
@@ -196,7 +174,6 @@ def test_phase_target_override_parses(tmp_path: Path) -> None:
     text = VALID_MODELS_TOML + "\n[chunk]\nphase_target_tokens = 30000\n"
     cfg = load_model_config(_write(tmp_path / "models.toml", text))
     assert cfg.chunk.phase_target_tokens == 30000
-    assert cfg.chunk.target_chunk_tokens == 12_000  # untouched key keeps its default
 
 
 def test_phase_target_invalid_fails_loud(tmp_path: Path) -> None:
@@ -208,31 +185,10 @@ def test_phase_target_invalid_fails_loud(tmp_path: Path) -> None:
 def test_blank_synthesis_prompt_fails_loud(tmp_path: Path) -> None:
     # A hand-edited blank prompt is a loud ConfigError (caught, not silently defaulted).
     text = VALID_MODELS_TOML.replace(
-        'system_prompt = "Summarize in {language}. Call emit_summary once."',
-        'system_prompt = "Summarize in {language}. Call emit_summary once."\n'
-        'synthesis_system_prompt = "   "',
+        "max_output_tokens = 4096",
+        'max_output_tokens = 4096\nsynthesis_system_prompt = "   "',
     )
     with pytest.raises(ConfigError, match="must be a non-empty string"):
-        load_model_config(_write(tmp_path / "models.toml", text))
-
-
-def test_chunk_override_parses(tmp_path: Path) -> None:
-    text = VALID_MODELS_TOML + "\n[chunk]\ntarget_chunk_tokens = 8000\noverlap_seconds = 0\n"
-    cfg = load_model_config(_write(tmp_path / "models.toml", text))
-    assert cfg.chunk.target_chunk_tokens == 8000
-    assert cfg.chunk.overlap_seconds == 0  # 0 overlap is valid (>= 0, not > 0)
-    assert cfg.chunk.quality_budget_tokens == 40_000  # untouched key keeps its default
-
-
-def test_chunk_invalid_value_fails_loud(tmp_path: Path) -> None:
-    text = VALID_MODELS_TOML + "\n[chunk]\ntarget_chunk_tokens = -5\n"
-    with pytest.raises(ConfigError, match="must be > 0"):
-        load_model_config(_write(tmp_path / "models.toml", text))
-
-
-def test_chunk_negative_overlap_fails_loud(tmp_path: Path) -> None:
-    text = VALID_MODELS_TOML + "\n[chunk]\noverlap_seconds = -1\n"
-    with pytest.raises(ConfigError, match="must be >= 0"):
         load_model_config(_write(tmp_path / "models.toml", text))
 
 

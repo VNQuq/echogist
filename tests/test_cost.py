@@ -38,10 +38,6 @@ def _guard(output_tokens_estimate: int = 2000) -> GuardConfig:
 def _result(input_tokens: int, output_tokens: int) -> SummarizeResult:
     summary = Summary(
         title="t",
-        overview="o",
-        key_takeaways=(),
-        section_timecodes=(),
-        recurring_themes=(),
         core_idea="c",
         decisions=(),
         action_items=(),

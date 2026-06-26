@@ -42,51 +42,13 @@ _DEFAULT_BLOCK_SECONDS = 60.0
 
 # Defaults for the optional [chunk] table (map-reduce summarization, TD-5). A
 # missing table falls back to these so an existing models.toml keeps loading.
-# QualityBudget (tokens OR minutes) sits BELOW the tier's ContextBudget: a single
-# pass over a long transcript degrades ("lost in the middle") well before the
-# context fills, so chunking triggers early, on quality not just on overflow.
-_DEFAULT_QUALITY_BUDGET_TOKENS = 40_000
-_DEFAULT_QUALITY_BUDGET_SECONDS = 3_600.0  # 60 min
-_DEFAULT_TARGET_CHUNK_TOKENS = 12_000  # hyperparameter — calibrate on a real lecture
-_DEFAULT_OVERLAP_SECONDS = 90.0  # time-based boundary overlap so straddling ideas survive
 # Phase-split target (TD-16 v2 direct synthesis). The transcript is cut into a few
-# CONTIGUOUS, non-overlapping phases (not map chunks) for sequential synthesis. K is
-# computed from this target — ceil(total_tokens / phase_target_tokens) — so it SCALES
-# with length (a 3h lecture ≈ 3-4 phases, 6h ≈ 6-8); it is NOT a fixed cap. Sized ~2x
-# the map target so the validated ~84k-token 3h lecture lands at ~4 phases.
+# CONTIGUOUS, non-overlapping phases for sequential synthesis. K is computed from this
+# target — ceil(total_tokens / phase_target_tokens) — so it SCALES with length (a 3h
+# lecture ≈ 3-4 phases, 6h ≈ 6-8); it is NOT a fixed cap. Sized so the validated
+# ~84k-token 3h lecture lands at ~4 phases.
 _DEFAULT_PHASE_TARGET_TOKENS = 24_000
 
-# Default reduce/map prompt scaffolding. Prompt text is DATA (shipped in
-# models.toml), but these code-level fallbacks keep a minimal [summarize] table (or
-# a test fixture) loading when the keys are absent. {language} is substituted at
-# call time; {n}/{total}/{span} are filled per chunk by the map step.
-_DEFAULT_MAP_NOTE_TEMPLATE = (
-    "This is segment {n} of {total} ({span}) of a LONGER transcript. Extract EVERY "
-    "distinct idea, decision, and action in THIS segment — omit nothing, do not "
-    "compress, do not skip the middle. Use only timecodes that appear in this segment."
-)
-_DEFAULT_REDUCE_SYSTEM_PROMPT = (
-    "You are merging the extracted points of several segments of one transcript into "
-    "a single coherent summary, written entirely in {language}. You are given the "
-    "already-extracted points; do NOT drop or compress them. Produce only an overall "
-    "title, a faithful overview, and the single core idea — as many sentences as the "
-    "material needs, no upper limit. Call emit_synthesis exactly once."
-)
-# Grouping step (TD-15 Phase 2): organizes an already-extracted flat list into
-# headings WITHOUT rewriting any point. The model returns headings + the 1-based
-# INDICES of the points under each — never the point text — so reconstruction is
-# verbatim and a point can never be dropped or reworded. {language} is substituted
-# at call time. Code-level fallback so a minimal [summarize] table (or a fixture)
-# without the key still loads.
-_DEFAULT_GROUPING_SYSTEM_PROMPT = (
-    "You organize already-extracted points into a readable hierarchy, in {language}. "
-    "You are given numbered lists (takeaways, themes, sections). For each list, group "
-    "its items under a small set of clear, specific headings (~10-15 for takeaways, "
-    "fewer for themes; group sections into time-ordered macro-sections). Return ONLY "
-    "the headings and the 1-based INDICES of the items under each — never the item "
-    "text. Every index must appear under exactly ONE heading: do not drop, duplicate, "
-    "merge, or reword any item. Write headings in {language}. Call emit_grouping once."
-)
 # Synthesis step (TD-16 v2): synthesize ONE phase of the transcript into faithful,
 # readable prose — the transcript is ground truth, read directly (one hop). {language}
 # is the target; {interpretation} is the per-language label for the inline marker that
@@ -151,59 +113,36 @@ class GuardConfig:
 
 @dataclass(frozen=True)
 class SummarizeConfig:
-    """The one network stage's tunables (plan §3, T6). DATA, not code.
+    """The one network stage's tunables (plan §3, T6 / TD-16 v2). DATA, not code.
 
-    ``system_prompt`` is the prompt TEXT — editable data per "Config is data"
-    (CLAUDE.md). It carries two substitution tokens replaced at call time:
-    ``{language}`` (the target summary language) and ``{unassigned}`` (the fixed
-    no-owner label for that language). The tool-use SCHEMA (the title+sections
-    field contract the parser depends on) lives in code, in
-    :mod:`echogist.summarize`, so the prompt and the schema cannot drift apart.
+    ``synthesis_system_prompt`` / ``reconcile_system_prompt`` are the prompt TEXT —
+    editable data per "Config is data" (CLAUDE.md). The synthesis prompt carries two
+    substitution tokens replaced at call time: ``{language}`` (the target summary
+    language) and ``{interpretation}`` (the per-language inline marker label). The
+    tool-use SCHEMAs (the emit_phase / emit_reconcile field contracts the parser depends
+    on) live in code, in :mod:`echogist.summarize`, so prompt and schema cannot drift.
 
-    ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately
-    SEPARATE from, and larger than, ``GuardConfig.output_tokens_estimate`` (the
-    cost projection). The summary contract carries no upper limit on element counts
-    (all concepts, full overview, per-section bullets), so a flush cap would
-    truncate a dense RU summary into invalid tool-use JSON and waste the paid call;
-    the cap carries real headroom for Cyrillic tokenization.
+    ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately SEPARATE
+    from, and larger than, ``GuardConfig.output_tokens_estimate`` (the cost projection).
+    A phase's prose carries no upper limit, so a flush cap would truncate a dense RU
+    phase into invalid tool-use JSON and waste the paid call; the cap carries real
+    headroom for Cyrillic tokenization.
     """
 
-    system_prompt: str
     max_output_tokens: int
-    reduce_system_prompt: str = _DEFAULT_REDUCE_SYSTEM_PROMPT
-    map_note_template: str = _DEFAULT_MAP_NOTE_TEMPLATE
-    grouping_system_prompt: str = _DEFAULT_GROUPING_SYSTEM_PROMPT
-    # TD-16 v2 direct synthesis: the per-phase synthesis prompt (carries {language} and
-    # the {interpretation} marker label) and the document-header reconcile prompt. Both
-    # DATA, defaulted so a minimal table keeps loading; the new tool SCHEMAs stay in code.
     synthesis_system_prompt: str = _DEFAULT_SYNTHESIS_SYSTEM_PROMPT
     reconcile_system_prompt: str = _DEFAULT_RECONCILE_SYSTEM_PROMPT
 
 
 @dataclass(frozen=True)
 class ChunkConfig:
-    """Map-reduce chunking knobs (DATA, not code) — TD-5.
+    """Phase-split knob (DATA, not code) — TD-16 v2 direct synthesis.
 
-    Chunking triggers on the **QualityBudget**: a single pass is allowed only while
-    the transcript stays under BOTH ``quality_budget_tokens`` and
-    ``quality_budget_seconds``; crossing either one (long OR dense) flips to
-    map-reduce. This sits below the tier's ContextBudget (``GuardConfig.safe_budget``)
-    on purpose — a single pass loses fidelity in the middle of a long context well
-    before that context is full.
-
-    ``target_chunk_tokens`` is the per-chunk size target (a calibratable
-    hyperparameter, not a hard limit); ``overlap_seconds`` is the time-based overlap
-    carried between adjacent chunks so an idea straddling a cut is not lost (the
-    duplicate it creates is removed by the reduce step's conservative dedup).
+    ``phase_target_tokens`` is the target tokens per CONTIGUOUS, non-overlapping phase.
+    K = ceil(total_tokens / phase_target_tokens), computed (scales with length), not a
+    cap: a 3h lecture lands at ~3-4 phases, a 6h one at ~6-8.
     """
 
-    quality_budget_tokens: int = _DEFAULT_QUALITY_BUDGET_TOKENS
-    quality_budget_seconds: float = _DEFAULT_QUALITY_BUDGET_SECONDS
-    target_chunk_tokens: int = _DEFAULT_TARGET_CHUNK_TOKENS
-    overlap_seconds: float = _DEFAULT_OVERLAP_SECONDS
-    # TD-16 v2 direct synthesis: target tokens per CONTIGUOUS, non-overlapping phase.
-    # K = ceil(total_tokens / phase_target_tokens), computed (scales with length), not a
-    # cap. Larger than target_chunk_tokens — phases are coarser than map chunks.
     phase_target_tokens: int = _DEFAULT_PHASE_TARGET_TOKENS
 
 
@@ -363,18 +302,6 @@ def _optional_positive(table: dict[str, Any], key: str, where: str, default: flo
     return _as_positive_number(table[key], key, where)
 
 
-def _optional_nonnegative(table: dict[str, Any], key: str, where: str, default: float) -> float:
-    """Return ``table[key]`` validated as a number >= 0, else ``default`` (0 allowed)."""
-    if key not in table:
-        return default
-    value = table[key]
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in {where} must be a number.")
-    if value < 0:
-        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in {where} must be >= 0.")
-    return float(value)
-
-
 def _optional_temperature(table: dict[str, Any], where: str) -> float | None:
     """Return ``table['temperature']`` validated as a number >= 0, or None if absent.
 
@@ -457,13 +384,7 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
     summarize_table = raw.get("summarize")
     if not isinstance(summarize_table, dict):
         raise ConfigError(f"{_MODELS_FILENAME}: missing [summarize] table.")
-    system_prompt = _require(summarize_table, "system_prompt", "[summarize]")
-    if not isinstance(system_prompt, str) or not system_prompt.strip():
-        raise ConfigError(
-            f"{_MODELS_FILENAME}: 'system_prompt' in [summarize] must be a non-empty string."
-        )
     summarize = SummarizeConfig(
-        system_prompt=system_prompt,
         max_output_tokens=int(
             _as_positive_number(
                 _require(summarize_table, "max_output_tokens", "[summarize]"),
@@ -471,17 +392,8 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
                 "[summarize]",
             )
         ),
-        # Optional, defaulted: map-reduce prompt scaffolding. A minimal [summarize]
-        # table (or fixture) without these keeps the code-level fallbacks.
-        reduce_system_prompt=_optional_nonempty_str(
-            summarize_table, "reduce_system_prompt", _DEFAULT_REDUCE_SYSTEM_PROMPT
-        ),
-        map_note_template=_optional_nonempty_str(
-            summarize_table, "map_note_template", _DEFAULT_MAP_NOTE_TEMPLATE
-        ),
-        grouping_system_prompt=_optional_nonempty_str(
-            summarize_table, "grouping_system_prompt", _DEFAULT_GROUPING_SYSTEM_PROMPT
-        ),
+        # Optional, defaulted (TD-16 v2): the synthesis + reconcile prompts. A minimal
+        # [summarize] table (or fixture) without these keeps the code-level fallbacks.
         synthesis_system_prompt=_optional_nonempty_str(
             summarize_table, "synthesis_system_prompt", _DEFAULT_SYNTHESIS_SYSTEM_PROMPT
         ),
@@ -525,23 +437,6 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         raise ConfigError(f"{_MODELS_FILENAME}: [chunk] must be a table.")
     else:
         chunk = ChunkConfig(
-            quality_budget_tokens=int(
-                _optional_positive(
-                    chunk_table, "quality_budget_tokens", "[chunk]", _DEFAULT_QUALITY_BUDGET_TOKENS
-                )
-            ),
-            quality_budget_seconds=_optional_positive(
-                chunk_table, "quality_budget_seconds", "[chunk]", _DEFAULT_QUALITY_BUDGET_SECONDS
-            ),
-            target_chunk_tokens=int(
-                _optional_positive(
-                    chunk_table, "target_chunk_tokens", "[chunk]", _DEFAULT_TARGET_CHUNK_TOKENS
-                )
-            ),
-            # overlap may legitimately be 0 (no overlap), so it is not "positive-only".
-            overlap_seconds=_optional_nonnegative(
-                chunk_table, "overlap_seconds", "[chunk]", _DEFAULT_OVERLAP_SECONDS
-            ),
             phase_target_tokens=int(
                 _optional_positive(
                     chunk_table, "phase_target_tokens", "[chunk]", _DEFAULT_PHASE_TARGET_TOKENS

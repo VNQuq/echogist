@@ -1,24 +1,17 @@
-"""T5b — chunk planner for map-reduce summarization (TD-5). Local, offline, killswitch-safe.
+"""Phase planner for direct transcript synthesis (TD-16 v2). Local, offline, killswitch-safe.
 
-When a transcript is long or dense enough that a single SUMMARIZE pass would lose
-fidelity in the middle ("lost in the middle"), it is split into balanced, slightly
-overlapping chunks that are each summarized (MAP) and then merged (REDUCE). This
-module owns only the LOCAL, deterministic planning half — deciding *whether* to
-chunk and *where* to cut. No model, no network, no Anthropic import: the whole
-planner is pure functions over the saved transcript text, so it is unit-testable
-with no key (CLAUDE.md killswitch).
+A long transcript is split into a computed number of balanced, CONTIGUOUS phases that are
+each synthesized into faithful prose (see :func:`echogist.summarize.synthesize_summary`).
+This module owns the LOCAL, deterministic planning half — deciding *where* to cut. No
+model, no network, no Anthropic import: the whole planner is pure functions over the saved
+transcript text, so it is unit-testable with no key (CLAUDE.md killswitch).
 
-**Two budgets.** Chunking triggers on the **QualityBudget** (:func:`needs_chunking`):
-a single pass is trusted only while the transcript is under BOTH the token and the
-duration limit. This sits below the tier's ContextBudget (the overflow guard) on
-purpose — a single pass degrades well before the context window is full.
-
-**Where to cut.** The saved transcript is already a sequence of ``[HH:MM:SS] text``
-blocks (one per ~60s, see :mod:`echogist.transcribe`). Chunks are packed out of whole
-blocks — never mid-sentence — into ``K = ceil(total_tokens / target_chunk_tokens)``
-balanced bins (no disproportionate tail), with a time-based overlap carried between
-adjacent chunks so an idea straddling a cut survives in both (the duplicate is removed
-by the reduce step's conservative dedup).
+**Where to cut.** The saved transcript is already a sequence of ``[HH:MM:SS] text`` blocks
+(one per ~60s, see :mod:`echogist.transcribe`). Phases are packed out of whole blocks —
+never mid-sentence — into ``K = ceil(total_tokens / phase_target_tokens)`` balanced bins
+(no disproportionate tail). Phases are contiguous and NON-overlapping: synthesis has no
+mechanical dedup, so coherence is carried forward as prior-phase context rather than by
+re-including text (see :func:`plan_phases`).
 """
 
 from __future__ import annotations
@@ -115,46 +108,6 @@ def block_timecodes(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def total_duration_seconds(text: str) -> float:
-    """Transcript duration proxy: the start time of the last timecoded block (or 0).
-
-    Uses the last block's start (we do not carry block END times); for a long
-    recording this under-counts by at most one block (~60s), which is harmless for a
-    coarse QualityBudget trigger.
-    """
-    blocks = _blocks(text)
-    return blocks[-1].start if blocks else 0.0
-
-
-def needs_chunking(est_tokens: int, duration_seconds: float, cfg: ChunkConfig) -> bool:
-    """True if the transcript crosses the QualityBudget on EITHER tokens or duration.
-
-    Either axis tripping is enough (long OR dense), erring toward chunking — which
-    errs toward completeness, the whole point of map-reduce.
-    """
-    return est_tokens > cfg.quality_budget_tokens or duration_seconds > cfg.quality_budget_seconds
-
-
-@dataclass(frozen=True)
-class Chunk:
-    """One planned chunk: its text, position, and time span (for the map note).
-
-    ``text`` is whole ``[HH:MM:SS] text`` lines joined by newlines (same shape as the
-    transcript), including any leading overlap carried from the previous chunk.
-    ``index`` is 1-based; ``span`` formats the covered time range for the map prompt.
-    """
-
-    text: str
-    index: int
-    total: int
-    start_seconds: float
-    end_seconds: float
-
-    @property
-    def span(self) -> str:
-        return f"{_hms(self.start_seconds)}–{_hms(self.end_seconds)}"
-
-
 def _bin_count(total_tokens: int, target_tokens: int, n_blocks: int) -> int:
     """``K = ceil(total / target)``, at least 1, never more bins than blocks.
 
@@ -193,66 +146,15 @@ def _bin_blocks(sizes: list[int], k: int) -> list[list[int]]:
     return [b for b in bins if b]  # drop any empty bin (defensive; rounding edge)
 
 
-def plan_chunks(
-    text: str, cfg: ChunkConfig, *, estimate: TokenEstimator = _body_tokens
-) -> list[Chunk]:
-    """Split ``text`` into balanced, overlapping chunks on block boundaries.
-
-    ``K = ceil(total_tokens / target_chunk_tokens)`` bins, each block assigned by the
-    midpoint of its cumulative-token position so the bins are near-even (no tiny
-    tail). Then each chunk after the first re-includes the trailing blocks of its
-    predecessor that fall within ``overlap_seconds`` of its own first block, so an
-    idea spanning the cut appears in both chunks. Always returns at least one chunk;
-    a transcript with no parseable blocks returns a single chunk of the whole text.
-    """
-    blocks = _blocks(text)
-    if not blocks:
-        return [Chunk(text=text, index=1, total=1, start_seconds=0.0, end_seconds=0.0)]
-
-    sizes = [max(1, estimate(b.line)) for b in blocks]  # >=1 so empty-ish blocks still count
-    k = _bin_count(sum(sizes), cfg.target_chunk_tokens, len(blocks))
-    bins = _bin_blocks(sizes, k)
-
-    chunks: list[Chunk] = []
-    total = len(bins)
-    for pos, members in enumerate(bins):
-        first_idx = members[0]
-        first_start = blocks[first_idx].start
-        overlap_idx: list[int] = []
-        if pos > 0 and cfg.overlap_seconds > 0:
-            # Walk backward through the previous bin, re-including blocks within the
-            # overlap window of THIS chunk's first block.
-            j = first_idx - 1
-            while j >= 0 and first_start - blocks[j].start <= cfg.overlap_seconds:
-                overlap_idx.append(j)
-                j -= 1
-            overlap_idx.reverse()
-        line_idx = overlap_idx + members
-        lines = [blocks[i].line for i in line_idx]
-        chunks.append(
-            Chunk(
-                text="\n".join(lines),
-                index=pos + 1,
-                total=total,
-                start_seconds=blocks[line_idx[0]].start,
-                end_seconds=blocks[members[-1]].start,
-            )
-        )
-    return chunks
-
-
 @dataclass(frozen=True)
 class Phase:
     """One synthesis phase (TD-16 v2): a CONTIGUOUS, non-overlapping span of blocks.
 
-    Same shape as :class:`Chunk` (text / 1-based index / total / time span, with the
-    ``span`` property for the "phase N of M (HH:MM:SS–HH:MM:SS)" coherence note), but a
-    STANDALONE type — deliberately not a subclass of :class:`Chunk`. Phases are produced
-    differently (no overlap between neighbours: synthesis has no mechanical dedup, so any
-    overlap would surface as duplicated prose at the seam — coherence is carried forward
-    as prior-phase context, see the synthesis prompt's PRIOR CONTEXT section, not by
-    re-including text). Standalone so the map-reduce ``Chunk`` can be deleted (TD-16 v2
-    retirement) without touching the phase model.
+    Carries text / 1-based index / total / time span, with the ``span`` property for the
+    "phase N of M (HH:MM:SS–HH:MM:SS)" coherence note. Phases have NO overlap between
+    neighbours: synthesis has no mechanical dedup, so any overlap would surface as
+    duplicated prose at the seam — coherence is carried forward as prior-phase context
+    (see the synthesis prompt's PRIOR CONTEXT section), not by re-including text.
     """
 
     text: str
