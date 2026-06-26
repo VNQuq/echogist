@@ -35,15 +35,27 @@ operator approval.
   No `job.json`, no history layer.
 - **Pure stages.** Each pipeline stage is pure over an in-memory object so the whole
   pipeline is unit-testable with `SUMMARIZE` mocked.
-- **Single-pass below the QualityBudget; map-reduce above it (TD-5).** Material under
-  the QualityBudget (tokens *and* duration) is summarized in one structured call.
-  Long/dense material that crosses it is split into balanced, overlapping chunks
-  (MAP); the extracted points are concatenated and conservatively deduped — never
-  re-summarized — and only title/overview/core_idea come from a synthesis call
-  (REDUCE). Completeness over a single shallow pass. *Operator-approved 2026-06-25;
-  supersedes the original single-pass-only rule. Per-chunk checkpointing stays cut —
-  a failed chunk fails the whole run loud and retries from the saved transcript (no
-  job engine).*
+- **Fidelity > completeness; the transcript is ground truth, read directly (TD-16 v2).**
+  The transcript is split into a computed number of balanced, contiguous, NON-overlapping
+  phases (`chunk.plan_phases`; short material = K=1, the whole transcript in one call), and
+  each phase is synthesized DIRECTLY into faithful prose — one hop, no map-extracted
+  intermediate, no coverage checklist, no grouping. Phases run sequentially and
+  forward-only (each sees prior headings + the prior phase's real tail prose as
+  do-not-restate context); a reconcile pass (K>1 only) writes the title/core_idea/
+  main_themes from the phase prose and never re-reads the transcript. Every emitted
+  `[HH:MM:SS]` anchor is validated offline against the real block timecodes (accept / snap
+  within 2s / drop) — that, plus the operator's manual re-check against the recording, IS
+  the fidelity gate. No LLM-judge, no automated coverage signal. *Operator-approved
+  2026-06-26; supersedes the TD-5 single-pass/map-reduce rule and TD-15 group-keep-all. A
+  failed phase fails the whole run loud; re-run from the saved transcript SKIPS phases
+  already persisted to disk (artifact-resume, not a job engine).*
+- **Five fidelity properties (the v2 acceptance criterion).** A v2 summary must be:
+  (1) **grounded** — every sentence traceable to the transcript; (2) **no fabrication** —
+  nothing added that the author did not say (a bridge beyond the text is marked inline with
+  `[интерпретация]:`); (3) **faithful stance** — no inversion or softening, caveats kept;
+  (4) **no merged distinctions** — two distinct points never collapsed into one;
+  (5) **coverage** — every point reflected, or consciously dropped (the manual gate).
+  Plus the load-bearing invariant: **every anchor resolves to a real transcript timecode.**
 - **Config is data, not code.** Model IDs, prices, model source URL, settings are
   editable without a code change.
 - **Fail loud, return to menu.** Every error path = human-readable message + clean

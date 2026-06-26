@@ -24,116 +24,43 @@ Deadline/Trigger · SoT) + **What** / **Why deferred** / **When to open**.
 
 ## Open debts
 
-### TD-5 — Chunked map-reduce summarization — SHIPPED (Unreleased, 2026-06-25)
+### TD-16 — v2 direct transcript synthesis (fidelity > completeness)
 
-Severity: LOW · Created 2026-06-14 (eng-review) · **Built 2026-06-25 (operator-directed, for idea-completeness on dense material)** · SoT: this file
+Severity: MEDIUM · Created 2026-06-26 (operator principle reversal, eng-reviewed) · Trigger: **active — T1–T7 shipped; closes on operator paid reference-run acceptance** · SoT: `~/.claude/plans/elegant-prancing-journal.md` + this file
 
-**Built.** Map-reduce now triggers on a **QualityBudget** (`[chunk]` in models.toml — tokens OR
-duration, below the ContextBudget on purpose: a single pass loses the middle of a long context well
-before the window fills). `echogist/chunk.py` plans balanced, ~90s-overlapping chunks on block
-boundaries; `summarize.summarize_chunked` MAPs each chunk and REDUCEs by concatenate + conservative
-dedup (list fields are never re-summarized; only title/overview/core_idea are synthesized).
-`summarize_auto` dispatches; cost reflects N+1 calls; the acceptance invariant (`extracted → after
-dedup`) is logged per run. Supersedes the original single-pass principle (CLAUDE.md, operator-approved).
+**What.** The principle reversal: the transcript is ground truth, read DIRECTLY into a faithful
+synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. Deterministic phase-split
+(`chunk.plan_phases`, computed K, contiguous, overlap=0; short = K=1) → `summarize.synthesize_summary`
+×K sequential forward-only (prior headings + prior phase's real tail prose as do-not-restate context) →
+anchor-preserving `_merge_decisions`/`_merge_action_items` → reconcile pass (title/core_idea/main_themes
++ contradiction flag, K>1 only) → deterministic `validate_anchors` (accept/snap-2s/drop vs real block
+timecodes — the only live fidelity check). Supersedes TD-5 (map-reduce) and TD-15 (group-keep-all); both
+are CLOSED + their code deleted. The CLAUDE.md principle + the 5 fidelity properties are recorded.
 
-**Still cut (intentional).** Per-chunk checkpointing — a failed chunk fails the whole run loud and
-retries from the saved transcript (artifact recovery, not a job engine — CLAUDE.md).
+**Shipped.** **T1–T4** (`7ad2185`, additive): synthesis/reconcile config + prompts, `plan_phases` +
+shared binning, `SynthesisSection`/anchors/`emit_phase`/`emit_reconcile`/`validate_anchors`, synthesis
+render. **T5 commit A** (`1fdd3de`): `summarize_auto` rewired to phase-split + synthesis for ALL
+material; cost preview = K (+1 fixed reconcile when K>1); artifact-resume (each completed phase persists
+to `raw/.resume/<stem>.json`, a re-run reloads the valid prefix and skips done phases — no job engine).
+**T5 commit B** (`43b7daf`, isolated + git-revertable, decision #9): deleted single-pass/map-reduce/
+grouping (functions, schemas, retired `Summary` fields + `SectionMarker`/`PointGroup`/`SectionGroup`,
+chunk/config knobs, models.toml prompts) + the old structural-quality eval + `regroup.py`. **T6/T7**
+(docs): this entry + the CLAUDE.md principle reversal & 5 fidelity properties.
 
-**Calibration — RESOLVED (2026-06-25, first paid run).** A 179-min RU lecture (flagship/opus-4-8) ran
-clean: 7 chunks at `target_chunk_tokens`=12k with 90s overlap, no segment tripped the `max_tokens` guard
-(8192/chunk held), 221 takeaways extracted → 221 after dedup (no collapse), actual **$1.46 vs the $2.35
-estimate** (high-bias estimate confirmed). 12k / 90s / 8192 are validated for real RU material. Two live
-bugs surfaced + fixed during the run: (a) the whole Claude 4.x family 400s on `temperature` → made it an
-optional per-tier `models.toml` field, omitted by default (commit 1c49248); (b) the shared caller
-extracted the tool block by a hardcoded `emit_summary`, so the REDUCE `emit_synthesis` reply was skipped
-and failed loud with a false "no tool call" → now matches the forced tool from `tool_choice` (commit
-53898f4). Map-stage remains lossy *within* a chunk; the reduce is not. **Output readability is now the
-binding bottleneck (221-point flat wall) → TD-15.**
+**Known limitation (accepted, matches decision #2).** Artifact-resume is keyed by `source_stem`, so a
+*failed run + edited transcript reused under the same filename* would splice old phase prose with new
+phases. The transcript IS the checkpoint; there is no transcript-fingerprint invalidation (no job
+engine). Mitigation: delete `output/summaries/raw/.resume/` before re-summarizing an edited transcript.
 
-**Review residuals (2026-06-25 `/review`, deferred LOW).** Four findings fixed in-branch (per-chunk
-overflow guard restored on the chunked path; `_merge_sections` keyed on timecode alone; merge dedup
-prefers the non-empty rationale/owner; `estimate_cost_chunked` made a true ceiling at `output_cap`).
-Five left open as LOW: (1) `section_timecodes.bullets` is schema-`required` — may nudge the model to
-invent bullets on a short overlap fragment, mitigated by prompt guidance; revisit if the live run shows
-bloated short-section bullets. (2) The overlap walk in `plan_chunks` spans all earlier blocks within
-`overlap_seconds`, not just the previous bin (harmless at the default 90s/~60s blocks; the inline "previous
-bin" comment overstates the bound) — only bites under a low `block_seconds` / high `overlap_seconds`
-config. (3) Wrapped PDF sub-bullets (`render._subbullet`) lose their indent on the continuation line
-(fpdf2 wraps to LMARGIN) — cosmetic, eyeball it in the first live PDF. (4) The chunking decision is
-computed twice (menu cost preview + `summarize_auto`) from the same deterministic inputs — no drift
-today, but a future estimator/overhead change must touch both; a shared `plan` threaded through `Deps`
-would make it one computation. (5) Exact-match dedup + the REDUCE dropping per-chunk overview/core_idea
-mean a near-duplicate overlap takeaway or a connecting idea that lived only in a chunk overview can
-survive/vanish — accepted as the conservative-over-lossy tradeoff, flagged here for honesty. **(5)
-confirmed by the 2026-06-25 run — exact-match dedup let near-dup themes survive (`внутренняя свобода` ⊂
-`…независимо от обстоятельств`; `хочу / надо / могу` vs `хочу/могу/надо`); being tightened to
-substring/word-order near-dupes in TD-15 Phase 1.** Open any of the rest if a later run surfaces it.
+**Remaining.** (a) **Paid reference acceptance (operator, Windows — `ANTHROPIC_API_KEY` not in WSL):**
+one ~3h-lecture run; check the 5 fidelity properties by eye, jump each anchor to the recording, confirm
+≤5 pp and readable. This is the closure gate. (b) **T8 (P3, TODO):** offline LLM-judge groundedness
+eval — trigger-gated, eval-suite only, never per-run (it replaces the retired structural eval; until it
+lands the manual paid run is the only quality gate). **Parallel synthesis is OUT OF SCOPE — not
+required** (operator, 2026-06-26): sequential synthesis ships and stays.
 
-### TD-15 — Summary readability: hierarchical grouping + format pass (TD-5 follow-up)
-
-Severity: MEDIUM · Created 2026-06-25 (operator read of the first paid TD-5 run) · Trigger: **active — Phase 1 done, Phase 2 code done (paid validation next), Phase 3 after** · SoT: this file
-
-**What.** The TD-5 map-reduce hit its completeness goal but the output is a flat wall: 221 takeaways
-(~10+ PDF pages), a 5024-char single-paragraph overview, 69 micro-sections, 63 flat themes with visible
-near-dupes, and `Не назначено` on all 30 action items (solo lecture, no owners). Operator read: "easier
-to listen to the whole thing myself." Extraction is no longer the bottleneck; **presentation is.**
-Operator-approved direction (decision brief 2026-06-25): **group, keep all — NOT compress.** Three phases:
-
-- **Phase 1 — quick wins (NO paid call; re-renders from the saved `raw/*.json`, F13).** (a) drop the
-  `owner` line in render when every action item is unassigned; (b) render the overview as real
-  paragraphs, not one slab; (c) tighten dedup to catch substring-containment + word-order near-dupes
-  (still mechanical, still never-re-summarize). Render + pure-logic only.
-- **Phase 2 — hierarchical grouping (NEEDS live calls; ADR below).** Nest every extracted point under
-  ~10–15 headings; consolidate the 69 micro-sections into ~10–15 time-ordered macro-sections; cluster the
-  63 themes. `Summary` gains additive `takeaway_groups` / `theme_groups`. ADR-trigger (data-model + new
-  LLM prompt).
-- **Phase 3 — PDF/MD format pass (NO paid call; re-renders from saved JSON).** Render the new hierarchy
-  cleanly, typographic polish, the paragraphed overview, de-noised action items. Operator-mandated.
-
-**ADR — Phase 2 grouping (approved 2026-06-25, index-assignment).** Grouping must **assign** points,
-never **rewrite** them — else it silently re-summarizes and breaks the TD-5 completeness guarantee.
-Decision:
-- A new forced-tool reduce sub-call (`emit_grouping`) receives the **numbered** flat point list and
-  returns only **headings + the indices** of the points under each — never the point text.
-- Each group is **reconstructed verbatim by index** from the original flat list. The model's text is used
-  for headings only; points are never taken from the model's output.
-- **Completeness invariant** (mechanical, logged like `extracted → after dedup`): every index `1..N`
-  appears under exactly one heading. Any unplaced index → a **language-aware catch-all heading**
-  (e.g. `Other` / `Прочее`), substituted at call time like the existing `{unassigned}` token (`Не
-  назначено` / `Unassigned`) — NOT a hardcoded literal, since the heading prints in the summary's target
-  language. Fail-soft, logged — a forgotten point is never lost and a paid run is never nuked. Log line,
-  e.g. `Grouped 221 points into 13 sections (0 orphaned)`.
-- **Additive overlay with flat-list fallback.** The flat, verified `key_takeaways` tuple stays the
-  canonical complete list (the completeness guarantee is unchanged); `takeaway_groups` is a presentation
-  layer alongside it. Render prefers the groups; if grouping returns empty/garbage, render falls back to
-  the flat list. Grouping structurally cannot endanger completeness.
-- Cost: adds 1–2 small reduce calls (index-list output is tiny); the "N+1 cloud calls" UX copy updates.
-
-**Why deferred / sequenced.** Phase 1 + 3 ship readability wins with zero extra API spend (re-render the
-existing 221-point JSON). Phase 2 is the ADR-trigger (`Summary` change ripples into `save_raw_result`
-JSON, render T7, and the test suite) and the only phase needing live calls — gated on this ADR per
-CLAUDE.md ("do not skip review gates for LLM prompts"). Phase order **1 → 2 → 3 approved**.
-
-**Progress.**
-- **Phase 1 SHIPPED (`d13a373`).** Paragraphed overview (the 5031-char slab -> 8 paragraphs),
-  tightened `_dedup_strs` (word-order + ≥2-token containment near-dupes; themes 63→59, takeaways
-  221→221 on the validation artifact), and owner suppression. **Refinement vs the ADR (operator
-  decision 2026-06-26):** the ADR said "drop owner when EVERY item is unassigned"; the artifact was
-  mixed (24 `Не назначено` + 6 real names), so suppression is now **per-item** — a placeholder owner
-  is dropped on its own row, a named owner is always kept. Strictly better for mixed lists; same spirit.
-- **Phase 2 CODE DONE (`53b8bbb`), paid validation pending.** `emit_grouping` reduce sub-call +
-  `_assign_by_index` (verbatim reconstruction + completeness invariant + `Прочее`/`Other` catch-all) +
-  additive `PointGroup`/`SectionGroup` overlay on `Summary` + grouped MD/PDF render with flat fallback.
-  Built standalone (`summarize.group_summary`, works on a fresh OR reloaded Summary) and **NOT yet wired
-  into `summarize_auto`** — validation-first. Verified offline on the real 221-point artifact (221→221,
-  63→63, 69→69 verbatim). **Validate cheaply with `python scripts/regroup.py "<raw/*.json>"`** — one
-  small call (~pennies), no re-pay of the $1.5 map-reduce. Wire into the pipeline + update the N+1-call
-  cost copy AFTER the prompt is tuned on a real run.
-- **Phase 3 (next, no API spend):** format pass on the new hierarchy (re-render saved JSON).
-
-**When to open / close.** Active now. Close when all three phases land and a re-render (Phase 1+3) plus
-one paid grouped run (Phase 2) are operator-accepted. Stays inside the CLAUDE.md completeness principle —
-no amendment needed (group-keep-all, never re-summarize).
+**When to close.** When the paid reference run is operator-accepted. T8 is a separate follow-on debt, not
+a blocker for closing TD-16.
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
@@ -168,6 +95,32 @@ Enter to summarize…")` in `menu._run_summary` before the cheap-path proceed �
 ---
 
 ## Closed debts
+
+### TD-15 — Summary readability: hierarchical grouping ✓ CLOSED (superseded)
+
+Severity (was): MEDIUM · Created 2026-06-25 → Closed 2026-06-26 (superseded by TD-16 v2)
+
+The fork was how to make the 221-point map-reduce wall readable: group-keep-all via an index-assignment
+`emit_grouping` sub-call (Phase 1 shipped `d13a373`; Phase 2 code done `53b8bbb`, paid-validation pending).
+Before Phase 2 was validated, the operator reversed the underlying principle (TD-16 v2): grouping
+navigated a wall that direct synthesis never produces, so the whole approach was retired. The grouping
+code (`group_summary`/`_assign_by_index`/`PointGroup`/`SectionGroup`/`emit_grouping` + `regroup.py`) was
+deleted in TD-16 T5 commit B (`43b7daf`). Phase 1's still-relevant render wins (paragraphing, per-item
+unassigned-owner suppression) survive in the v2 render path.
+
+### TD-5 — Chunked map-reduce summarization ✓ CLOSED (superseded + deleted)
+
+Severity (was): LOW · Created 2026-06-14 → Closed 2026-06-26 (superseded by TD-16 v2)
+
+The fork was completeness on long/dense material: QualityBudget-triggered map-reduce (MAP each chunk,
+REDUCE by concatenate + conservative dedup, never re-summarize). It shipped and a 179-min RU paid run
+validated it ($1.46, 221→221 no collapse), but the output was an unreadable flat wall and the operator
+reversed the principle to fidelity-over-completeness (TD-16 v2): direct transcript synthesis, one hop, no
+map-extraction. The map-reduce machinery (`summarize`/`summarize_chunked`/the map+reduce builders +
+`emit_summary`/`emit_synthesis` schemas, `chunk.plan_chunks`/`needs_chunking`, the `[chunk]`
+QualityBudget/overlap knobs) was deleted in TD-16 T5 commit B (`43b7daf`, git-revertable if the v2 paid
+reference run fails). The two live bugs it surfaced (the Claude 4.x `temperature` 400; the forced-tool
+extraction match) live on in the v2 caller.
 
 ### TD-6 — Summary title can leak the source language (not the target) ✓ CLOSED
 
