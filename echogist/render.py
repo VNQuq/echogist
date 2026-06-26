@@ -46,6 +46,7 @@ from .summarize import (
     SectionGroup,
     SectionMarker,
     Summary,
+    SynthesisSection,
     _unassigned_label,
 )
 
@@ -77,6 +78,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "sections": "Sections",
         "recurring_themes": "Recurring themes",
         "core_idea": "Core idea",
+        "main_themes": "Main themes",
     },
     "ru": {
         "overview": "Обзор",
@@ -87,6 +89,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "sections": "Разделы",
         "recurring_themes": "Повторяющиеся темы",
         "core_idea": "Главная мысль",
+        "main_themes": "Основные темы",
     },
 }
 
@@ -136,7 +139,11 @@ def load_summary(json_path: Path) -> Summary:
         if isinstance(m, dict)
     )
     decisions = tuple(
-        Decision(decision=str(d.get("decision", "")), rationale=str(d.get("rationale", "")))
+        Decision(
+            decision=str(d.get("decision", "")),
+            rationale=str(d.get("rationale", "")),
+            anchor=str(d.get("anchor", "")),  # TD-16 v2; absent in pre-v2 .json -> ""
+        )
         for d in raw.get("decisions", [])
         if isinstance(d, dict)
     )
@@ -145,6 +152,7 @@ def load_summary(json_path: Path) -> Summary:
             task=str(a.get("task", "")),
             owner=str(a.get("owner", "")),
             estimate=str(a.get("estimate", "")),
+            anchor=str(a.get("anchor", "")),
         )
         for a in raw.get("action_items", [])
         if isinstance(a, dict)
@@ -162,6 +170,28 @@ def load_summary(json_path: Path) -> Summary:
         takeaway_groups=_point_groups(raw.get("takeaway_groups")),
         theme_groups=_point_groups(raw.get("theme_groups")),
         section_groups=_section_groups(raw.get("section_groups")),
+        synthesis=_synthesis_sections(raw.get("synthesis")),
+        main_themes=_str_tuple(raw.get("main_themes")),
+    )
+
+
+def _synthesis_sections(value: Any) -> tuple[SynthesisSection, ...]:
+    """Reconstruct the TD-16 v2 synthesis sections from saved JSON (defensive).
+
+    Missing/garbage -> empty, so a pre-v2 ``.json`` loads with no synthesis and render
+    falls back to the flat/grouped path — the same additive contract as the grouping
+    overlay.
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        SynthesisSection(
+            heading=str(s.get("heading", "")),
+            prose=str(s.get("prose", "")),
+            anchors=_str_tuple(s.get("anchors")),
+        )
+        for s in value
+        if isinstance(s, dict)
     )
 
 
@@ -256,9 +286,19 @@ def render(
 # --------------------------------------------------------------------------- #
 # Shared one-line formatting for the meeting/planning fields (Markdown + PDF agree)
 # --------------------------------------------------------------------------- #
+def _with_anchor(text: str, anchor: str) -> str:
+    """Append a validated ``[HH:MM:SS]`` anchor in parentheses (TD-16 v2), if present.
+
+    Empty on the pre-v2 paths (decisions/actions there carry no anchor), so this is a
+    no-op for the flat/grouped render and only annotates the synthesis-path lines.
+    """
+    return f"{text}  ({anchor})" if anchor else text
+
+
 def _decision_text(item: Decision) -> str:
-    """A decision as one line: the decision, then the rationale when present."""
-    return f"{item.decision} — {item.rationale}" if item.rationale else item.decision
+    """A decision as one line: the decision, the rationale when present, then its anchor."""
+    base = f"{item.decision} — {item.rationale}" if item.rationale else item.decision
+    return _with_anchor(base, item.anchor)
 
 
 def _action_text(item: ActionItem, lab: dict[str, str], *, unassigned: str = "") -> str:
@@ -268,14 +308,15 @@ def _action_text(item: ActionItem, lab: dict[str, str], *, unassigned: str = "")
     owner equal to it — or blank — is dropped per item (TD-15 Phase 1). On a solo
     lecture the placeholder is identical noise on every row; on a mixed list (some real
     owners, many placeholders) the named rows keep their names and only the placeholder
-    rows shed it. A real owner is never hidden.
+    rows shed it. A real owner is never hidden. The validated anchor (TD-16 v2) trails.
     """
     bits: list[str] = []
     if item.owner and item.owner != unassigned:
         bits.append(item.owner)
     if item.estimate:
         bits.append(f"{lab['estimate']}: {item.estimate}")
-    return f"{item.task} — {', '.join(bits)}" if bits else item.task
+    base = f"{item.task} — {', '.join(bits)}" if bits else item.task
+    return _with_anchor(base, item.anchor)
 
 
 # --------------------------------------------------------------------------- #
@@ -356,8 +397,53 @@ def _md_sections(
     return lines
 
 
+def _md_decisions_actions(summary: Summary, lab: dict[str, str]) -> list[str]:
+    """The shared decisions/action-items Markdown block (flat and synthesis paths)."""
+    out: list[str] = []
+    if summary.decisions:
+        out += [f"## {lab['decisions']}", ""]
+        out += [f"- {_decision_text(d)}" for d in summary.decisions]
+        out += [""]
+    if summary.action_items:
+        unassigned = _unassigned_label(summary.language)
+        out += [f"## {lab['action_items']}", ""]
+        out += [f"- {_action_text(a, lab, unassigned=unassigned)}" for a in summary.action_items]
+        out += [""]
+    return out
+
+
+def _markdown_synthesis(summary: Summary) -> str:
+    """The TD-16 v2 readable document: core idea -> phases (prose + anchors) -> themes.
+
+    Used when ``summary.synthesis`` is present; the structured flat/grouped fields are
+    empty on this path (retired in v2), so the document is the synthesized prose plus
+    the document header and the de-noised decisions/actions.
+    """
+    lab = _labels(summary.language)
+    out: list[str] = [f"# {summary.title or _FALLBACK_TITLE}".rstrip(), ""]
+    if summary.core_idea:
+        out += [f"## {lab['core_idea']}", "", summary.core_idea, ""]
+    for s in summary.synthesis:
+        # Collapse any whitespace/newlines in the heading: a heading is one line, and a
+        # garbled/hand-edited transcript must not inject extra Markdown structure via a
+        # newline + `#` in the model-supplied heading (the summarize side strips, but
+        # load_summary is verbatim by design).
+        heading = " ".join(s.heading.split())
+        out += [f"## {heading}".rstrip(), ""]
+        for para in _paragraphs(s.prose):
+            out += [para, ""]
+        if s.anchors:
+            out += [f"*{' · '.join(s.anchors)}*", ""]  # validated timecodes for this phase
+    if summary.main_themes:
+        out += [f"## {lab['main_themes']}", "", *(f"- {t}" for t in summary.main_themes), ""]
+    out += _md_decisions_actions(summary, lab)
+    return "\n".join(out).rstrip() + "\n"
+
+
 def _markdown(summary: Summary) -> str:
     """Render the summary as GitHub-flavored Markdown (UTF-8, Cyrillic literal)."""
+    if summary.synthesis:  # TD-16 v2 path; pre-v2 summaries fall through to flat/grouped
+        return _markdown_synthesis(summary)
     lab = _labels(summary.language)
     out: list[str] = [f"# {summary.title or _FALLBACK_TITLE}".rstrip(), ""]
     if summary.overview:
@@ -368,15 +454,7 @@ def _markdown(summary: Summary) -> str:
         out += _md_string_section(
             lab["key_takeaways"], summary.key_takeaways, summary.takeaway_groups
         )
-    if summary.decisions:
-        out += [f"## {lab['decisions']}", ""]
-        out += [f"- {_decision_text(d)}" for d in summary.decisions]
-        out += [""]
-    if summary.action_items:
-        unassigned = _unassigned_label(summary.language)
-        out += [f"## {lab['action_items']}", ""]
-        out += [f"- {_action_text(a, lab, unassigned=unassigned)}" for a in summary.action_items]
-        out += [""]
+    out += _md_decisions_actions(summary, lab)
     if summary.section_timecodes:
         out += _md_sections(lab["sections"], summary.section_timecodes, summary.section_groups)
     if summary.recurring_themes:
@@ -430,6 +508,10 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
         pdf.add_font(_FONT_FAMILY, "B", _font_file(_FONT_BOLD))
 
         _title(pdf, summary.title)
+        if summary.synthesis:  # TD-16 v2 path; pre-v2 summaries render the flat/grouped body
+            _pdf_synthesis_body(pdf, summary, lab)
+            pdf.output(str(out_path))
+            return
         if summary.overview:
             _heading(pdf, lab["overview"])
             _paragraphed_body(pdf, summary.overview)
@@ -559,3 +641,38 @@ def _pdf_sections(
             emit(g.sections)
     else:
         emit(flat)
+
+
+def _anchor_line(pdf: Any, text: str) -> None:
+    """A small, quiet line of validated timecodes under a phase's prose (TD-16 v2)."""
+    pdf.set_font(_FONT_FAMILY, "", 9)
+    _line(pdf, 5, text)
+
+
+def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
+    """The TD-16 v2 PDF body: core idea -> phases (prose + anchors) -> themes -> decisions.
+
+    Mirrors :func:`_markdown_synthesis`; the flat/grouped fields are empty on this path,
+    so the document is the synthesized prose plus the header and de-noised actions.
+    """
+    if summary.core_idea:
+        _heading(pdf, lab["core_idea"])
+        _body(pdf, summary.core_idea)
+    for s in summary.synthesis:
+        _heading(pdf, s.heading)
+        _paragraphed_body(pdf, s.prose)
+        if s.anchors:
+            _anchor_line(pdf, " · ".join(s.anchors))  # U+00B7 is in DejaVuSans
+    if summary.main_themes:
+        _heading(pdf, lab["main_themes"])
+        for theme in summary.main_themes:
+            _bullet(pdf, theme)
+    if summary.decisions:
+        _heading(pdf, lab["decisions"])
+        for decision in summary.decisions:
+            _bullet(pdf, _decision_text(decision))
+    if summary.action_items:
+        unassigned = _unassigned_label(summary.language)
+        _heading(pdf, lab["action_items"])
+        for action in summary.action_items:
+            _bullet(pdf, _action_text(action, lab, unassigned=unassigned))

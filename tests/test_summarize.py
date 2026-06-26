@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from echogist import summarize
-from echogist.chunk import Chunk
+from echogist.chunk import Chunk, Phase
 from echogist.config import ChunkConfig, ModelTier, SummarizeConfig
 from echogist.summarize import (
     ActionItem,
@@ -35,6 +35,7 @@ from echogist.summarize import (
     SummarizeError,
     SummarizeResult,
     Summary,
+    SynthesisSection,
 )
 
 
@@ -1038,3 +1039,337 @@ def test_group_summary_truncated_reply_fails_loud() -> None:
         summarize.group_summary(
             _grouping_summary(), _tier(), _cfg(), api_key="k", caller=caller, log=lambda _m: None
         )
+
+
+# --------------------------------------------------------------------------- #
+# TD-16 v2 — direct transcript synthesis (phases -> synthesize -> reconcile)
+# --------------------------------------------------------------------------- #
+def _phase_ti(
+    heading: str,
+    prose: str,
+    *,
+    anchors: list[str] | None = None,
+    decisions: list[dict[str, Any]] | None = None,
+    action_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """An emit_phase tool_input."""
+    return {
+        "heading": heading,
+        "prose": prose,
+        "anchors": anchors or [],
+        "decisions": decisions or [],
+        "action_items": action_items or [],
+    }
+
+
+def _seq_caller(*outcomes: CallOutcome) -> summarize.Caller:
+    """A caller that returns the given outcomes in order and records each request."""
+    it = iter(outcomes)
+
+    def caller(request: dict[str, Any], api_key: str) -> CallOutcome:
+        caller.requests.append(request)  # type: ignore[attr-defined]
+        return next(it)
+
+    caller.requests = []  # type: ignore[attr-defined]
+    return caller
+
+
+def _outcome(tool_input: dict[str, Any], *, stop_reason: str = "tool_use") -> CallOutcome:
+    return CallOutcome(
+        tool_input=tool_input, stop_reason=stop_reason, input_tokens=1500, output_tokens=400
+    )
+
+
+def _two_phases() -> list[Phase]:
+    return [
+        Phase(text="[00:00:00] intro words", index=1, total=2, start_seconds=0.0, end_seconds=0.0),
+        Phase(
+            text="[00:10:00] body words", index=2, total=2, start_seconds=600.0, end_seconds=600.0
+        ),
+    ]
+
+
+def test_synthesize_summary_happy_path_two_phases_plus_reconcile() -> None:
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(
+            _phase_ti(
+                "Intro",
+                "First idea. Second idea. Third idea.",
+                anchors=["[00:00:00]"],
+                decisions=[
+                    {"decision": "Ship local first", "rationale": "cheaper", "anchor": "[00:00:00]"}
+                ],
+            )
+        ),
+        _outcome(
+            _phase_ti(
+                "Body",
+                "Body prose here.",
+                anchors=["[00:10:00]"],
+                action_items=[
+                    {"task": "Benchmark", "owner": "Pat", "estimate": "1d", "anchor": "[00:10:00]"}
+                ],
+            )
+        ),
+        _outcome(
+            {"title": "The Talk", "core_idea": "AI is infrastructure.", "main_themes": ["a", "b"]}
+        ),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="lecture",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    s = result.summary
+    assert [sec.heading for sec in s.synthesis] == ["Intro", "Body"]
+    assert s.synthesis[0].anchors == ("[00:00:00]",)  # exact -> kept
+    assert s.synthesis[1].anchors == ("[00:10:00]",)
+    assert s.title == "The Talk"
+    assert s.core_idea == "AI is infrastructure."
+    assert s.main_themes == ("a", "b")
+    assert len(s.decisions) == 1 and s.decisions[0].anchor == "[00:00:00]"
+    assert len(s.action_items) == 1 and s.action_items[0].anchor == "[00:10:00]"
+    # The retired structured fields are empty on the v2 path.
+    assert s.key_takeaways == () and s.section_timecodes == () and s.overview == ""
+    assert len(caller.requests) == 3  # type: ignore[attr-defined]  # 2 phases + 1 reconcile
+    assert result.input_tokens == 4500 and result.output_tokens == 1200  # summed over 3 calls
+
+
+def test_synthesize_forward_only_passes_prior_context_to_later_phase() -> None:
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "Alpha sentence. Beta sentence. Gamma sentence.")),
+        _outcome(_phase_ti("Body", "Body.")),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
+    )
+    summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    phase1_system = caller.requests[0]["system"]  # type: ignore[attr-defined]
+    phase2_system = caller.requests[1]["system"]  # type: ignore[attr-defined]
+    # Assert on the injected delimiter (the prompt TEXT itself mentions "PRIOR CONTEXT").
+    assert "=== PRIOR CONTEXT" not in phase1_system  # nothing precedes the first phase
+    assert "=== PRIOR CONTEXT" in phase2_system  # the second phase gets continuity context
+    assert "Intro" in phase2_system  # the prior heading
+    assert "Gamma sentence." in phase2_system  # the prior phase's tail prose, verbatim
+
+
+def test_synthesize_single_phase_skips_reconcile_uses_heading_as_title() -> None:
+    phases = [Phase(text="[00:00:00] only", index=1, total=1, start_seconds=0.0, end_seconds=0.0)]
+    caller = _seq_caller(_outcome(_phase_ti("Lone Heading", "Only prose.", anchors=["[00:00:00]"])))
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert len(caller.requests) == 1  # type: ignore[attr-defined]  # no reconcile call for K=1
+    assert result.summary.title == "Lone Heading"
+    assert result.summary.main_themes == ()
+
+
+def test_synthesize_phase_max_tokens_fails_loud_naming_phase() -> None:
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "ok")),
+        _outcome(_phase_ti("Body", "cut"), stop_reason="max_tokens"),
+    )
+    with pytest.raises(SummarizeError, match="Phase 2/2 hit the output cap"):
+        summarize.synthesize_summary(
+            phases,
+            _tier(),
+            _cfg(),
+            language="en",
+            source_stem="s",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+        )
+
+
+def test_synthesize_reconcile_max_tokens_fails_loud() -> None:
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "a")),
+        _outcome(_phase_ti("Body", "b")),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}, stop_reason="max_tokens"),
+    )
+    with pytest.raises(SummarizeError, match="reconcile step hit the output cap"):
+        summarize.synthesize_summary(
+            phases,
+            _tier(),
+            _cfg(),
+            language="en",
+            source_stem="s",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+        )
+
+
+def test_synthesize_on_phase_callback_fires_per_phase() -> None:
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "a")),
+        _outcome(_phase_ti("Body", "b")),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
+    )
+    seen: list[tuple[int, str]] = []
+    summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+        on_phase=lambda idx, section: seen.append((idx, section.heading)),
+    )
+    assert seen == [(1, "Intro"), (2, "Body")]  # the artifact-resume persistence seam (T5)
+
+
+def test_synthesize_empty_phases_fails_loud() -> None:
+    with pytest.raises(SummarizeError, match="No transcript phases"):
+        summarize.synthesize_summary(
+            [], _tier(), _cfg(), language="en", source_stem="s", api_key="k", log=lambda _m: None
+        )
+
+
+def test_build_synthesis_request_substitutes_language_and_interpretation() -> None:
+    cfg = SummarizeConfig(
+        system_prompt="x",
+        max_output_tokens=4096,
+        synthesis_system_prompt="Write in {language}. Mark with [{interpretation}]:.",
+    )
+    phase = Phase(text="[00:00:00] t", index=1, total=1, start_seconds=0.0, end_seconds=0.0)
+    req = summarize.build_synthesis_request(phase, _tier(), cfg, language="ru")
+    assert "Russian" in req["system"]
+    assert "[интерпретация]:" in req["system"]  # per-language marker label, substituted
+    assert req["tool_choice"]["name"] == "emit_phase"
+
+
+# --------------------------------------------------------------------------- #
+# Anchor validation — exact accept, snap-within-window, drop hallucinated
+# --------------------------------------------------------------------------- #
+def _synth_summary(anchors: tuple[str, ...]) -> Summary:
+    return Summary(
+        title="t",
+        overview="",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection(heading="H", prose="p", anchors=anchors),),
+    )
+
+
+def test_validate_anchors_exact_match_is_kept() -> None:
+    transcript = "[00:00:00] a\n[00:10:00] b"
+    out = summarize.validate_anchors(
+        _synth_summary(("[00:10:00]",)), transcript, log=lambda _m: None
+    )
+    assert out.synthesis[0].anchors == ("[00:10:00]",)
+
+
+def test_validate_anchors_snaps_within_window() -> None:
+    transcript = "[00:00:00] a\n[00:10:00] b"
+    # 1s past a real block, inside the 2s default window -> snapped to the real block.
+    out = summarize.validate_anchors(
+        _synth_summary(("[00:10:01]",)), transcript, log=lambda _m: None
+    )
+    assert out.synthesis[0].anchors == ("[00:10:00]",)
+
+
+def test_validate_anchors_drops_hallucinated_outside_window() -> None:
+    transcript = "[00:00:00] a\n[00:10:00] b"
+    # 00:05:00 is minutes from any real block -> dropped (no false coordinate kept).
+    out = summarize.validate_anchors(
+        _synth_summary(("[00:05:00]",)), transcript, log=lambda _m: None
+    )
+    assert out.synthesis[0].anchors == ()
+
+
+def test_validate_anchors_dedups_within_a_section() -> None:
+    transcript = "[00:00:00] a\n[00:10:00] b"
+    # Two anchors that both resolve to the same real block collapse to one.
+    out = summarize.validate_anchors(
+        _synth_summary(("[00:10:00]", "[00:10:01]")), transcript, log=lambda _m: None
+    )
+    assert out.synthesis[0].anchors == ("[00:10:00]",)
+
+
+def test_validate_anchors_cleans_decision_and_action_anchors() -> None:
+    transcript = "[00:00:00] a\n[00:10:00] b"
+    summary = Summary(
+        title="t",
+        overview="",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="",
+        language="en",
+        decisions=(Decision(decision="d", rationale="r", anchor="[00:05:00]"),),  # hallucinated
+        action_items=(ActionItem(task="x", owner="", estimate="", anchor="[00:00:00]"),),  # real
+        synthesis=(SynthesisSection(heading="H", prose="p", anchors=()),),
+    )
+    out = summarize.validate_anchors(summary, transcript, log=lambda _m: None)
+    assert out.decisions[0].anchor == ""  # dropped
+    assert out.action_items[0].anchor == "[00:00:00]"  # kept
+
+
+def test_validate_anchors_no_timecodes_drops_all() -> None:
+    out = summarize.validate_anchors(
+        _synth_summary(("[00:00:00]",)), "no timecodes", log=lambda _m: None
+    )
+    assert out.synthesis[0].anchors == ()  # nothing to anchor to -> no false coordinate survives
+
+
+# --------------------------------------------------------------------------- #
+# Anchor-preserving merge (TD-16 v2 regression — caught in adversarial review)
+# --------------------------------------------------------------------------- #
+def test_merge_decisions_back_fills_anchor_not_just_rationale() -> None:
+    # The emptier copy comes first (chunk/phase order); the richer duplicate must
+    # back-fill BOTH rationale and anchor. Dropping the anchor here would silently
+    # break "jump to where decided" before validate_anchors ever runs.
+    merged = summarize._merge_decisions(
+        [
+            Decision("Ship local first", "", anchor=""),
+            Decision("ship local first", "cheaper", anchor="[00:05:00]"),
+        ]
+    )
+    assert len(merged) == 1
+    assert merged[0].rationale == "cheaper"
+    assert merged[0].anchor == "[00:05:00]"  # preserved through the merge
+
+
+def test_merge_action_items_back_fills_anchor() -> None:
+    merged = summarize._merge_action_items(
+        [
+            ActionItem("Benchmark int8", "", "", anchor=""),
+            ActionItem("benchmark int8", "Pat", "1d", anchor="[00:10:00]"),
+        ]
+    )
+    assert len(merged) == 1
+    assert merged[0].owner == "Pat" and merged[0].estimate == "1d"
+    assert merged[0].anchor == "[00:10:00]"  # preserved through the merge

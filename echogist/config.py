@@ -49,6 +49,12 @@ _DEFAULT_QUALITY_BUDGET_TOKENS = 40_000
 _DEFAULT_QUALITY_BUDGET_SECONDS = 3_600.0  # 60 min
 _DEFAULT_TARGET_CHUNK_TOKENS = 12_000  # hyperparameter — calibrate on a real lecture
 _DEFAULT_OVERLAP_SECONDS = 90.0  # time-based boundary overlap so straddling ideas survive
+# Phase-split target (TD-16 v2 direct synthesis). The transcript is cut into a few
+# CONTIGUOUS, non-overlapping phases (not map chunks) for sequential synthesis. K is
+# computed from this target — ceil(total_tokens / phase_target_tokens) — so it SCALES
+# with length (a 3h lecture ≈ 3-4 phases, 6h ≈ 6-8); it is NOT a fixed cap. Sized ~2x
+# the map target so the validated ~84k-token 3h lecture lands at ~4 phases.
+_DEFAULT_PHASE_TARGET_TOKENS = 24_000
 
 # Default reduce/map prompt scaffolding. Prompt text is DATA (shipped in
 # models.toml), but these code-level fallbacks keep a minimal [summarize] table (or
@@ -80,6 +86,30 @@ _DEFAULT_GROUPING_SYSTEM_PROMPT = (
     "the headings and the 1-based INDICES of the items under each — never the item "
     "text. Every index must appear under exactly ONE heading: do not drop, duplicate, "
     "merge, or reword any item. Write headings in {language}. Call emit_grouping once."
+)
+# Synthesis step (TD-16 v2): synthesize ONE phase of the transcript into faithful,
+# readable prose — the transcript is ground truth, read directly (one hop). {language}
+# is the target; {interpretation} is the per-language label for the inline marker that
+# flags any bridge beyond what the author literally said. Code-level fallback so a
+# minimal [summarize] table (or a fixture) without the key still loads.
+_DEFAULT_SYNTHESIS_SYSTEM_PROMPT = (
+    "You synthesize ONE phase of a longer timestamped transcript into faithful, "
+    "readable prose in {language}. Ground every sentence in the transcript; do not "
+    "invent, soften, invert, or merge distinct points, and keep the author's caveats. "
+    "Copy only [HH:MM:SS] timecodes that actually appear as anchors for the passage and "
+    "for each decision/action; never invent or round one. Mark any bridge beyond what "
+    "the author says inline with [{interpretation}]:. Use a PRIOR CONTEXT section, if "
+    "given, for continuity only — do not restate it. Call emit_phase exactly once."
+)
+# Reconcile step (TD-16 v2): the document-level header derived ONLY from the already-
+# written phase passages (it never re-reads the transcript — that would be a second
+# lossy hop). Emits title + core_idea + main_themes and flags cross-phase contradiction.
+_DEFAULT_RECONCILE_SYSTEM_PROMPT = (
+    "You are given the already-written phase passages of one transcript, in order. In "
+    "{language}, produce only a short specific title, the single core_idea (no upper "
+    "limit), and 5-8 main_themes as short noun phrases — based ONLY on the passages "
+    "given, adding no new facts. If two phases state contradictory things about the same "
+    "point, note the contradiction in core_idea. Call emit_reconcile exactly once."
 )
 
 
@@ -143,6 +173,11 @@ class SummarizeConfig:
     reduce_system_prompt: str = _DEFAULT_REDUCE_SYSTEM_PROMPT
     map_note_template: str = _DEFAULT_MAP_NOTE_TEMPLATE
     grouping_system_prompt: str = _DEFAULT_GROUPING_SYSTEM_PROMPT
+    # TD-16 v2 direct synthesis: the per-phase synthesis prompt (carries {language} and
+    # the {interpretation} marker label) and the document-header reconcile prompt. Both
+    # DATA, defaulted so a minimal table keeps loading; the new tool SCHEMAs stay in code.
+    synthesis_system_prompt: str = _DEFAULT_SYNTHESIS_SYSTEM_PROMPT
+    reconcile_system_prompt: str = _DEFAULT_RECONCILE_SYSTEM_PROMPT
 
 
 @dataclass(frozen=True)
@@ -166,6 +201,10 @@ class ChunkConfig:
     quality_budget_seconds: float = _DEFAULT_QUALITY_BUDGET_SECONDS
     target_chunk_tokens: int = _DEFAULT_TARGET_CHUNK_TOKENS
     overlap_seconds: float = _DEFAULT_OVERLAP_SECONDS
+    # TD-16 v2 direct synthesis: target tokens per CONTIGUOUS, non-overlapping phase.
+    # K = ceil(total_tokens / phase_target_tokens), computed (scales with length), not a
+    # cap. Larger than target_chunk_tokens — phases are coarser than map chunks.
+    phase_target_tokens: int = _DEFAULT_PHASE_TARGET_TOKENS
 
 
 @dataclass(frozen=True)
@@ -443,6 +482,12 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         grouping_system_prompt=_optional_nonempty_str(
             summarize_table, "grouping_system_prompt", _DEFAULT_GROUPING_SYSTEM_PROMPT
         ),
+        synthesis_system_prompt=_optional_nonempty_str(
+            summarize_table, "synthesis_system_prompt", _DEFAULT_SYNTHESIS_SYSTEM_PROMPT
+        ),
+        reconcile_system_prompt=_optional_nonempty_str(
+            summarize_table, "reconcile_system_prompt", _DEFAULT_RECONCILE_SYSTEM_PROMPT
+        ),
     )
 
     asset_table = raw.get("model_asset")
@@ -496,6 +541,11 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
             # overlap may legitimately be 0 (no overlap), so it is not "positive-only".
             overlap_seconds=_optional_nonnegative(
                 chunk_table, "overlap_seconds", "[chunk]", _DEFAULT_OVERLAP_SECONDS
+            ),
+            phase_target_tokens=int(
+                _optional_positive(
+                    chunk_table, "phase_target_tokens", "[chunk]", _DEFAULT_PHASE_TARGET_TOKENS
+                )
             ),
         )
 

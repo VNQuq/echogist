@@ -414,3 +414,61 @@ def test_pdf_missing_fpdf_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(RenderError, match="fpdf2 is not installed"):
         render.render(_summary(), tmp_path, "pdf")
+
+
+# --------------------------------------------------------------------------- #
+# TD-16 v2 — synthesis-document render (prose + anchors + main themes)
+# --------------------------------------------------------------------------- #
+def _synthesis_summary(language: str = "en") -> Summary:
+    return Summary(
+        title="The Talk",
+        overview="",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea="AI is becoming infrastructure.",
+        decisions=(Decision("Ship local first.", "Lower cost.", anchor="[00:00:00]"),),
+        action_items=(ActionItem("Benchmark int8.", "Pat", "1 day", anchor="[00:10:00]"),),
+        language=language,
+        synthesis=(
+            summarize.SynthesisSection("Intro", "First idea here.", ("[00:00:00]",)),
+            summarize.SynthesisSection("Body", "Second idea here.", ("[00:10:00]",)),
+        ),
+        main_themes=("efficiency", "access"),
+    )
+
+
+def test_markdown_synthesis_renders_phases_anchors_and_themes(tmp_path: Path) -> None:
+    text = render.render(_synthesis_summary(), tmp_path, "md", log=lambda _m: None).read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith("# The Talk\n")
+    assert "## Core idea" in text and "AI is becoming infrastructure." in text
+    assert "## Intro" in text and "First idea here." in text  # phase heading + prose
+    assert "*[00:00:00]*" in text  # the phase's validated anchor line
+    assert "## Main themes" in text and "- efficiency" in text
+    # decisions/actions carry their anchor in parentheses (TD-16 v2)
+    assert "- Ship local first. — Lower cost.  ([00:00:00])" in text
+    assert "- Benchmark int8. — Pat, estimate: 1 day  ([00:10:00])" in text
+    # the retired structured headings are absent on the v2 path
+    assert "## Key takeaways" not in text and "## Overview" not in text
+
+
+def test_markdown_synthesis_uses_russian_headings(tmp_path: Path) -> None:
+    text = render.render(_synthesis_summary(language="ru"), tmp_path, "md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Главная мысль" in text  # core idea
+    assert "## Основные темы" in text  # main themes
+
+
+def test_pdf_synthesis_renders_a_file(tmp_path: Path) -> None:
+    path = render.render(_synthesis_summary(), tmp_path, "pdf", log=lambda _m: None)
+    assert path.exists() and path.stat().st_size > 0
+    assert path.read_bytes().startswith(b"%PDF")
+
+
+def test_load_summary_round_trips_a_synthesis_json(tmp_path: Path) -> None:
+    original = _synthesis_summary()
+    json_path = summarize.save_raw_result(original, tmp_path)
+    assert render.load_summary(json_path) == original  # synthesis + anchors survive save -> load

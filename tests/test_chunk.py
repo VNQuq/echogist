@@ -120,3 +120,84 @@ def test_plan_chunks_no_overlap_when_zero() -> None:
     chunks = chunk.plan_chunks(text, cfg, estimate=lambda _line: 1_000)
     # With no overlap the bins are disjoint: chunk 2 starts at its own first block (02:00).
     assert chunks[1].text.startswith("[00:02:00]")
+
+
+# --------------------------------------------------------------------------- #
+# plan_phases (TD-16 v2) — computed K, contiguous, NO overlap, full partition
+# --------------------------------------------------------------------------- #
+def test_plan_phases_balances_into_k_bins_no_tail() -> None:
+    text = _timecoded(12)
+    cfg = ChunkConfig(phase_target_tokens=4_000)
+    phases = chunk.plan_phases(text, cfg, estimate=lambda _line: 1_000)  # 12 * 1000 = 12000
+    # K = ceil(12000 / 4000) = 3, balanced -> 4 / 4 / 4 (same binning math as plan_chunks).
+    assert [p.index for p in phases] == [1, 2, 3]
+    assert all(p.total == 3 for p in phases)
+    assert [len(p.text.splitlines()) for p in phases] == [4, 4, 4]
+
+
+def test_plan_phases_are_contiguous_and_partition_every_block_once() -> None:
+    text = _timecoded(9)
+    cfg = ChunkConfig(phase_target_tokens=3_000)
+    phases = chunk.plan_phases(text, cfg, estimate=lambda _line: 1_000)
+    # No overlap: the phases concatenate back to exactly the original blocks, in order,
+    # each block appearing in exactly ONE phase (a clean partition, not overlapping spans).
+    rejoined = [line for p in phases for line in p.text.splitlines()]
+    assert rejoined == text.splitlines()
+
+
+def test_plan_phases_no_overlap_phase_two_starts_on_its_own_block() -> None:
+    text = _timecoded(6)  # blocks 60s apart
+    cfg = ChunkConfig(phase_target_tokens=2_000)
+    phases = chunk.plan_phases(text, cfg, estimate=lambda _line: 1_000)  # bins [0,1][2,3][4,5]
+    assert len(phases) == 3
+    # Unlike a map chunk, phase 2 carries NO prior overlap block — starts at its own 02:00.
+    assert phases[1].text.startswith("[00:02:00]")
+    assert "[00:01:00]" not in phases[1].text
+    assert phases[1].start_seconds == 120.0
+    assert phases[1].end_seconds == 180.0
+
+
+def test_plan_phases_k_scales_with_target_not_capped() -> None:
+    # K is COMPUTED from phase_target_tokens, so a smaller target yields more phases —
+    # it is not pinned to 3-4. Same 12-block transcript, three targets, three K values.
+    text = _timecoded(12)
+    est = lambda _line: 1_000  # noqa: E731 — 12 * 1000 = 12000 total
+    assert len(chunk.plan_phases(text, ChunkConfig(phase_target_tokens=24_000), estimate=est)) == 1
+    assert len(chunk.plan_phases(text, ChunkConfig(phase_target_tokens=6_000), estimate=est)) == 2
+    assert len(chunk.plan_phases(text, ChunkConfig(phase_target_tokens=3_000), estimate=est)) == 4
+
+
+def test_plan_phases_short_text_is_single_phase() -> None:
+    phases = chunk.plan_phases(_timecoded(3), ChunkConfig(phase_target_tokens=999_999))
+    assert len(phases) == 1
+    assert phases[0].index == 1 and phases[0].total == 1
+
+
+def test_plan_phases_no_timecodes_falls_back_to_one_phase() -> None:
+    phases = chunk.plan_phases("no timecodes here at all", ChunkConfig())
+    assert len(phases) == 1
+    assert phases[0].text == "no timecodes here at all"
+    assert phases[0].index == 1 and phases[0].total == 1
+
+
+def test_plan_phases_single_block_clamps_k_to_one() -> None:
+    # A tiny target would ask for many bins, but K is clamped to len(blocks) == 1.
+    cfg = ChunkConfig(phase_target_tokens=1)
+    phases = chunk.plan_phases("[00:00:00] one", cfg, estimate=lambda _l: 9_999)
+    assert len(phases) == 1
+    assert phases[0].index == 1 and phases[0].total == 1
+
+
+def test_plan_phases_span_formats_time_range() -> None:
+    text = _timecoded(4)  # 00:00 .. 00:03
+    cfg = ChunkConfig(phase_target_tokens=2_000)
+    phases = chunk.plan_phases(text, cfg, estimate=lambda _line: 1_000)  # bins [0,1][2,3]
+    assert phases[0].span == "00:00:00–00:01:00"
+    assert phases[1].span == "00:02:00–00:03:00"
+
+
+def test_bin_blocks_is_self_defensive_on_degenerate_input() -> None:
+    # Unreachable via the public planners (they guard empty blocks), but the shared
+    # helper must not divide by zero on a degenerate direct call.
+    assert chunk._bin_blocks([], 3) == []
+    assert chunk._bin_blocks([1, 2, 3], 0) == []

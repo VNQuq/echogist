@@ -48,7 +48,14 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from . import naming
-from .chunk import Chunk, needs_chunking, plan_chunks, total_duration_seconds
+from .chunk import (
+    Chunk,
+    Phase,
+    block_timecodes,
+    needs_chunking,
+    plan_chunks,
+    total_duration_seconds,
+)
 from .config import ChunkConfig, ModelTier, SummarizeConfig
 from .guard import estimate_input_tokens
 
@@ -86,6 +93,18 @@ _UNASSIGNED_LABELS = {"ru": "Не назначено", "en": "Unassigned"}
 # literal, since it prints in the summary's target language. Unknown code -> English.
 _CATCHALL_LABELS = {"ru": "Прочее", "en": "Other"}
 
+# TD-16 v2 direct synthesis tool names: one phase pass + one document-header reconcile.
+# Distinct from emit_summary/emit_synthesis/emit_grouping (deleted when map-reduce
+# retires) so nothing collides during the transition.
+_PHASE_TOOL_NAME = "emit_phase"
+_RECONCILE_TOOL_NAME = "emit_reconcile"
+
+# The per-language label for the inline [interpretation]: marker (TD-16 v2): substituted
+# into the synthesis prompt's {interpretation} token exactly like {unassigned}. The model
+# prefixes any bridge beyond what the author literally said with "[<label>]:", so the
+# reader sees author-versus-model at a glance. Unknown code -> English, fail-soft.
+_INTERPRETATION_LABELS = {"ru": "интерпретация", "en": "interpretation"}
+
 
 class SummarizeError(Exception):
     """A recoverable summarization failure. Print it, return to the menu.
@@ -120,11 +139,15 @@ class Decision:
     """One decision reached in the material: the decision plus the reasoning.
 
     The meeting/planning half of the summary. ``rationale`` may be empty when the
-    transcript states a decision without spelling out the why.
+    transcript states a decision without spelling out the why. ``anchor`` (TD-16 v2) is
+    one ``[HH:MM:SS]`` from the transcript so the operator can jump to where it was
+    decided; default empty (the old single-pass/map path leaves it unset) and validated
+    against the real transcript timecodes by :func:`validate_anchors`.
     """
 
     decision: str
     rationale: str
+    anchor: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,11 +157,14 @@ class ActionItem:
     ``owner`` is a name from the transcript or the model's word for "unassigned"
     when none is stated; ``estimate`` is the model's best-effort effort sizing (a
     planning estimate, not a transcript fact). Either may be empty defensively.
+    ``anchor`` (TD-16 v2) is one ``[HH:MM:SS]`` from the transcript, validated like a
+    decision's; default empty so the pre-v2 paths and saved ``.json`` still construct.
     """
 
     task: str
     owner: str
     estimate: str
+    anchor: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,6 +191,24 @@ class SectionGroup:
 
     heading: str
     sections: tuple[SectionMarker, ...]
+
+
+@dataclass(frozen=True)
+class SynthesisSection:
+    """One synthesized phase (TD-16 v2): a heading, faithful prose, and its anchors.
+
+    The unit of the v2 readable document. ``prose`` is the transcript-grounded synthesis
+    of one phase, written directly from the transcript (one hop), and may carry inline
+    ``[<interpretation>]:`` markers for any bridge beyond the author's words. ``anchors``
+    are the ``[HH:MM:SS]`` timecodes the passage cites, validated against the real
+    transcript timecodes (:func:`validate_anchors`) so a "jump to the recording" always
+    lands true. No ``dropped_point_indices`` — there is no map-extracted checklist in v2
+    (coverage is the manual operator gate), so the section carries only what it asserts.
+    """
+
+    heading: str
+    prose: str
+    anchors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,6 +242,12 @@ class Summary:
     takeaway_groups: tuple[PointGroup, ...] = ()
     theme_groups: tuple[PointGroup, ...] = ()
     section_groups: tuple[SectionGroup, ...] = ()
+    # TD-16 v2 direct synthesis: the readable document is these phase sections plus
+    # ``main_themes`` (a reconcile-pass output, ~5-8 cross-phase threads). Additive and
+    # default-empty so every pre-v2 Summary and saved ``.json`` still constructs; render
+    # prefers ``synthesis`` when present and falls back to the flat/grouped fields.
+    synthesis: tuple[SynthesisSection, ...] = ()
+    main_themes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -483,7 +533,15 @@ def _decisions(value: Any) -> tuple[Decision, ...]:
         decision = str(item.get("decision", "")).strip()
         if not decision:  # a decision with no statement is dropped, not faked
             continue
-        out.append(Decision(decision=decision, rationale=str(item.get("rationale", "")).strip()))
+        out.append(
+            Decision(
+                decision=decision,
+                rationale=str(item.get("rationale", "")).strip(),
+                # Optional (TD-16 v2): the old emit_summary schema has no anchor key, so
+                # this is "" there; the v2 emit_phase schema supplies it.
+                anchor=str(item.get("anchor", "")).strip(),
+            )
+        )
     return tuple(out)
 
 
@@ -503,6 +561,7 @@ def _action_items(value: Any) -> tuple[ActionItem, ...]:
                 task=task,
                 owner=str(item.get("owner", "")).strip(),
                 estimate=str(item.get("estimate", "")).strip(),
+                anchor=str(item.get("anchor", "")).strip(),  # optional, "" pre-v2
             )
         )
     return tuple(out)
@@ -909,9 +968,11 @@ def _merge_decisions(decisions: Iterable[Decision]) -> tuple[Decision, ...]:
     """Dedup decisions by their (normalized) statement, preferring the richer copy.
 
     Overlap can emit the same decision in two adjacent chunks — once with an empty
-    rationale, once with one — and chunk order means the emptier copy often comes
-    first. So on a collision a missing rationale is back-filled from the later
-    duplicate rather than discarded; a present rationale is never overwritten.
+    rationale or anchor, once with one — and chunk order means the emptier copy often
+    comes first. So on a collision a missing rationale OR anchor (TD-16 v2) is
+    back-filled from the later duplicate rather than discarded; a value already present
+    is never overwritten. The anchor MUST be carried through the merge — dropping it
+    would destroy the "jump to where decided" link before validate_anchors ever runs.
     """
     index: dict[str, int] = {}
     out: list[Decision] = []
@@ -922,18 +983,25 @@ def _merge_decisions(decisions: Iterable[Decision]) -> tuple[Decision, ...]:
         if key not in index:
             index[key] = len(out)
             out.append(d)
-        elif not out[index[key]].rationale and d.rationale:
+        else:
             kept = out[index[key]]
-            out[index[key]] = Decision(decision=kept.decision, rationale=d.rationale)
+            rationale = kept.rationale or d.rationale
+            anchor = kept.anchor or d.anchor
+            if (rationale, anchor) != (kept.rationale, kept.anchor):
+                out[index[key]] = Decision(
+                    decision=kept.decision, rationale=rationale, anchor=anchor
+                )
     return tuple(out)
 
 
 def _merge_action_items(items: Iterable[ActionItem]) -> tuple[ActionItem, ...]:
     """Dedup action items by their (normalized) task, preferring the richer copy.
 
-    Like :func:`_merge_decisions`: on a collision a missing owner or estimate is
-    back-filled from the later duplicate (overlap can emit the same task twice, the
-    emptier copy often first); a value already present is never overwritten.
+    Like :func:`_merge_decisions`: on a collision a missing owner, estimate, or anchor
+    (TD-16 v2) is back-filled from the later duplicate (overlap can emit the same task
+    twice, the emptier copy often first); a value already present is never overwritten.
+    The anchor MUST survive the merge — dropping it would destroy the "jump to the
+    recording" link before validate_anchors runs.
     """
     index: dict[str, int] = {}
     out: list[ActionItem] = []
@@ -948,8 +1016,11 @@ def _merge_action_items(items: Iterable[ActionItem]) -> tuple[ActionItem, ...]:
             kept = out[index[key]]
             owner = kept.owner or a.owner
             estimate = kept.estimate or a.estimate
-            if (owner, estimate) != (kept.owner, kept.estimate):
-                out[index[key]] = ActionItem(task=kept.task, owner=owner, estimate=estimate)
+            anchor = kept.anchor or a.anchor
+            if (owner, estimate, anchor) != (kept.owner, kept.estimate, kept.anchor):
+                out[index[key]] = ActionItem(
+                    task=kept.task, owner=owner, estimate=estimate, anchor=anchor
+                )
     return tuple(out)
 
 
@@ -1335,3 +1406,399 @@ def group_summary(
     return SummarizeResult(
         summary=grouped, input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens
     )
+
+
+# --------------------------------------------------------------------------- #
+# TD-16 v2 — direct transcript synthesis (phase-split -> synthesize -> reconcile)
+# --------------------------------------------------------------------------- #
+# The v2 path reads the TRANSCRIPT directly (one hop, no map-extracted checklist): the
+# transcript is split into contiguous phases (chunk.plan_phases), each synthesized into
+# faithful prose with anchors, sequentially and forward-only (each phase sees the prior
+# headings + the prior phase's TAIL PROSE as continuity context). A reconcile pass writes
+# the document header (title/core_idea/main_themes) from the phase outputs, and a
+# deterministic, offline anchor validator snaps or drops every emitted timecode against
+# the real transcript timecodes — the load-bearing check behind the manual fidelity gate.
+def _interpretation_label(code: str) -> str:
+    """The inline interpretation-marker label for ``code`` (ru -> интерпретация).
+
+    Substituted into the synthesis prompt's {interpretation} token. Unknown code falls
+    back to English, mirroring :func:`_unassigned_label` / :func:`_language_name`.
+    """
+    return _INTERPRETATION_LABELS.get(code, "interpretation")
+
+
+def _phase_tool_schema() -> dict[str, Any]:
+    """The forced emit_phase tool: one phase's heading, prose, anchors, decisions, actions."""
+    string = {"type": "string"}
+    anchor_array = {
+        "type": "array",
+        "items": string,
+        "description": (
+            "[HH:MM:SS] timecodes that ACTUALLY APPEAR in this phase's transcript and "
+            "anchor this content. Copy only real ones; omit rather than invent."
+        ),
+    }
+    return {
+        "name": _PHASE_TOOL_NAME,
+        "description": "Return the faithful synthesis of THIS phase of the transcript.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "heading": {
+                    "type": "string",
+                    "description": "Short, specific heading for this phase, in summary language.",
+                },
+                "prose": {
+                    "type": "string",
+                    "description": (
+                        "Faithful, readable synthesis of THIS phase, in the target language. "
+                        "Mark any bridge beyond what the author says with an inline "
+                        "[<interpretation>]: token. Ground every sentence in the transcript."
+                    ),
+                },
+                "anchors": anchor_array,
+                "decisions": {
+                    "type": "array",
+                    "description": (
+                        "Decisions stated in THIS phase, each with an anchor. Empty if none."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "decision": {
+                                "type": "string",
+                                "description": "The decision that was made.",
+                            },
+                            "rationale": {
+                                "type": "string",
+                                "description": "Why it was decided.",
+                            },
+                            "anchor": {
+                                "type": "string",
+                                "description": "An [HH:MM:SS] from this phase where decided.",
+                            },
+                        },
+                        "required": ["decision", "rationale", "anchor"],
+                    },
+                },
+                "action_items": {
+                    "type": "array",
+                    "description": (
+                        "Next actions stated in THIS phase, each with an anchor. Empty if none."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "The concrete action to take.",
+                            },
+                            "owner": {
+                                "type": "string",
+                                "description": (
+                                    "Who is responsible, or the 'unassigned' label if unstated."
+                                ),
+                            },
+                            "estimate": {
+                                "type": "string",
+                                "description": "A rough effort/time estimate.",
+                            },
+                            "anchor": {
+                                "type": "string",
+                                "description": "An [HH:MM:SS] from this phase where it came up.",
+                            },
+                        },
+                        "required": ["task", "owner", "estimate", "anchor"],
+                    },
+                },
+            },
+            "required": ["heading", "prose", "anchors", "decisions", "action_items"],
+        },
+    }
+
+
+def _reconcile_tool_schema() -> dict[str, Any]:
+    """The forced emit_reconcile tool: the document header over the synthesized phases."""
+    return {
+        "name": _RECONCILE_TOOL_NAME,
+        "description": "Return the document title, core idea, and main themes over the phases.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": (
+                        "Short, specific, meaningful title for the WHOLE material in the "
+                        "target language. No date, no extension, no quotes."
+                    ),
+                },
+                "core_idea": {
+                    "type": "string",
+                    "description": (
+                        "The single central point a reader should leave with — as many "
+                        "sentences as it takes. Note any cross-phase contradiction here."
+                    ),
+                },
+                "main_themes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The 5-8 threads across the phases, each a short noun phrase.",
+                },
+            },
+            "required": ["title", "core_idea", "main_themes"],
+        },
+    }
+
+
+# How much of the previous phase's prose to carry forward as continuity context. The
+# tail (not a model-written thread-line) is the real artifact — honest by construction —
+# and is handed forward in a SEPARATE "do not restate" prompt section so the model uses
+# it for continuity without re-synthesizing it (the seam-duplication guard).
+_PRIOR_TAIL_SENTENCES = 3
+
+
+def _tail(prose: str, sentences: int = _PRIOR_TAIL_SENTENCES) -> str:
+    """The last ``sentences`` sentences of ``prose`` (continuity context, not a summary)."""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?…])\s+", prose.strip()) if p.strip()]
+    return " ".join(parts[-sentences:])
+
+
+def _prior_context(sections: Sequence[SynthesisSection]) -> str | None:
+    """Continuity block for the next phase: earlier headings + the previous phase's tail.
+
+    Returns None before the first phase (nothing precedes it). The block is plain text;
+    :func:`build_synthesis_request` wraps it in a clearly delimited, do-not-restate
+    section so the model keeps one coherent thread without repeating prior prose.
+    """
+    if not sections:
+        return None
+    headings = "\n".join(f"- {s.heading}" for s in sections if s.heading)
+    lines = ["Earlier phase headings:", headings or "- (none)"]
+    tail = _tail(sections[-1].prose)
+    if tail:
+        lines += ["", "Tail of the previous phase:", tail]
+    return "\n".join(lines)
+
+
+def build_synthesis_request(
+    phase: Phase,
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    *,
+    language: str,
+    prior_context: str | None = None,
+) -> dict[str, Any]:
+    """The synthesis request for one phase: forced emit_phase, with coherence context.
+
+    Substitutes ``{language}`` and ``{interpretation}`` in the synthesis prompt (like
+    :func:`build_request`'s ``{unassigned}``). A "phase N of M" line and the optional
+    PRIOR CONTEXT block are prepended to the system prompt (mirroring the map note),
+    the PRIOR CONTEXT as a clearly delimited do-not-restate section so it drives
+    continuity without being re-synthesized. Pure; no network.
+    """
+    system = cfg.synthesis_system_prompt.replace("{language}", _language_name(language)).replace(
+        "{interpretation}", _interpretation_label(language)
+    )
+    preamble = f"This is phase {phase.index} of {phase.total} ({phase.span}) of a longer talk."
+    if prior_context:
+        preamble += (
+            "\n\n=== PRIOR CONTEXT (continuity only — do NOT restate or re-summarize) ===\n"
+            f"{prior_context}\n=== END PRIOR CONTEXT ==="
+        )
+    request: dict[str, Any] = {
+        "model": tier.model_id,
+        "max_tokens": cfg.max_output_tokens,
+        "system": f"{preamble}\n\n{system}",
+        "messages": [{"role": "user", "content": phase.text}],
+        "tools": [_phase_tool_schema()],
+        "tool_choice": {"type": "tool", "name": _PHASE_TOOL_NAME},
+    }
+    if tier.temperature is not None:  # mirror build_request: omit on models that deprecate it
+        request["temperature"] = tier.temperature
+    return request
+
+
+def build_reconcile_request(
+    sections: Sequence[SynthesisSection], tier: ModelTier, cfg: SummarizeConfig, *, language: str
+) -> dict[str, Any]:
+    """The reconcile request: title/core_idea/main_themes over the synthesized phases.
+
+    Header-only — it reads the phase prose/headings, NEVER the transcript (re-reading
+    would be a second lossy hop). Forced emit_reconcile, ``temperature`` only when set.
+    """
+    system = cfg.reconcile_system_prompt.replace("{language}", _language_name(language))
+    content = "\n\n".join(f"[Phase {i}] {s.heading}\n{s.prose}" for i, s in enumerate(sections, 1))
+    request: dict[str, Any] = {
+        "model": tier.model_id,
+        "max_tokens": cfg.max_output_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": content}],
+        "tools": [_reconcile_tool_schema()],
+        "tool_choice": {"type": "tool", "name": _RECONCILE_TOOL_NAME},
+    }
+    if tier.temperature is not None:
+        request["temperature"] = tier.temperature
+    return request
+
+
+def _synthesis_section(tool_input: dict[str, Any]) -> SynthesisSection:
+    """Parse one emit_phase reply into a :class:`SynthesisSection` (defensive)."""
+    return SynthesisSection(
+        heading=str(tool_input.get("heading", "")).strip(),
+        prose=str(tool_input.get("prose", "")).strip(),
+        anchors=_str_list(tool_input.get("anchors")),
+    )
+
+
+def _snap_anchor(anchor: str, valid_by_sec: dict[float, str], window: float) -> str | None:
+    """Resolve one anchor against the real timecodes: exact -> snap -> drop.
+
+    Returns the canonical ``[HH:MM:SS]`` of the matching real block (exact, or the
+    nearest within ``window`` seconds — a rounding fix), or None to DROP it (unparseable,
+    or no real block within the window — a hallucinated coordinate). Absence beats a
+    false coordinate: a dropped anchor is honest, a wrong one poisons trust in all.
+    """
+    sec = _tc_seconds(anchor)
+    if sec == float("inf") or not valid_by_sec:
+        return None
+    if sec in valid_by_sec:
+        return valid_by_sec[sec]
+    nearest = min(valid_by_sec, key=lambda v: abs(v - sec))
+    return valid_by_sec[nearest] if abs(nearest - sec) <= window else None
+
+
+def validate_anchors(
+    summary: Summary,
+    transcript_text: str,
+    *,
+    snap_window_seconds: float = 2.0,
+    log: Logger = print,
+) -> Summary:
+    """Snap or drop every synthesis/decision/action anchor against the real timecodes.
+
+    The deterministic, offline backbone of the manual fidelity gate (TD-16 v2): the
+    operator trusts "jump to the anchor", so an anchor that is not a real transcript
+    timecode is snapped to the nearest real block (rounding) or dropped entirely
+    (hallucination) — never left as a false coordinate. Runs over section anchors AND
+    each decision/action anchor. Returns a new Summary with the cleaned anchors; logs
+    the exact/snapped/dropped counts. A summary with no synthesis is returned unchanged.
+    """
+    if not summary.synthesis and not summary.decisions and not summary.action_items:
+        return summary
+    valid_by_sec = {_tc_seconds(tc): tc for tc in block_timecodes(transcript_text)}
+    exact = snapped = dropped = 0
+
+    def fix_one(anchor: str) -> str | None:
+        nonlocal exact, snapped, dropped
+        resolved = _snap_anchor(anchor, valid_by_sec, snap_window_seconds)
+        if resolved is None:
+            dropped += 1
+        elif resolved == anchor.strip():
+            exact += 1
+        else:
+            snapped += 1
+        return resolved
+
+    def fix_many(anchors: tuple[str, ...]) -> tuple[str, ...]:
+        out: list[str] = []
+        for a in anchors:
+            r = fix_one(a)
+            if r is not None and r not in out:
+                out.append(r)
+        return tuple(out)
+
+    def fix_item_anchor(anchor: str) -> str:
+        return (fix_one(anchor) or "") if anchor else ""
+
+    sections = tuple(replace(s, anchors=fix_many(s.anchors)) for s in summary.synthesis)
+    decisions = tuple(replace(d, anchor=fix_item_anchor(d.anchor)) for d in summary.decisions)
+    actions = tuple(replace(a, anchor=fix_item_anchor(a.anchor)) for a in summary.action_items)
+    log(f"Validated anchors: {exact} exact, {snapped} snapped, {dropped} dropped.")
+    return replace(summary, synthesis=sections, decisions=decisions, action_items=actions)
+
+
+def synthesize_summary(
+    phases: Sequence[Phase],
+    tier: ModelTier,
+    cfg: SummarizeConfig,
+    *,
+    language: str,
+    source_stem: str,
+    api_key: str,
+    today: date | None = None,
+    caller: Caller = _default_caller,
+    log: Logger = print,
+    on_phase: Callable[[int, SynthesisSection], None] | None = None,
+) -> SummarizeResult:
+    """Synthesize ``phases`` sequentially into one transcript-grounded Summary (TD-16 v2).
+
+    K synthesis calls (forward-only: each phase sees the prior headings + the previous
+    phase's tail prose for continuity) + 1 reconcile call when K>1 (the document header;
+    a single phase uses its own heading as the title, no extra call — short material runs
+    in one call). Per-phase decisions/actions are merged with the existing anchor-
+    preserving primitives, and every anchor is validated against the real transcript
+    timecodes before returning. A truncated reply on ANY call fails loud, naming the
+    phase; the transcript is already saved. ``on_phase`` (if given) fires after each phase
+    completes — the seam T5 uses to persist a phase for artifact-resume.
+    """
+    if not phases:
+        raise SummarizeError("No transcript phases to synthesize (empty transcript?).")
+    sections: list[SynthesisSection] = []
+    decisions: list[Decision] = []
+    actions: list[ActionItem] = []
+    total_in = total_out = 0
+    for ph in phases:
+        log(f"Synthesizing phase {ph.index}/{ph.total} ({ph.span})...")
+        request = build_synthesis_request(
+            ph, tier, cfg, language=language, prior_context=_prior_context(sections)
+        )
+        outcome = caller(request, api_key)
+        if outcome.stop_reason == "max_tokens":
+            raise SummarizeError(
+                f"Phase {ph.index}/{ph.total} hit the output cap and was cut off. Raise "
+                "max_output_tokens (or lower phase_target_tokens) in models.toml, then "
+                "retry from the saved transcript."
+            )
+        section = _synthesis_section(outcome.tool_input)
+        sections.append(section)
+        decisions.extend(_decisions(outcome.tool_input.get("decisions")))
+        actions.extend(_action_items(outcome.tool_input.get("action_items")))
+        total_in += outcome.input_tokens
+        total_out += outcome.output_tokens
+        if on_phase is not None:  # artifact-resume seam (T5 persists the phase here)
+            on_phase(ph.index, section)
+
+    title = core_idea = ""
+    main_themes: tuple[str, ...] = ()
+    if len(sections) > 1:
+        log("Reconciling the phases into a document header...")
+        rec = caller(build_reconcile_request(sections, tier, cfg, language=language), api_key)
+        if rec.stop_reason == "max_tokens":
+            raise SummarizeError(
+                "The reconcile step hit the output cap. Raise max_output_tokens in "
+                "models.toml, then retry from the saved transcript."
+            )
+        total_in += rec.input_tokens
+        total_out += rec.output_tokens
+        title = str(rec.tool_input.get("title", "")).strip()
+        core_idea = str(rec.tool_input.get("core_idea", "")).strip()
+        main_themes = _str_list(rec.tool_input.get("main_themes"))
+    else:  # K=1: the single phase IS the document; its heading is the title, no reconcile
+        title = sections[0].heading
+
+    summary = Summary(
+        title=title or _fallback_title(source_stem, today),
+        overview="",
+        key_takeaways=(),
+        section_timecodes=(),
+        recurring_themes=(),
+        core_idea=core_idea,
+        decisions=_merge_decisions(decisions),
+        action_items=_merge_action_items(actions),
+        language=language,
+        synthesis=tuple(sections),
+        main_themes=main_themes,
+    )
+    summary = validate_anchors(summary, "\n".join(ph.text for ph in phases), log=log)
+    log(f"Summary ready: {summary.title}")
+    return SummarizeResult(summary=summary, input_tokens=total_in, output_tokens=total_out)

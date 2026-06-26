@@ -157,6 +157,60 @@ and do not invent items. Write every heading in {language}. Call the emit_groupi
 tool exactly once.
 """
 
+# Synthesis step (TD-16 v2 direct synthesis): synthesize ONE phase (a contiguous time
+# span) of the transcript into faithful, readable prose. The transcript is ground truth,
+# read directly — one hop, no lossy intermediate layer. {language} is the target;
+# {interpretation} is the per-language label for the inline marker that flags any bridge
+# beyond what the author literally said (filled at call time, like {unassigned}). The
+# emit_phase tool SCHEMA stays in echogist/summarize.py so prompt and parser cannot drift.
+synthesis_system_prompt = """
+You are a faithful synthesizer. You are given ONE phase (a contiguous time span) of a \
+longer timestamped transcript, and you write a single readable passage of prose in \
+{language} that conveys what the author actually says in THIS phase.
+
+Ground every sentence in the transcript text you are given — it is the source of truth. \
+Do not invent, do not embellish, do not soften or invert the author's stance, and keep \
+their caveats and qualifications. Do not merge two distinct points into one. This is a \
+faithful synthesis, not a transcript and not a bullet list.
+
+Anchors: for the passage, and for each decision and action item, copy one or more \
+timecodes that ACTUALLY APPEAR in the transcript text of THIS phase (formatted \
+[HH:MM:SS]). Never invent, round, or interpolate a timecode that is not present; if you \
+are unsure, give no anchor rather than a wrong one.
+
+Interpretation: you may add a short bridging clause to connect the author's points for \
+readability, but anything that goes beyond what the author literally says MUST be marked \
+inline with the token [{interpretation}]: immediately before that bridging text, so the \
+reader sees author-versus-you at a glance. Use it sparingly.
+
+PRIOR CONTEXT: if the request includes a "PRIOR CONTEXT" section (the tail of the \
+previous phase's prose plus the earlier phase headings), use it ONLY for continuity — to \
+avoid re-introducing what was already said and to keep one coherent thread. Do NOT \
+restate, re-summarize, or quote it; synthesize only THIS phase's transcript.
+
+decisions / action_items: include any concrete decisions or next actions stated in THIS \
+phase, each with its anchor. Empty lists are correct for material with none — never \
+invent one. Write naturally in {language}, not a word-for-word translation. Call the \
+emit_phase tool exactly once.
+"""
+
+# Reconcile step (TD-16 v2): the document-level header, derived ONLY from the already-
+# written phase passages — it never re-reads the transcript (that would be a second lossy
+# hop). It also flags any contradiction the phases left across a seam. The emit_reconcile
+# tool SCHEMA lives in echogist/summarize.py.
+reconcile_system_prompt = """
+You are given the already-written phase passages (their headings and prose) of ONE \
+transcript that was synthesized phase by phase, in order. Produce the document-level \
+header, written entirely in {language}, by calling the emit_reconcile tool exactly once:
+- title: a short, specific, human-meaningful title (no date, no extension, no quotes).
+- core_idea: the single central point a reader should leave with, in as many sentences \
+as it takes — no upper limit.
+- main_themes: the 5-8 threads that run across the phases, each a short noun phrase.
+Base everything ONLY on the phase passages you are given; add no facts that are not in \
+them. If two phases state contradictory things about the same point, note the \
+contradiction in core_idea rather than silently choosing one.
+"""
+
 [chunk]
 # Map-reduce summarization (TD-5). Chunking triggers on the QualityBudget — a single
 # pass is trusted only while the transcript is under BOTH limits; crossing either
@@ -168,6 +222,10 @@ quality_budget_tokens = 40000    # est. input tokens above this -> chunk
 quality_budget_seconds = 3600    # transcript duration above this (60 min) -> chunk
 target_chunk_tokens = 12000      # per-chunk size target (hyperparameter — calibrate)
 overlap_seconds = 90             # time-based overlap between chunks so straddling ideas survive
+# TD-16 v2 direct synthesis: target tokens per CONTIGUOUS phase (no overlap). K is
+# computed = ceil(total_tokens / this), so it scales with length (NOT a 3-4 cap); ~2x
+# the map target lands the validated ~84k-token 3h lecture at ~4 phases.
+phase_target_tokens = 24000
 
 [transcript]
 # Timecode granularity of the saved transcript (and the text the summarizer reads).
