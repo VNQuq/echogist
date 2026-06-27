@@ -52,6 +52,19 @@ quality gate). **Parallel synthesis is OUT OF SCOPE** (operator, 2026-06-26).
 **When to close.** When the paid reference run is operator-accepted. Tier-2 cleanup ships with v2.0.0; T8 is
 a separate follow-on, not a blocker.
 
+### TD-17 — Progress bar shows 100% on a failed stage
+
+Severity: LOW · Created 2026-06-27 (/review red-team finding, deferred) · Trigger: operator review of the
+failure UX, or a UI-seam refactor · SoT: this file
+
+The `with ui.progress(...) as bar:` context fills the bar to 100% via `handle.done()` in its `finally` even
+when the stage raised mid-way (e.g. an ffmpeg/extract or transcribe failure): the operator sees a full bar
+flash immediately before the warning/error panel. Cosmetic only — the error path is correct (warn + degrade or
+fatal return to menu); no state is wrong. It's shared `ProgressHandle` behavior, so it affects the transcribe
+bar too, not just the new TD-12 MP3 conversion bar — out of scope for the TD-12 menu change. Fix when the UI
+seam is next touched: have `done()` (or the context exit) skip the fill when leaving via an exception, or pass
+the bar's last-known fraction through instead of forcing 1.0.
+
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
 Severity: LOW · Created 2026-06-17 · Trigger: a non-interactive (piped/redirected) run is ever needed · SoT: this file

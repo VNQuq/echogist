@@ -79,7 +79,8 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
 - **Blockers:** none in-repo — gate green. Closure gate is the operator paid reference run (Windows; `ANTHROPIC_API_KEY` not in WSL).
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on paid reference
-  acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW).
+  acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) ·
+  TD-17 progress bar 100% on failed stage (LOW).
   **Closed:** TD-1..6, 8, 10, 11, 12, 13, 14, 15.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
