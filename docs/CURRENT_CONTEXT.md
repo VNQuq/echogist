@@ -1,107 +1,61 @@
 # Current Context
 
-**Updated:** 2026-06-27 (**first paid reference run FAILED on coverage — phase 2 dropped ~34 min / ~22% of a
-3h lecture; prompt fix applied to `config/models.toml` (uncommitted); awaiting a clean re-run**). Gate GREEN
-(357 + the prompt change is config-only). v2.0.0 BLOCKED on the re-run. Eyes-review also surfaced TD-18..21
-(headings/anchor-dump/PDF-polish/cost-estimate — none block closure). **Authority:** [CLAUDE.md](../CLAUDE.md)
+**Updated:** 2026-06-27 (**v2.0.0 RELEASED** — tag `v2.0.0` cut via `scripts/release.py`). The TD-16
+coverage fix + TD-18/19/21 follow-ons were validated on the paid re-run; cost recalibrated (`230deee`);
+usage docs (README + USAGE) rewritten and de-personalised for v2. **Authority:** [CLAUDE.md](../CLAUDE.md)
 · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
 
-## Active scope — TD-16 v2: direct transcript synthesis
+## Active scope — TD-16 v2: direct transcript synthesis (DONE, pending release)
 
-**Principle (operator, eng-reviewed, in CLAUDE.md):** fidelity > completeness. The transcript is ground
-truth, read DIRECTLY into a faithful synthesis (one hop) — no map-extraction, no coverage checklist, no
-grouping. The manual operator re-check against the recording + deterministic anchor validation is the
-fidelity gate (no LLM-judge). Supersedes TD-5 (map-reduce) and TD-15 (group-keep-all), both closed + deleted.
+**Principle (operator, eng-reviewed, in CLAUDE.md):** fidelity > completeness. The transcript is ground truth,
+read DIRECTLY into a faithful synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. The
+manual operator re-check against the recording + deterministic anchor validation is the fidelity gate (no
+LLM-judge). Supersedes TD-5 (map-reduce) and TD-15 (group-keep-all), both closed + deleted.
 
-**Pipeline (the only path):** transcript → `chunk.plan_phases` (computed K, contiguous, overlap=0; short =
-K=1) → `summarize.synthesize_summary` ×K sequential forward-only (each phase reads its span + prior headings
-+ prior phase's TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept/snap-2s/drop vs
-that phase's real timecodes; strips inline `[HH:MM:SS]` too) → concatenate decisions/actions → reconcile
-(title/core_idea/main_themes + contradiction flag, K>1 only) → header anchor-validation → one readable doc
-(~3–5 pp). ≈5 calls/3h, 1 for short. The 5 fidelity properties + "every anchor resolves to a real timecode"
-are the v2 acceptance bar (CLAUDE.md).
+**Pipeline (the only path):** transcript → `chunk.plan_phases` (computed K, contiguous, overlap=0; short = K=1)
+→ `summarize.synthesize_summary` ×K sequential forward-only (each phase reads its span + prior headings + prior
+phase's TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept/snap-2s/drop vs that
+phase's real timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title/
+core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-validation → one readable doc.
 
-## Status
+## Status — RELEASE-READY
 
-- **T1–T7 shipped on `main`:** `7ad2185` (T1–T4 config/prompts/`plan_phases`/`synthesize_summary`/
-  `validate_anchors`/render), `1fdd3de` (T5-A: `summarize_auto` rewired + cost preview + artifact-resume),
-  `43b7daf` (T5-B isolated/git-revertable: deleted single-pass+map-reduce+grouping + old eval, ~2.5k LOC),
-  `2b8ab6f` (T6/T7 docs).
-- **Multi-agent `/review` + Tier-1 fixes shipped (`52a36ef`):** 6 passes (testing/maintainability/security/
-  performance/red-team + Claude adversarial; Codex not installed). Tier-1: dropped the cross-phase decision/
-  action merge (it could collapse distinct same-worded points → fidelity #4); per-phase anchor validation
-  (was global — a coincidental cross-phase match passed); inline `[HH:MM:SS]` in prose + reconcile header now
-  validated; resume accepts `len==K` (a reconcile-crash no longer re-pays all K phases); MD title collapsed.
-  Same commit compacted CURRENT_CONTEXT + TECHNICAL_DEBT.
-- **Tier-2 cleanup DONE — gate GREEN (345 passed).** Removed dead `cost.estimate_cost` +
-  `estimate_cost_chunked` (+ their tests; baseline 350 → 345); `guard.overflow_message` wording → v2-neutral;
-  schema owner `unassigned`→"leave empty if unstated"; K=1 duplicate heading suppressed in
-  `render._markdown`/`_pdf_synthesis_body`; stale docstrings; CHANGELOG `[Unreleased]` rewritten to the v2.0.0
-  BREAKING entry; CLAUDE.md `## Release` section + `release.py` docstring de-`/ship`-ed; TD-12/TD-14 reopened
-  in TECHNICAL_DEBT.
+- **Code complete on `main`**, gate green (`bash scripts/dev-loop`: ruff + mypy --strict + 360 tests). Last
+  commits: `5d0df0c` (TD-18/19/20/21), `ba1b973` (TD-16 coverage fix), `0df39b7` (docs), `230deee` (TD-21 cost).
+- **Paid re-run VALIDATED 2026-06-27** (balanced/Sonnet, transcript `output/transcripts/2026-06-27-Лекция 3
+  01.06.26-2.txt`, 2:58:57, K=4, actual $0.5237) — full evidence in the TD-16 closed entry. Every gate item
+  passed: coverage restored (phase 2 covers 00:44→01:31); anchors 131/131 + 9/9 + 131/131 resolve (log "0
+  dropped", re-verified offline); headings cohere (TD-18); PDF operator-accepted (TD-20); cost recalibrated to
+  ~1.2× (TD-21, `output_tokens_estimate` 2800→4600); fidelity spot-check clean (12/12 grounded, no fabrication).
+  "the author-named point" absent only because Whisper garbled the surname upstream (concept covered).
 
 ## Config / behavior notes
 
 - Tool names `emit_phase`/`emit_reconcile`. `{interpretation}` substituted per-language; inline
   `[интерпретация]:` marker is plain text, survives MD+PDF.
-- **Default tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings.
-- **Output:** recovery `.json` → `output/summaries/raw/`; resume partial → `raw/.resume/`; readable
-  `.pdf`/`.md` → `output/summaries/`; triplet shares one stem.
-- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`. Not in WSL — paid runs
-  are operator-run on Windows.
-- **Prompt is data** (`config/models.toml`); tool SCHEMAs stay in `summarize.py`.
+- **Default tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings. **Prompt is data**
+  (`config/models.toml`); tool SCHEMAs stay in `summarize.py`.
+- **Anchors are TEXTUAL references, not links** — `[HH:MM:SS]` woven inline in prose (TD-19) point to a moment
+  in the recording/MP3; nothing to click. The validator guarantees each resolves to a real transcript block; a
+  manual content spot-check against the recording is optional, not a required gate step.
+- **Output:** recovery `.json` → `output/summaries/raw/`; resume partial → `raw/.resume/`; readable `.pdf`/`.md`
+  → `output/summaries/`; triplet shares one stem. **Transcripts are gitignored (`output/`), machine-local** — a
+  Windows-produced summary can only be re-validated in WSL against ITS transcript, not a stale copy.
+- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`. Not in WSL — paid runs are
+  operator-run on Windows.
 
 ## Next
 
-1. **Paid reference RE-RUN (operator, Windows) — the ONE gate before v2.0.0.** Same transcript
-   (`output/transcripts/2026-06-27-Лекция 3 01.06.26.txt`, 2:58:57), balanced/Sonnet. It validates the TD-16
-   coverage fix AND the TD-18/19/21 prompt+cost changes together (all landed `5d0df0c`/`ba1b973`). Run #1
-   (2026-06-27, $0.39) dropped ~34 min of phase 2 (00:45:52→01:27:30: the author-named point, decider types,
-   the four no-decision positions, fit criterion). **Checklist (each must pass):**
-   - [ ] **Coverage (TD-16):** phase 2 now covers 00:55→01:27 — none of the run-#1 dropped points missing.
-   - [ ] **5 fidelity properties** by eye: grounded · no fabrication (`[интерпретация]:` on any bridge) ·
-     faithful stance · no merged distinctions · coverage. Confirm ≤5 pp drift vs the recording.
-   - [ ] **Every anchor jumps true:** click each `[HH:MM:SS]` (now woven INLINE in prose, no footer) — lands
-     on the right moment. The validator is offline; this is the manual half of the gate.
-   - [ ] **Headings (TD-18):** the phase headings read as ONE coherent outline (meta-frame), not N disjoint
-     labels; each still faithful to its phase. (Reconcile-normalized; K>1.)
-   - [ ] **PDF (TD-20):** readable + finished enough — title/heading hierarchy, leading, no anchor-wall.
-   - [ ] **Cost (TD-21):** the pre-call estimate sits ~tight over the actual bill (target ~1.2×, not 2.4×);
-     it should NOT trip the confirm gate at ~$0.39.
-   - If all green → close TD-16, drop TD-18/19/21 to resolved, ship v2.0.0 (step 3). If coverage still fails →
-     reopen the synthesis prompt; if a NON-coverage item fails → log/iterate that TD, it does not block v2.0.0.
-2. **TD-12 — DONE (implemented 2026-06-27, eng-reviewed design).** Video menu = `MP3 only / Summary / Transcript /
-   ← Back` with semantic keys; MP3 is the BASELINE (kept on every video Summary+Transcript run; MP3-only failure
-   FATAL, Summary/Transcript DEGRADE — warn+continue, catching BOTH ExtractError AND bare OSError per the
-   /review red-team finding). `.mp3` menu unchanged. Container decoded directly; MP3 is an
-   added artifact. Reveal priority `REVEAL_SUMMARY(3) > REVEAL_TRANSCRIPT(2) > REVEAL_AUDIO(1)`; transcript-only now
-   pops `transcripts`. Ships with v2.0.0. Design doc: `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md`.
-   - **TD-14 — DONE** (`reveal_dir(priority)`; the "transcripts never revealed" rule was superseded by TD-12).
-3. **v2.0.0 release** (breaking — Summary shape changed; VERSION 1.1.0 → 2.0.0). Cut it via the release
-   script, NOT `/ship`: bump `VERSION` + write the `## [2.0.0]` `CHANGELOG.md` section, `/cp`, push the
-   annotated tag `v2.0.0`, then `python3 scripts/release.py` (PAT in `ECHOGIST_GITHUB_TOKEN`). **T8** offline
-   LLM-judge eval = P3 follow-on. **Parallel synthesis = OUT OF SCOPE** (operator, 2026-06-26).
-
-## Dev env
-
-WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Gate: `bash scripts/dev-loop` (ruff + mypy
---strict + pytest) — **GREEN: 357 passed**. `ANTHROPIC_API_KEY`
-not set here; network libs lazy/offline so the killswitch holds.
-Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
+1. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** v2.0.0 is BLOCKED on a clean paid re-run (Windows; `ANTHROPIC_API_KEY` not in WSL) proving the
-  coverage fix. In-repo gate is green; the fix is config-only + uncommitted.
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on a clean re-run;
-  T8 eval in its orbit) · **TD-18/19/20/21 IMPLEMENTED 2026-06-27** (reconcile heading-normalization +
-  heading anchor-validation; anchor-footer dropped + inline anchors; PDF typography pass; cost estimate
-  per-call projection 2.4×→~1.2×) — gate green, the prompt/cost/heading changes ride the SAME paid re-run as
-  the TD-16 coverage fix · TD-7 non-TTY UI (LOW) ·
-  TD-9 cheap-call Enter beat (LOW) · TD-17 progress bar 100% on failed stage (LOW).
-  **Closed:** TD-1..6, 8, 10, 11, 12, 13, 14, 15.
+- **Blockers:** none. v2.0.0 shipped.
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): TD-20 (PDF iteration, LOW, operator-accepted as-is)
+  · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) · TD-17 progress bar 100% on failed stage (LOW).
+  **Closed:** TD-1..6, 8, 10..16, 18, 19, 21.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
   SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
@@ -110,5 +64,5 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
 - API key from env / local config only; never in code/committed.
 - Killswitch: `SUMMARIZE` (synthesis + reconcile) is the only network stage; everything left is offline +
-  stub-testable. Phase-split, anchor validation, render are local.
+  stub-testable. Phase-split, anchor validation, cost estimate, render are local.
 - Every push to `main` passes ruff + mypy + tests. (Development is on `main` directly.)
