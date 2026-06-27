@@ -91,6 +91,12 @@ reconcile pass also rewrite/normalize the phase headings into one hierarchy (che
 all phase prose, no transcript re-read, no fidelity cost since headings aren't anchored claims); (b) feed the
 running title/frame forward into each phase call (raises per-phase coupling). (a) is the lighter touch.
 
+**IMPLEMENTED 2026-06-27 (validates on the TD-16 re-run):** option (a). `emit_reconcile` now returns a
+`phase_headings` array (one per phase, in order); `summarize._apply_normalized_headings` replaces the
+forward-only headings with it, fail-soft on any count/empty mismatch (a wrong-length remap could mislabel a
+phase). K=1 keeps its single heading (no reconcile). The final `validate_anchors` now also strips inline
+timecodes from headings (/review hardening) so a normalized heading can't render an unvalidated `[HH:MM:SS]`.
+
 ### TD-19 — Per-phase anchor footer dump is redundant noise
 
 Severity: LOW · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: render polish (pairs with TD-20)
@@ -103,6 +109,11 @@ the operator flagged as ugly. Fix when render is next touched: drop the footer e
 the citation), OR show only anchors NOT already present inline in that phase's prose. Validation logic is
 untouched either way — this is presentation only.
 
+**IMPLEMENTED 2026-06-27:** dropped the footer entirely in both PDF (`_anchor_line` deleted) and Markdown.
+The synthesis prompt now weaves a handful of `[HH:MM:SS]` anchors INLINE in the prose (the jump-points the
+reader uses); the full `anchors` array stays in the saved `.json` for the validation gate, not dumped as a
+wall. Validation logic untouched.
+
 ### TD-20 — PDF visual polish (beauty + human readability)
 
 Severity: LOW · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: a render-polish pass · SoT: this file
@@ -112,6 +123,10 @@ spacing rhythm). Operator wants it more readable + visually finished. Scope when
 hierarchy (heading weight/size/spacing rhythm), paragraph leading, anchor styling (quieter/greyed), margins,
 and section separation. Pairs with TD-19 (the anchor footer is part of the same readability pass). Markdown
 path is unaffected. Open-ended — no single correct answer; needs a design eye, not a one-line fix.
+
+**IMPLEMENTED 2026-06-27 (first pass):** a typographic pass — title 20pt + hairline rule, headings 14pt, body
+11pt at 6.5 leading, near-black ink (`_INK`/`_INK_STRONG`) with a muted rule tone, larger spacing rhythm. Plain
+but readable now. Stays open at LOW for further iteration once the operator eyes a real rendered PDF.
 
 ### TD-21 — Pre-call cost estimate runs ~2.4× the actual bill
 
@@ -129,6 +144,13 @@ reconcile-input with the actual phase-prose size (it's known locally before the 
 a conscious shift from "true ceiling, never below the bill" to "tight estimate + margin" — keep a modest
 high-bias (~15%) so the quote still rarely undershoots. The GUARD's Cyrillic-high INPUT/overflow estimate is
 SEPARATE and stays (CLAUDE.md "estimate Cyrillic high" is about catching over-long transcripts, not cost).
+
+**IMPLEMENTED 2026-06-27 (validates on the TD-16 re-run):** `estimate_cost_synthesis` now takes
+`per_call_output_tokens` (= `[guard].output_tokens_estimate`) instead of the `max_output_tokens` cap; output =
+`(K+1) × per_call`, reconcile-input = `K × per_call` (no more phantom `K × cap`). `output_tokens_estimate`
+recalibrated 4000 → 2800 (~25% over run #1's ~2.2k/call observed mean). Projected on run #1's K=4 this lands
+~$0.48 vs the $0.39 bill (~1.2×, down from 2.4×) — the residual is the mandated Cyrillic-high INPUT bias, which
+stays. MEDIUM until the re-run confirms the live quote sits ~tight over actual.
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 

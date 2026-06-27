@@ -4,9 +4,10 @@ Two numbers bracket the paid SUMMARIZE call(s) (TD-16 v2: K phase calls + 1 reco
 
 * **Before** the call(s) — a cost *estimate* (:func:`estimate_cost_synthesis`) from the
   local, language-aware per-phase token guess (:func:`echogist.guard.estimate_input_tokens`)
-  on the input side, and a per-call ``max_tokens`` CEILING on the output side. Output is
-  modelled at the cap, not a fraction of input — the v2 contract is dense per-phase prose,
-  so the estimate is sized to never sit below the bill ("estimate high"). Always shown.
+  on the input side, and a REALISTIC per-call output projection
+  (``[guard].output_tokens_estimate``) on the output side — NOT the ``max_tokens`` cap
+  (TD-21: the cap-based ceiling ran ~2.4× the bill). The input side keeps its Cyrillic-high
+  bias, so the quote is tight + a modest margin and still rarely undershoots. Always shown.
 * **After** the call — the *actual* cost from the audited ``response.usage``
   counts carried on :class:`echogist.summarize.SummarizeResult`. The exact,
   billable number.
@@ -74,29 +75,34 @@ def estimate_cost_synthesis(
     phase_input_tokens: Sequence[int],
     tier: ModelTier,
     *,
-    output_cap: int,
+    per_call_output_tokens: int,
 ) -> CostEstimate:
     """Pre-call cost estimate for the v2 direct-synthesis path (TD-16): K phases + reconcile.
 
     ``phase_input_tokens`` is the per-phase input estimate (one per synthesis call, each
     already including the prompt overhead via :func:`echogist.guard.estimate_input_tokens`).
+    ``per_call_output_tokens`` is a REALISTIC per-call output projection
+    (``[guard].output_tokens_estimate``), NOT the API ``max_tokens`` cap.
 
-    A true CEILING the operator approves against, never below the bill (the "estimate high"
-    rule on the expensive output side). Each of the K phase calls can emit up to
-    ``output_cap`` (the request's ``max_tokens``); on a no-upper-limit prose contract a
-    dense phase really can approach it, and output is priced ~5× input. When K>1 a single
-    reconcile call follows: its INPUT (the phase prose fed to it) is unknowable pre-run but
-    bounded by the K phase outputs, i.e. ``K × output_cap`` at the ceiling, and it emits up
-    to one more ``output_cap``. K=1 is degenerate — one phase, its heading is the title, no
-    reconcile call — so neither the reconcile input nor its output is added. The exact cost
-    still comes from the summed ``response.usage`` after the calls; this only governs the
-    pre-call quote.
+    TD-21: a tight estimate + a modest high bias, not a worst-case ceiling. The old quote
+    priced every call's output at the full cap (``output_cap × (K+1)``) and added a phantom
+    ``K × output_cap`` reconcile input — it ran ~2.4× the actual bill (run #1: $0.95 vs
+    $0.39) and tripped the confirm gate needlessly. The faithful-prose contract emits a
+    small fraction of the cap, so each of the K phase calls is projected at
+    ``per_call_output_tokens`` (sized ~25% above the observed mean — still above the bill,
+    no longer double it). When K>1 a single reconcile call follows: its INPUT is the phase
+    prose fed to it, ≈ the K phase outputs (``K × per_call_output_tokens``), and it emits
+    one more ``per_call_output_tokens``. K=1 is degenerate — one phase, its heading is the
+    title, no reconcile call — so neither the reconcile input nor its output is added. The
+    INPUT side keeps its separate Cyrillic-high bias (the guard), so the quote still rarely
+    undershoots; the exact cost comes from ``response.usage`` after the calls.
     """
     k = len(phase_input_tokens)
     has_reconcile = k > 1
-    reconcile_input = k * output_cap if has_reconcile else 0  # phase prose fed to reconcile
+    # The phase prose fed to the reconcile call ≈ the K phase outputs (not the cap).
+    reconcile_input = k * per_call_output_tokens if has_reconcile else 0
     total_input = sum(phase_input_tokens) + reconcile_input
-    total_output = (k + (1 if has_reconcile else 0)) * output_cap  # K phases + reconcile
+    total_output = (k + (1 if has_reconcile else 0)) * per_call_output_tokens
     return CostEstimate(
         input_tokens=total_input,
         output_tokens=total_output,

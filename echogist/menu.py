@@ -226,7 +226,7 @@ def _run_summary(
         ui.warn(_oversize_phase_message(p, est, budget, tier))
         return
     estimate = cost.estimate_cost_synthesis(
-        phase_inputs, tier, output_cap=model_config.summarize.max_output_tokens
+        phase_inputs, tier, per_call_output_tokens=model_config.guard.output_tokens_estimate
     )
 
     api_key = deps.get_api_key()

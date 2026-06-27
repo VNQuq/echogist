@@ -86,8 +86,10 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 - **Blockers:** v2.0.0 is BLOCKED on a clean paid re-run (Windows; `ANTHROPIC_API_KEY` not in WSL) proving the
   coverage fix. In-repo gate is green; the fix is config-only + uncommitted.
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on a clean re-run;
-  T8 eval in its orbit) · **TD-18** heading meta-frame (MEDIUM) · **TD-21** cost estimate ~2.4× actual
-  (MEDIUM) · **TD-19** anchor footer dump (LOW) · **TD-20** PDF polish (LOW) · TD-7 non-TTY UI (LOW) ·
+  T8 eval in its orbit) · **TD-18/19/20/21 IMPLEMENTED 2026-06-27** (reconcile heading-normalization +
+  heading anchor-validation; anchor-footer dropped + inline anchors; PDF typography pass; cost estimate
+  per-call projection 2.4×→~1.2×) — gate green, the prompt/cost/heading changes ride the SAME paid re-run as
+  the TD-16 coverage fix · TD-7 non-TTY UI (LOW) ·
   TD-9 cheap-call Enter beat (LOW) · TD-17 progress bar 100% on failed stage (LOW).
   **Closed:** TD-1..6, 8, 10, 11, 12, 13, 14, 15.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)

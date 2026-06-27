@@ -581,8 +581,17 @@ def _reconcile_tool_schema() -> dict[str, Any]:
                     "items": {"type": "string"},
                     "description": "The 5-8 threads across the phases, each a short noun phrase.",
                 },
+                "phase_headings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The phase headings rewritten into ONE coherent outline, exactly one "
+                        "per phase, in the SAME order as the phases. Each stays faithful to its "
+                        "own phase; only wording/parallelism changes so they read as a meta-frame."
+                    ),
+                },
             },
-            "required": ["title", "core_idea", "main_themes"],
+            "required": ["title", "core_idea", "main_themes", "phase_headings"],
         },
     }
 
@@ -771,8 +780,9 @@ def validate_anchors(
     The deterministic, offline backbone of the manual fidelity gate (TD-16 v2): the operator
     trusts "jump to the anchor", so any timecode that is not a real transcript block is
     snapped to the nearest one (rounding) or dropped (hallucination) — never left as a false
-    coordinate. Runs over section anchors AND each section's prose, the decision/action
-    anchors, AND the reconcile header (core_idea + main_themes), so nothing timecoded reaches
+    coordinate. Runs over section anchors AND each section's prose AND heading, the
+    decision/action anchors, AND the reconcile header (core_idea + main_themes), so nothing
+    timecoded reaches
     the operator unvalidated. In synthesis this is applied PER PHASE against that phase's own
     timecodes — a phase anchor that only matches some other phase's block is a hallucination,
     not a citation — and the document header is validated once against the whole transcript.
@@ -790,7 +800,15 @@ def validate_anchors(
     valid_by_sec = {_tc_seconds(tc): tc for tc in block_timecodes(transcript_text)}
     fix_many, fix_str, strip_inline, stats = _make_fixer(valid_by_sec, snap_window_seconds)
     sections = tuple(
-        replace(s, anchors=fix_many(s.anchors), prose=strip_inline(s.prose))
+        replace(
+            s,
+            anchors=fix_many(s.anchors),
+            prose=strip_inline(s.prose),
+            # A stray [HH:MM:SS] in a heading is an emitted timecode too (esp. a TD-18
+            # reconcile-normalized heading): snap/drop it so nothing timecoded renders
+            # unvalidated, holding the "every anchor resolves to a real timecode" invariant.
+            heading=strip_inline(s.heading),
+        )
         for s in summary.synthesis
     )
     decisions = tuple(replace(d, anchor=fix_str(d.anchor)) for d in summary.decisions)
@@ -806,6 +824,29 @@ def validate_anchors(
         core_idea=core_idea,
         main_themes=main_themes,
     )
+
+
+def _apply_normalized_headings(
+    sections: Sequence[SynthesisSection],
+    raw_headings: Any,
+    *,
+    log: Logger = print,
+) -> list[SynthesisSection]:
+    """Replace each phase heading with the reconcile pass's normalized outline (TD-18).
+
+    The reconcile call (K>1 only) rewrites the forward-only, independently-worded phase
+    headings into ONE coherent meta-frame — one per phase, in order. It already reads all the
+    phase prose, re-reads no transcript, and a heading carries no anchored claim, so this is a
+    presentation normalization with NO fidelity cost. Fail-soft: applied ONLY when the model
+    returns exactly one NON-EMPTY heading per phase; any count/shape mismatch keeps the
+    original headings (a wrong-length remap could mislabel a phase) and logs it.
+    """
+    cleaned = tuple(str(h).strip() for h in raw_headings) if isinstance(raw_headings, list) else ()
+    if len(cleaned) != len(sections) or not all(cleaned):
+        if sections:
+            log("Reconcile returned no usable phase-heading outline; keeping phase headings.")
+        return list(sections)
+    return [replace(s, heading=h) for s, h in zip(sections, cleaned, strict=True)]
 
 
 def _running_summary(
@@ -848,9 +889,11 @@ def synthesize_summary(
     """Synthesize ``phases`` sequentially into one transcript-grounded Summary (TD-16 v2).
 
     K synthesis calls (forward-only: each phase sees the prior headings + the previous
-    phase's tail prose for continuity) + 1 reconcile call when K>1 (the document header;
-    a single phase uses its own heading as the title, no extra call — short material runs
-    in one call). Each phase's anchors (section + inline prose + decisions + actions) are
+    phase's tail prose for continuity) + 1 reconcile call when K>1 (the document header
+    AND a normalized phase-heading outline, TD-18 — applied fail-soft; a single phase uses
+    its own heading as the title, no extra call — short material runs in one call).
+
+    Each phase's anchors (section + inline prose + decisions + actions) are
     validated against THAT phase's own transcript timecodes as it lands (a strict per-phase
     gate); the per-phase decisions/actions are then concatenated (phases are non-overlapping,
     so there is nothing to dedup — collapsing same-worded distinct points would violate
@@ -936,6 +979,10 @@ def synthesize_summary(
         title = str(rec.tool_input.get("title", "")).strip()
         core_idea = str(rec.tool_input.get("core_idea", "")).strip()
         main_themes = _str_list(rec.tool_input.get("main_themes"))
+        # TD-18: normalize the forward-only phase headings into one coherent outline.
+        sections = _apply_normalized_headings(
+            sections, rec.tool_input.get("phase_headings"), log=log
+        )
     else:  # K=1: the single phase IS the document; its heading is the title, no reconcile
         title = sections[0].heading
 

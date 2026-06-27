@@ -71,31 +71,33 @@ def test_cost_scales_with_tokens() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# estimate_cost_synthesis (TD-16 v2) — CEILING over K phase calls + 1 reconcile
+# estimate_cost_synthesis (TD-16 v2 / TD-21) — tight per-call projection + margin
 # --------------------------------------------------------------------------- #
-def test_estimate_cost_synthesis_projects_phases_and_reconcile_at_the_cap() -> None:
-    # K>1: each of the K phases + 1 reconcile projected at the cap; reconcile INPUT is the
-    # K phase outputs fed to it, bounded by K * cap.
-    est = cost.estimate_cost_synthesis([1000, 2000], _tier(), output_cap=8192)
-    assert est.input_tokens == 3000 + 2 * 8192  # sum(phase inputs) + reconcile input (K*cap)
-    assert est.output_tokens == 3 * 8192  # K phases + 1 reconcile, each at the cap
+def test_estimate_cost_synthesis_projects_phases_and_reconcile_per_call() -> None:
+    # K>1: each of the K phases + 1 reconcile projected at the realistic PER-CALL output
+    # figure; reconcile INPUT is the K phase outputs fed to it (K * per_call), not the cap.
+    est = cost.estimate_cost_synthesis([1000, 2000], _tier(), per_call_output_tokens=2800)
+    assert est.input_tokens == 3000 + 2 * 2800  # sum(phase inputs) + reconcile input (K*per_call)
+    assert est.output_tokens == 3 * 2800  # K phases + 1 reconcile, each at the per-call figure
     assert est.price_out_per_mtok == 15.0  # tier prices carried through
 
 
 def test_estimate_cost_synthesis_single_phase_has_no_reconcile() -> None:
     # K=1 is degenerate: one phase, its heading is the title, NO reconcile call — so no
-    # reconcile input and only one capped output.
-    est = cost.estimate_cost_synthesis([1000], _tier(), output_cap=4096)
+    # reconcile input and only one per-call output.
+    est = cost.estimate_cost_synthesis([1000], _tier(), per_call_output_tokens=2800)
     assert est.input_tokens == 1000  # one phase input, no reconcile input added
-    assert est.output_tokens == 4096  # one capped phase call only
+    assert est.output_tokens == 2800  # one per-call output only
 
 
-def test_estimate_cost_synthesis_is_a_ceiling_over_the_worst_case() -> None:
-    # The operator approves this quote, so even if every phase + the reconcile maxes its
-    # output cap the bill cannot exceed it.
-    cap = 8192
-    est = cost.estimate_cost_synthesis([5000, 5000, 5000], _tier(), output_cap=cap)
-    assert est.output_tokens >= 4 * cap  # 3 phases + 1 reconcile all maxing the cap
+def test_estimate_cost_synthesis_is_tighter_than_the_old_cap_ceiling() -> None:
+    # TD-21: the quote is a TIGHT estimate + margin, not the worst-case cap ceiling. The
+    # same K priced at a realistic per-call figure must land well under the cap-based one.
+    phases = [5000, 5000, 5000]
+    tight = cost.estimate_cost_synthesis(phases, _tier(), per_call_output_tokens=2800)
+    ceiling = cost.estimate_cost_synthesis(phases, _tier(), per_call_output_tokens=8192)
+    assert tight.total_usd < ceiling.total_usd  # tighter than projecting every call at the cap
+    assert tight.output_tokens == 4 * 2800  # 3 phases + 1 reconcile at the per-call figure
 
 
 # --------------------------------------------------------------------------- #

@@ -47,7 +47,7 @@ def test_markdown_synthesis_renders_phases_anchors_and_themes(tmp_path: Path) ->
     assert text.startswith("# The Talk\n")
     assert "## Core idea" in text and "AI is becoming infrastructure." in text
     assert "## Intro" in text and "First idea here." in text  # phase heading + prose
-    assert "*[00:00:00]*" in text  # the phase's validated anchor line
+    assert "*[00:00:00]*" not in text  # TD-19: no per-phase anchor footer wall
     assert "## Main themes" in text and "- efficiency" in text
     # decisions/actions carry their anchor in parentheses (TD-16 v2)
     assert "- Ship local first. — Lower cost.  ([00:00:00])" in text
@@ -165,11 +165,22 @@ def test_markdown_skips_empty_sections(tmp_path: Path) -> None:
     assert "## Action items" not in text
 
 
-def test_markdown_phase_anchorless_omits_the_anchor_line(tmp_path: Path) -> None:
-    s = replace(_summary(), synthesis=(SynthesisSection("Phase", "Prose only.", ()),))
+def test_markdown_no_anchor_footer_inline_anchor_carries_citation(tmp_path: Path) -> None:
+    # TD-19: the per-phase anchor footer wall is gone. The validated timecode woven INLINE in
+    # the prose is the citation; the bulk anchors array no longer renders as a footer line.
+    s = replace(
+        _summary(),
+        synthesis=(
+            SynthesisSection(
+                "Phase", "He opened [00:00:00] then moved on.", ("[00:00:00]", "[00:10:00]")
+            ),
+        ),
+    )
     text = render.render(s, tmp_path, "md").read_text(encoding="utf-8")
-    assert "## Phase" in text and "Prose only." in text
-    assert "*[" not in text  # no anchor italic line when the phase cites none
+    assert "## Phase" in text and "He opened [00:00:00] then moved on." in text
+    assert "[00:00:00]" in text  # the inline anchor in the prose survives
+    assert "*[" not in text  # no italic anchor footer line at all, even with anchors present
+    assert "· [00:10:00]" not in text  # the bulk anchors array is not dumped
 
 
 # --------------------------------------------------------------------------- #

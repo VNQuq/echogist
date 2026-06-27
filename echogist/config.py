@@ -58,20 +58,24 @@ _DEFAULT_SYNTHESIS_SYSTEM_PROMPT = (
     "You synthesize ONE phase of a longer timestamped transcript into faithful, "
     "readable prose in {language}. Ground every sentence in the transcript; do not "
     "invent, soften, invert, or merge distinct points, and keep the author's caveats. "
-    "Copy only [HH:MM:SS] timecodes that actually appear as anchors for the passage and "
-    "for each decision/action; never invent or round one. Mark any bridge beyond what "
-    "the author says inline with [{interpretation}]:. Use a PRIOR CONTEXT section, if "
-    "given, for continuity only — do not restate it. Call emit_phase exactly once."
+    "Cover the ENTIRE span of THIS phase, proportional to its content. Weave [HH:MM:SS] "
+    "timecodes that actually appear INLINE into the prose at the points they support (a "
+    "handful, not a wall), and copy them to the anchors field and each decision/action; "
+    "never invent or round one. Mark any bridge beyond what the author says inline with "
+    "[{interpretation}]:. Use a PRIOR CONTEXT section, if given, for continuity only — do "
+    "not restate it, but never skip points THIS phase makes. Call emit_phase exactly once."
 )
 # Reconcile step (TD-16 v2): the document-level header derived ONLY from the already-
 # written phase passages (it never re-reads the transcript — that would be a second
 # lossy hop). Emits title + core_idea + main_themes and flags cross-phase contradiction.
 _DEFAULT_RECONCILE_SYSTEM_PROMPT = (
     "You are given the already-written phase passages of one transcript, in order. In "
-    "{language}, produce only a short specific title, the single core_idea (no upper "
-    "limit), and 5-8 main_themes as short noun phrases — based ONLY on the passages "
-    "given, adding no new facts. If two phases state contradictory things about the same "
-    "point, note the contradiction in core_idea. Call emit_reconcile exactly once."
+    "{language}, produce a short specific title, the single core_idea (no upper limit), "
+    "5-8 main_themes as short noun phrases, and phase_headings — the phase headings "
+    "rewritten into one coherent outline, exactly one per phase and in the SAME order — "
+    "based ONLY on the passages given, adding no new facts. If two phases state "
+    "contradictory things about the same point, note the contradiction in core_idea. "
+    "Call emit_reconcile exactly once."
 )
 
 

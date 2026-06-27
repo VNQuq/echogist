@@ -531,6 +531,62 @@ def test_synthesize_summary_happy_path_two_phases_plus_reconcile() -> None:
     assert result.input_tokens == 4500 and result.output_tokens == 1200  # summed over 3 calls
 
 
+def test_synthesize_applies_reconcile_normalized_phase_headings() -> None:
+    # TD-18: when the reconcile call returns a coherent phase-heading outline (exactly one
+    # per phase, in order), it replaces the forward-only local headings.
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro thoughts", "First.")),
+        _outcome(_phase_ti("Some body stuff", "Second.")),
+        _outcome(
+            {
+                "title": "T",
+                "core_idea": "c",
+                "main_themes": ["a"],
+                "phase_headings": ["1. Opening frame", "2. The core argument"],
+            }
+        ),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert [s.heading for s in result.summary.synthesis] == [
+        "1. Opening frame",
+        "2. The core argument",
+    ]
+
+
+def test_synthesize_keeps_local_headings_when_reconcile_outline_mismatches() -> None:
+    # TD-18 fail-soft: a wrong-length (or absent) phase_headings list could mislabel a phase,
+    # so it is ignored and the original per-phase headings are kept.
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "First.")),
+        _outcome(_phase_ti("Body", "Second.")),
+        _outcome(
+            {"title": "T", "core_idea": "c", "main_themes": ["a"], "phase_headings": ["only one"]}
+        ),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert [s.heading for s in result.summary.synthesis] == ["Intro", "Body"]  # unchanged
+
+
 def test_synthesize_forward_only_passes_prior_context_to_later_phase() -> None:
     phases = _two_phases()
     caller = _seq_caller(
@@ -837,6 +893,22 @@ def test_validate_anchors_strips_hallucinated_inline_timecode_in_prose() -> None
     out = summarize.validate_anchors(summary, "[00:00:00] a\n[00:10:00] b", log=lambda _m: None)
     assert "[00:05:00]" not in out.synthesis[0].prose  # hallucinated inline tc dropped
     assert "[00:10:00]" in out.synthesis[0].prose  # real inline tc kept
+
+
+def test_validate_anchors_strips_inline_timecode_in_heading() -> None:
+    # A stray [HH:MM:SS] in a heading (incl. a TD-18 reconcile-normalized one) is an emitted
+    # timecode too — snap/drop it so nothing timecoded renders unvalidated.
+    summary = Summary(
+        title="t",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection("Opening at [00:09:00]", "prose [00:00:00]", ()),),
+    )
+    out = summarize.validate_anchors(summary, "[00:00:00] a\n[00:10:00] b", log=lambda _m: None)
+    assert "[00:09:00]" not in out.synthesis[0].heading  # hallucinated heading tc dropped
+    assert out.synthesis[0].heading.strip() == "Opening at"  # render collapses the gap left behind
 
 
 def test_validate_anchors_strips_inline_timecode_in_core_idea_and_themes() -> None:

@@ -338,8 +338,9 @@ def _markdown(summary: Summary) -> str:
             out += [f"## {heading}".rstrip(), ""]
         for para in _paragraphs(s.prose):
             out += [para, ""]
-        if s.anchors:
-            out += [f"*{' · '.join(s.anchors)}*", ""]  # validated timecodes for this phase
+        # TD-19: no per-phase anchor footer. The validated timecodes are woven INLINE in the
+        # prose (the citation a reader actually jumps from); the full ``anchors`` array stays
+        # in the saved .json for the validation gate, not dumped as a redundant wall here.
     if summary.main_themes:
         out += [f"## {lab['main_themes']}", "", *(f"- {t}" for t in summary.main_themes), ""]
     out += _md_decisions_actions(summary, lab)
@@ -404,6 +405,15 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
         ) from exc
 
 
+# Typographic palette (TD-20). DejaVuSans (regular + bold) is the only embedded family,
+# so hierarchy comes from SIZE, WEIGHT, COLOR and SPACING rhythm, not extra faces. Near-
+# black ink (not pure #000) is easier on the eye for body text; the strong ink is for the
+# title/headings; the muted tone is the hairline rule under the title.
+_INK = (40, 40, 40)  # body text
+_INK_STRONG = (15, 15, 15)  # title + section headings
+_RULE = (200, 200, 200)  # hairline divider
+
+
 # Every line is a full-width multi_cell that returns the cursor to the left margin
 # on the next line (new_x/new_y) — fpdf2 otherwise parks x at the right margin, so a
 # following multi_cell(w=0) would see ~zero width and raise "not enough horizontal
@@ -412,41 +422,49 @@ def _line(pdf: Any, height: float, text: str) -> None:
     pdf.multi_cell(0, height, text, new_x="LMARGIN", new_y="NEXT")
 
 
+def _rule(pdf: Any) -> None:
+    """A hairline rule across the text column — a quiet divider under the title (TD-20)."""
+    y = pdf.get_y() + 1.5
+    pdf.set_draw_color(*_RULE)
+    pdf.set_line_width(0.2)
+    pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
+    pdf.set_y(y)
+
+
 def _title(pdf: Any, text: str) -> None:
-    pdf.set_font(_FONT_FAMILY, "B", 18)
+    pdf.set_text_color(*_INK_STRONG)
+    pdf.set_font(_FONT_FAMILY, "B", 20)
     _line(pdf, 9, text or _FALLBACK_TITLE)
-    pdf.ln(3)
+    _rule(pdf)
+    pdf.ln(5)
 
 
 def _heading(pdf: Any, text: str) -> None:
-    pdf.ln(2)
-    pdf.set_font(_FONT_FAMILY, "B", 13)
+    pdf.ln(4)
+    pdf.set_text_color(*_INK_STRONG)
+    pdf.set_font(_FONT_FAMILY, "B", 14)
     _line(pdf, 7, text)
-    pdf.ln(1)
+    pdf.ln(1.5)
 
 
 def _body(pdf: Any, text: str) -> None:
+    pdf.set_text_color(*_INK)
     pdf.set_font(_FONT_FAMILY, "", 11)
-    _line(pdf, 6, text)
+    _line(pdf, 6.5, text)  # generous leading so dense prose breathes
 
 
 def _paragraphed_body(pdf: Any, text: str) -> None:
     """Body text broken into paragraphs with a small gap between them (a phase's prose)."""
     for i, para in enumerate(_paragraphs(text)):
         if i:
-            pdf.ln(2)
+            pdf.ln(2.5)
         _body(pdf, para)
 
 
 def _bullet(pdf: Any, text: str) -> None:
+    pdf.set_text_color(*_INK)
     pdf.set_font(_FONT_FAMILY, "", 11)
-    _line(pdf, 6, f"•  {text}")  # DejaVuSans carries U+2022, so no tofu bullet
-
-
-def _anchor_line(pdf: Any, text: str) -> None:
-    """A small, quiet line of validated timecodes under a phase's prose (TD-16 v2)."""
-    pdf.set_font(_FONT_FAMILY, "", 9)
-    _line(pdf, 5, text)
+    _line(pdf, 6.5, f"•  {text}")  # DejaVuSans carries U+2022, so no tofu bullet
 
 
 def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
@@ -461,8 +479,7 @@ def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None
         if heading and heading != title:
             _heading(pdf, heading)
         _paragraphed_body(pdf, s.prose)
-        if s.anchors:
-            _anchor_line(pdf, " · ".join(s.anchors))  # U+00B7 is in DejaVuSans
+        # TD-19: no anchor footer — inline [HH:MM:SS] in the prose is the citation.
     if summary.main_themes:
         _heading(pdf, lab["main_themes"])
         for theme in summary.main_themes:
