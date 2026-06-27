@@ -4,7 +4,8 @@ The main menu loops until the operator explicitly exits. It wires the pure stage
 (extract, transcribe, guard, summarize, render) and the cost flow (T8) around the
 three input sources:
 
-* **1. Local file** — audio or video → {summary · MP3 only · both}.
+* **1. Local file** — audio or video. A video → {MP3 only · summary · transcript} with
+  MP3 always kept as the baseline (TD-12); an mp3 → {summary · transcript only}.
 * **2. Saved transcript** — pick a saved ``output/transcripts/*.txt`` or type a
   path; re-summarize it. This is the artifact-based recovery path (plan §3): a
   summarize that failed (F2/F4/F5) re-runs from here without re-transcribing.
@@ -47,7 +48,15 @@ from .model_asset import ProvisionError
 from .render import RenderError
 from .summarize import SummarizeError, SummarizeResult
 from .transcribe import TranscribeError, Transcript
-from .ui import REVEAL_AUDIO, REVEAL_SUMMARY, UI, Choice, NotInteractiveError, build_default_ui
+from .ui import (
+    REVEAL_AUDIO,
+    REVEAL_SUMMARY,
+    REVEAL_TRANSCRIPT,
+    UI,
+    Choice,
+    NotInteractiveError,
+    build_default_ui,
+)
 
 Logger = Callable[[str], object]
 
@@ -299,7 +308,8 @@ def _run_summary(
 
     ui.success(f"Done — summary written to {out_path}")
     # TD-14: pop the summaries folder (Windows, once/launch). REVEAL_SUMMARY outranks an
-    # earlier MP3-only audio reveal, so a "Both" run still ends on the summary.
+    # earlier audio reveal, so a video Summary run (which also kept the MP3 baseline, TD-12)
+    # still ends on the summaries folder, not audio.
     ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
 
 
@@ -323,8 +333,9 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
         block_seconds=model_config.transcript.block_seconds,
     )
     ui.info(f"Saved transcript: {tpath}")
-    # TD-14: transcripts are never auto-revealed — the operator wants summaries (or, for
-    # an MP3-only run, audio) to pop, not the intermediate checkpoint folder.
+    # TD-12: the transcripts folder is revealed by the caller's transcript-only branch, NOT
+    # here — this helper also runs on the Summary path, and revealing from here would pop
+    # transcripts on a Summary run (the original TD-14 bug). Reveal stays caller-side.
     # Summarize the saved checkpoint VERBATIM (not transcript.text) so the fresh-run
     # and recovery (re-summarize saved .txt) paths feed byte-identical, timecoded text
     # to GUARD + SUMMARIZE — the model can cite real section_timecodes on both.
@@ -334,18 +345,25 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
 # --------------------------------------------------------------------------- #
 # Source flows
 # --------------------------------------------------------------------------- #
+# TD-12 (redesign): for a video, MP3 is the BASELINE, not a toggle or a combo — every
+# branch extracts and KEEPS the MP3 in output/audio. The menu only varies how far down the
+# pipeline the run goes, so the old "Both" framing (and the misleading "Summary needs no
+# audio" label) is gone. Order is prominence, NOT cost: Summary (the primary feature) gets
+# the middle slot, Transcript (the niche "just the text" fallback) is last. Keys are
+# semantic so _flow_local_file branches on the name, not an opaque digit.
 _ACTION_CHOICES: tuple[Choice, ...] = (
-    ("1", "Summary"),
-    ("2", "MP3 only"),
-    ("3", "Both (MP3 + summary)"),
+    ("mp3", "MP3 only"),
+    ("summary", "Summary (MP3 + summary + transcript)"),
+    ("transcript", "Transcript (MP3 + transcript)"),
     ("__back__", "← Back"),
 )
 
-# TD-12: an mp3 has nothing to extract, so the MP3-only / Both options are dropped —
-# but the operator still chooses whether to stop at the saved transcript or go on to a
-# summary. "transcript" runs Whisper and keeps the checkpoint without the network call.
+# TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality — so the
+# MP3-only option is meaningless and dropped. The operator still chooses whether to stop at
+# the saved transcript or go on to a summary. Shares the semantic "summary"/"transcript"
+# keys with the video menu so the flow ladder is one shared branch.
 _MP3_ACTION_CHOICES: tuple[Choice, ...] = (
-    ("1", "Summary"),
+    ("summary", "Summary"),
     ("transcript", "Transcript only"),
     ("__back__", "← Back"),
 )
@@ -360,7 +378,12 @@ _AV_FILETYPES: tuple[tuple[str, str], ...] = (
 
 
 def _flow_local_file(deps: Deps) -> None:
-    """Source 1 — a local audio/video file → {summary · MP3 only · both} (§5).
+    """Source 1 — a local audio/video file → {MP3 only · summary · transcript} (§5, TD-12).
+
+    For a video, MP3 is the baseline: every branch extracts and keeps it in output/audio
+    (MP3-only fails loud if extraction fails; Summary/Transcript degrade — warn + continue,
+    since the paid/primary deliverable outranks the audio artifact). An mp3 source skips
+    extraction and offers the two-way {summary · transcript only}.
 
     The operator picks the file through :meth:`UI.pick_file` (TD-10): a native OS
     dialog where one is available, an in-console Tab-completing prompt otherwise. The
@@ -385,10 +408,12 @@ def _flow_local_file(deps: Deps) -> None:
     # state-write failure never masks the run). Covers every action below.
     config.save_last_dir(source.parent)
 
-    # TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality — so
-    # it gets a trimmed menu (transcript vs summary, no MP3/Both). Non-mp3 inputs choose
-    # from the full set.
-    if extract.is_mp3(source):
+    # TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality — so it
+    # gets the trimmed two-way menu (summary vs transcript). A video chooses from the full
+    # set where MP3 is the baseline. Both menus share semantic keys, so the ladder below
+    # branches on the name, not on which menu produced it.
+    is_mp3 = extract.is_mp3(source)
+    if is_mp3:
         ui.info(f"{source.name} is already an MP3.")
         action = ui.select("What should EchoGist produce?", _MP3_ACTION_CHOICES)
     else:
@@ -396,20 +421,42 @@ def _flow_local_file(deps: Deps) -> None:
     if action == "__back__":  # TD-13: back out to the main menu, do nothing
         return
 
-    if action in ("2", "3"):  # produce the MP3 artifact (only a non-mp3 reaches here)
+    # TD-12: MP3 is the baseline for every video path — extract + KEEP it on every branch
+    # (an mp3 source has nothing to extract). The conversion is the one long blocking step,
+    # so drive a %/ETA bar off ffmpeg's progress.
+    if not is_mp3:
         audio_dir = deps.base / "output" / "audio"
-        # The conversion is the one long blocking step here, so drive a %/ETA bar off
-        # ffmpeg's progress (it was previously a single frozen log line).
-        with ui.progress("Converting to MP3", total=1.0) as bar:
-            mp3 = deps.extract_audio(source, audio_dir, progress=bar.advance_to, log=ui.info)
-            bar.done()
-        ui.success(f"Saved MP3: {mp3}")
-    if action == "2":  # MP3 only — reveal the audio folder (TD-14 hierarchy) and stop
-        ui.reveal_dir(deps.base / "output" / "audio", priority=REVEAL_AUDIO)
-        return
+
+        def _convert_to_mp3() -> None:
+            with ui.progress("Converting to MP3", total=1.0) as bar:
+                mp3 = deps.extract_audio(source, audio_dir, progress=bar.advance_to, log=ui.info)
+                bar.done()
+            ui.success(f"Saved MP3: {mp3}")
+
+        if action == "mp3":
+            # MP3-only: extraction IS the deliverable, so a failure is fatal — let it bubble
+            # to the loop's abort-to-menu handler (nothing else to make).
+            _convert_to_mp3()
+            ui.reveal_dir(audio_dir, priority=REVEAL_AUDIO)  # TD-14: pop audio, then stop
+            return
+        # Summary / Transcript: the MP3 is the SECONDARY artifact (Issue 1 — DEGRADE). The
+        # primary deliverable (paid summary / transcript) outranks it, so a failed extract
+        # warns and continues. extract_audio raises ExtractError (ffmpeg/F11) OR a bare
+        # OSError (mkdir / os.replace into a locked output/audio — likely on Windows, where
+        # reveal_dir may be holding that folder open); BOTH are in _RECOVERABLE and would
+        # otherwise bubble to the loop's abort-to-menu handler, destroying the primary
+        # deliverable. Catch both here so an audio failure degrades instead of aborting.
+        try:
+            _convert_to_mp3()
+        except (ExtractError, OSError) as exc:
+            ui.warn(f"Couldn't save the MP3 ({exc}); continuing without the audio artifact.")
 
     text = _transcribe_to_checkpoint(deps, source, model_config)
     if action == "transcript":  # transcript only — the checkpoint is the deliverable
+        # TD-12 (Issue 2): reveal the transcripts folder here, in the transcript branch ONLY
+        # — never in _transcribe_to_checkpoint, which also runs on the Summary path (that was
+        # the original TD-14 bug where a Summary popped transcripts).
+        ui.reveal_dir(deps.base / "output" / "transcripts", priority=REVEAL_TRANSCRIPT)
         return
     _run_summary(deps, settings, model_config, text, source.stem)
 

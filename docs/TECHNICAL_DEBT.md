@@ -71,26 +71,6 @@ seam can't express a non-decision pause without a Y/n widget (which could declin
 The above-threshold gate (explicit confirm, default No) + `$0.50` threshold are unchanged. Reopen by adding a
 one-line `ui.text(...)` in `menu._run_summary` — no `cost.py` change.
 
-### TD-12 — "What should EchoGist produce?" menu is misleading + has a gap (REOPENED)
-
-Severity: MEDIUM · Reopened 2026-06-27 (operator-raised; first closed 2026-06-21) · Trigger: **design APPROVED
-2026-06-27 (/office-hours) — implement next session** · SoT: `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md` + this file
-
-The action menu (`menu.py:333-410`) misrepresents what happens. Non-mp3 `_ACTION_CHOICES` = Summary / MP3 only /
-Both (MP3 + summary) / ← Back; mp3 `_MP3_ACTION_CHOICES` = Summary / Transcript only / ← Back. Real semantics:
-"Summary" on a video transcribes the container DIRECTLY (faster-whisper/PyAV, no MP3 written), discards no MP3
-because none is made, and always saves the transcript checkpoint; "Both" = also extracts + KEEPS an MP3; "MP3 only"
-= extract + keep MP3, stop. So the labels imply "Summary" needs no audio (nonsense framing); the only real
-distinction was whether an MP3 is KEPT. GAP: non-mp3 inputs had NO "Transcript only" option (mp3 does).
-
-**Approved design (operator, /office-hours 2026-06-27):** MP3 is the BASELINE for every video path, not a toggle
-or combo. Video menu = `MP3 only / Summary / Transcript / ← Back` (order = prominence, NOT cost: Summary middle,
-Transcript last). Every video Summary + Transcript run keeps the MP3 in `output/audio` (no cleanup). Transcript
-checkpoint still saved silently. `.mp3` input menu UNCHANGED (`Summary / Transcript only`) — no extraction when the
-source already is the audio. Extraction mechanism is implementer's choice (recommend: transcribe the source
-container directly for quality + run `extract_audio` separately for the kept artifact; don't transcribe from the
-lossy MP3). Full spec + Next Steps + Success Criteria in the design doc above.
-
 ---
 
 ## Closed debts (compact — verbose history in git)
@@ -113,13 +93,22 @@ lossy MP3). Full spec + Next Steps + Success Criteria in the design doc above.
   exit (distinguishing it would risk the `_ask` cancel/exit contract). `f4fd2ca`.
 - **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23, REOPENED + RE-CLOSED 2026-06-27. Reopen: the
   once-per-launch `_revealed` bool popped `transcripts` after a summary (transcribe revealed first; `_run_summary`
-  revealed nothing). Fix: `reveal_dir(path, *, priority)` with `REVEAL_AUDIO`/`REVEAL_SUMMARY` — a higher priority
-  supersedes a lower one already shown this launch; transcripts are never revealed; MP3-only pops `audio`,
-  `_run_summary` pops `summaries` (wins over audio). Original close: `nt`-guarded once/launch + no-focus-steal
+  revealed nothing). Fix: `reveal_dir(path, *, priority)` — a higher priority supersedes a lower one already shown
+  this launch; MP3-only pops `audio`, `_run_summary` pops `summaries` (wins over audio). NOTE: the original
+  "transcripts are never revealed" rule was reversed by TD-12 — a transcript-only run now pops `transcripts`
+  (`REVEAL_SUMMARY(3) > REVEAL_TRANSCRIPT(2) > REVEAL_AUDIO(1)`); the reveal lives in the transcript branch of
+  `_flow_local_file`, never in `_transcribe_to_checkpoint`. Original close: `nt`-guarded once/launch + no-focus-steal
   `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`, 06-25 MP3-only ext.
-- **TD-12 — `.mp3` input offered no-op MP3/Both actions** ✓ CLOSED 2026-06-21, ⚠ REOPENED 2026-06-27 (see Open
-  debts — menu misrepresents what's kept + non-mp3 gap). Original close: mp3 gets a trimmed menu
-  (Summary / Transcript only / ← Back) via `extract.is_mp3`. `f4fd2ca`, revised `738cf9e`.
+- **TD-12 — "What should EchoGist produce?" menu misleading + gap** ✓ CLOSED 2026-06-21, REOPENED + RE-CLOSED
+  2026-06-27 (design /office-hours, eng-reviewed). Reopen: non-mp3 menu (Summary / MP3 only / Both / Back) implied
+  Summary needed no audio and had NO transcript-only path. Fix (MP3-as-baseline): video menu = `MP3 only / Summary /
+  Transcript / Back` with semantic keys (`mp3`/`summary`/`transcript`); every video branch extracts + KEEPS the MP3
+  in `output/audio` (MP3-only failure FATAL, Summary/Transcript DEGRADE — warn + continue, catching both
+  ExtractError and bare OSError so a locked-folder `os.replace` can't abort the run; /review red-team fix). `.mp3` menu unchanged
+  (`Summary / Transcript only`). Transcript-only now reveals `transcripts` (see TD-14). Source decodes the container
+  directly (transcript quality unchanged); the MP3 is an added artifact. Design doc:
+  `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md`. Original close: mp3 trimmed menu via
+  `extract.is_mp3`. `f4fd2ca`, `738cf9e`.
 - **TD-8 — `setuptools<81` pin** ✓ CLOSED 2026-06-21 (premise dismissed). No such pin ever existed; lockfile
   ships `setuptools==82.0.1` and passes. The cuDNN↔ctranslate2 tripwire (the pin that matters) is untouched.
 - **TD-3 — GPU provisioning automation** ✓ CLOSED 2026-06-16 (was MEDIUM). `run.bat` provisions idempotently;

@@ -64,12 +64,14 @@ class NotInteractiveError(Exception):
     """
 
 
-# Reveal-folder priority (TD-14): the once-per-launch pop fires for the highest
-# priority seen, so a summary's folder always supersedes a bare MP3-only audio pop —
-# even if the audio run came first in the same launch. Transcripts are intentionally
-# absent: they are never revealed.
+# Reveal-folder priority (TD-14, revised TD-12): the once-per-launch pop fires for the
+# highest priority seen, so the richest deliverable's folder always supersedes a lower
+# one already shown this launch — even if the lower-priority run came first. Ordering is
+# by how much the operator gets out of that run: a summary (audio + transcript + summary)
+# outranks a transcript (audio + transcript), which outranks a bare MP3-only run.
 REVEAL_AUDIO = 1
-REVEAL_SUMMARY = 2
+REVEAL_TRANSCRIPT = 2
+REVEAL_SUMMARY = 3
 
 
 # --------------------------------------------------------------------------- #
@@ -322,10 +324,11 @@ class RichQuestionaryUI:
         """Open the OS file browser at ``path`` in the background — once per launch.
 
         Fires once per launch on the folder the chosen flow produced: the ``summaries``
-        folder after a summary (``REVEAL_SUMMARY``) or the ``audio`` folder after an
-        MP3-only run (``REVEAL_AUDIO``). Transcripts are never revealed (TD-14). A higher
-        ``priority`` supersedes a lower one already shown this launch, so a summary's
-        folder always wins over an earlier audio pop. Windows only (guarded on ``nt``); on
+        folder after a summary (``REVEAL_SUMMARY``), the ``transcripts`` folder after a
+        transcript-only run (``REVEAL_TRANSCRIPT``, TD-12), or the ``audio`` folder after an
+        MP3-only run (``REVEAL_AUDIO``). A higher ``priority`` supersedes a lower one already
+        shown this launch, so a summary's folder always wins over an earlier transcript or
+        audio pop. Windows only (guarded on ``nt``); on
         the WSL dev box it is a no-op. The pop opens *without* stealing focus from the
         console (the operator's "в фоне"). Failure is non-fatal — revealing a folder must
         never mask a completed run — but instead of swallowing it silently we log a

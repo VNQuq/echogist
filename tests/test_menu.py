@@ -25,10 +25,17 @@ from typing import Any
 import pytest
 
 from echogist import config, menu, naming, summarize
+from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
 from echogist.transcribe import Segment, Transcript
-from echogist.ui import StubUI
+from echogist.ui import (
+    REVEAL_AUDIO,
+    REVEAL_SUMMARY,
+    REVEAL_TRANSCRIPT,
+    RichQuestionaryUI,
+    StubUI,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -57,12 +64,26 @@ def _make_deps(
     api_key: str | None = "sk-test",
     render_error: bool = False,
     summarize_error: str | None = None,
+    extract_error: bool = False,
+    extract_oserror: bool = False,
 ) -> tuple[menu.Deps, StubUI, dict[str, int]]:
     calls: dict[str, int] = {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
     def extract_audio(source: Path, out_dir: Path, *, log: Any = print, **_kw: Any) -> Path:
         calls["extract"] += 1
-        return Path(out_dir) / "out.mp3"
+        if extract_oserror:
+            # extract_audio raises bare OSError (mkdir / os.replace into a locked dir), not
+            # only ExtractError — the degrade path must treat both the same (red-team finding).
+            raise OSError("output/audio is locked")
+        if extract_error:
+            raise ExtractError("ffmpeg fell over")
+        # Write a real file so a test can assert the MP3 actually lands in output/audio
+        # (TD-12: MP3 is the baseline kept on every video branch).
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        mp3 = out / "out.mp3"
+        mp3.write_bytes(b"id3")
+        return mp3
 
     def transcribe(source: Path, model_dir: Path, *, log: Any = print, **_kw: Any) -> Transcript:
         calls["transcribe"] += 1
@@ -151,23 +172,26 @@ def test_eof_exits_cleanly(tmp_path: Path) -> None:
 # Source 1 — local file × actions
 # --------------------------------------------------------------------------- #
 def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
+    # TD-12 regression: a video Summary now ALSO extracts + keeps the MP3 (the baseline),
+    # on top of transcribe → summarize → render.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 1
     assert calls["render"] == 1
-    assert calls["extract"] == 0  # summary-only never produced an mp3
+    assert calls["extract"] == 1  # TD-12: Summary keeps the MP3 baseline
     assert "Done — summary written to" in stub.log_text
-    # The transcript checkpoint was saved (the recovery artifact).
+    # The MP3 baseline landed in output/audio, and the transcript checkpoint was saved.
+    assert list((tmp_path / "output" / "audio").glob("*.mp3"))
     assert list((tmp_path / "output" / "transcripts").glob("*.txt"))
 
 
 def test_local_file_mp3_only_skips_transcribe(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "mp3", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 0
@@ -175,14 +199,22 @@ def test_local_file_mp3_only_skips_transcribe(tmp_path: Path) -> None:
     assert "Saved MP3:" in stub.log_text
 
 
-def test_local_file_both_extracts_and_summarizes(tmp_path: Path) -> None:
+def test_local_file_transcript_keeps_mp3_and_skips_summarize(tmp_path: Path) -> None:
+    # TD-12: a video Transcript run extracts + keeps the MP3 (baseline), transcribes and
+    # saves the checkpoint, and STOPS before the paid summary (the new gap-closing path).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "3", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "transcript", "4"])
     assert menu.run_menu(deps) == 0
-    assert calls["extract"] == 1
+    assert calls["extract"] == 1  # MP3 baseline kept
     assert calls["transcribe"] == 1
-    assert calls["summarize"] == 1
+    assert calls["summarize"] == 0  # stops before paying for a summary
+    assert list((tmp_path / "output" / "audio").glob("*.mp3"))
+    assert list((tmp_path / "output" / "transcripts").glob("*.txt"))
+    # The video Transcript branch reveals the transcripts folder (the deliverable here).
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0][1].endswith("transcripts")
 
 
 def test_mp3_source_summary(tmp_path: Path) -> None:
@@ -190,7 +222,7 @@ def test_mp3_source_summary(tmp_path: Path) -> None:
     # runs the full transcribe → summarize pipeline without ever producing an mp3.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0  # already an mp3 — nothing to extract
     assert calls["transcribe"] == 1
@@ -224,11 +256,68 @@ def test_local_file_action_back_returns_to_menu(tmp_path: Path) -> None:
     assert calls["summarize"] == 0
 
 
+def test_video_summary_extract_failure_degrades(tmp_path: Path) -> None:
+    # TD-12 Issue 1: on a video Summary, a failed MP3 extract DEGRADES — warn + continue
+    # to transcribe + summarize (the paid deliverable outranks the audio artifact).
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1  # attempted
+    assert calls["transcribe"] == 1  # but the run continued
+    assert calls["summarize"] == 1
+    assert "Couldn't save the MP3" in stub.log_text
+    assert "Returning to the main menu" not in stub.log_text  # degraded, did not abort
+
+
+def test_video_summary_extract_oserror_degrades(tmp_path: Path) -> None:
+    # Red-team finding: extract_audio raises bare OSError (mkdir / os.replace into a locked
+    # output/audio — realistic on Windows), not only ExtractError. Both are in _RECOVERABLE,
+    # so the degrade path must catch OSError too or it would abort the whole run before
+    # transcription, destroying the primary deliverable the DEGRADE contract must preserve.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"], extract_oserror=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1  # attempted
+    assert calls["transcribe"] == 1  # degraded + continued, did NOT abort to menu
+    assert calls["summarize"] == 1
+    assert "Couldn't save the MP3" in stub.log_text
+    assert "Returning to the main menu" not in stub.log_text
+
+
+def test_video_transcript_extract_failure_degrades(tmp_path: Path) -> None:
+    # TD-12 Issue 1: the Transcript branch shares the degrade block — a failed MP3 extract
+    # warns and continues to transcribe + reveal transcripts, never aborts.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "transcript", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1
+    assert calls["transcribe"] == 1  # continued
+    assert calls["summarize"] == 0  # still transcript-only
+    assert "Couldn't save the MP3" in stub.log_text
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1 and reveals[0][1].endswith("transcripts")
+
+
+def test_video_mp3_only_extract_failure_is_fatal(tmp_path: Path) -> None:
+    # TD-12 Issue 1: MP3-only stays FATAL — extraction is the deliverable, so a failure
+    # aborts to the menu (nothing else to produce), never silently degrades.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "mp3", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1
+    assert calls["transcribe"] == 0  # nothing else ran
+    assert "Returning to the main menu" in stub.log_text  # bubbled to the loop handler
+
+
 def test_flow_clears_screen_on_entry(tmp_path: Path) -> None:
     # TD-11: each flow clears the console on entry so prior menu chrome doesn't pile up.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
     assert menu.run_menu(deps) == 0
     assert ("clear", "") in stub.messages
 
@@ -240,12 +329,12 @@ def test_summary_reveals_summaries_folder_once(tmp_path: Path) -> None:
     a.write_bytes(b"x")
     b = tmp_path / "b.wav"
     b.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "1", "1", str(b), "1", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "summary", "1", str(b), "summary", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1  # once per launch, not once per summary
     assert reveals[0][1].endswith("summaries")
-    assert not any(r[1].endswith("transcripts") for r in reveals)  # transcripts never pop
+    assert not any(r[1].endswith("transcripts") for r in reveals)  # summary never pops transcripts
 
 
 def test_saved_transcript_resummarize_reveals_summaries(tmp_path: Path) -> None:
@@ -259,21 +348,23 @@ def test_saved_transcript_resummarize_reveals_summaries(tmp_path: Path) -> None:
     assert reveals[0][1].endswith("summaries")
 
 
-def test_transcript_only_reveals_nothing(tmp_path: Path) -> None:
-    # TD-14 (reopened): a transcript-only run (mp3 input → "Transcript only") never pops
-    # a folder — transcripts are intentionally not revealed.
+def test_transcript_only_reveals_transcripts(tmp_path: Path) -> None:
+    # TD-12 (Issue 2, reverses TD-14): a transcript-only run NOW pops the transcripts
+    # folder — the transcript is the deliverable here, so it is the reveal target.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
     deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "transcript", "4"])
     assert menu.run_menu(deps) == 0
-    assert not [m for m in stub.messages if m[0] == "reveal_dir"]
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0][1].endswith("transcripts")
 
 
 def test_mp3_conversion_drives_progress_bar(tmp_path: Path) -> None:
     # Bug #1: the video→MP3 conversion runs behind a %/ETA bar (was a frozen log line).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "mp3", "4"])
     assert menu.run_menu(deps) == 0
     assert ("progress", "Converting to MP3") in stub.messages
 
@@ -283,23 +374,11 @@ def test_mp3_only_reveals_audio_folder(tmp_path: Path) -> None:
     # transcripts folder, and only once per launch.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "2", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "mp3", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
     assert reveals[0][1].endswith("audio")
-
-
-def test_both_flow_reveals_summaries_not_audio(tmp_path: Path) -> None:
-    # TD-14 (reopened): "Both" ends on a summary, so the SUMMARIES folder is the reveal
-    # target — not audio (reserved for MP3-only) and never transcripts.
-    src = tmp_path / "clip.wav"
-    src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "3", "4"])
-    assert menu.run_menu(deps) == 0
-    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
-    assert len(reveals) == 1
-    assert reveals[0][1].endswith("summaries")
 
 
 def test_summary_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
@@ -309,12 +388,42 @@ def test_summary_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
     mp3.write_bytes(b"x")
     wav = tmp_path / "b.wav"
     wav.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav), "2", "1", str(mp3), "1", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav), "mp3", "1", str(mp3), "summary", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 2
     assert reveals[0].endswith("audio")
     assert reveals[1].endswith("summaries")
+
+
+def test_summary_reveal_supersedes_earlier_transcript(tmp_path: Path) -> None:
+    # TD-12 priority: a transcript-only run pops transcripts (priority 2); a later Summary
+    # still pops summaries (REVEAL_SUMMARY=3 outranks REVEAL_TRANSCRIPT=2 for the launch).
+    a = tmp_path / "a.mp3"
+    a.write_bytes(b"x")
+    b = tmp_path / "b.mp3"
+    b.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "transcript", "1", str(b), "summary", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 2
+    assert reveals[0].endswith("transcripts")
+    assert reveals[1].endswith("summaries")
+
+
+def test_transcript_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
+    # TD-12 priority: an MP3-only run pops audio (priority 1); a later transcript-only run
+    # still pops transcripts (REVEAL_TRANSCRIPT=2 outranks REVEAL_AUDIO=1 for the launch).
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"x")
+    mp3 = tmp_path / "b.mp3"
+    mp3.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav), "mp3", "1", str(mp3), "transcript", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 2
+    assert reveals[0].endswith("audio")
+    assert reveals[1].endswith("transcripts")
 
 
 def test_audio_not_revealed_after_summary(tmp_path: Path) -> None:
@@ -324,11 +433,74 @@ def test_audio_not_revealed_after_summary(tmp_path: Path) -> None:
     wav_a.write_bytes(b"x")
     wav_b = tmp_path / "b.wav"
     wav_b.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav_a), "1", "1", str(wav_b), "2", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav_a), "summary", "1", str(wav_b), "mp3", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
     assert reveals[0].endswith("summaries")
+
+
+def test_transcript_not_revealed_after_summary(tmp_path: Path) -> None:
+    # TD-12 priority (reverse of supersede): once summaries popped (3), a later
+    # transcript-only run (2) does NOT pop transcripts — summaries outranks it for the launch.
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"x")
+    mp3 = tmp_path / "b.mp3"
+    mp3.write_bytes(b"x")
+    answers = ["1", str(wav), "summary", "1", str(mp3), "transcript", "4"]
+    deps, stub, _ = _make_deps(tmp_path, answers)
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0].endswith("summaries")
+
+
+def test_audio_not_revealed_after_transcript(tmp_path: Path) -> None:
+    # TD-12 priority (reverse of supersede): once transcripts popped (2), a later MP3-only
+    # run (1) does NOT pop audio — transcripts outranks it for the launch.
+    mp3 = tmp_path / "a.mp3"
+    mp3.write_bytes(b"x")
+    wav = tmp_path / "b.wav"
+    wav.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(mp3), "transcript", "1", str(wav), "mp3", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0].endswith("transcripts")
+
+
+def test_action_choice_keys_match_flow_branches(tmp_path: Path) -> None:
+    # Regression guard: StubUI.select returns the queued answer verbatim, so a key/branch
+    # drift (renaming a Choice key without updating _flow_local_file, or vice versa) would
+    # not surface in a behavior test. Pin the menu Choice keys to the keys the flow handles.
+    # Video menu: extraction (mp3), summary, transcript, plus the back control.
+    assert {k for k, _ in menu._ACTION_CHOICES} == {"mp3", "summary", "transcript", "__back__"}
+    # mp3 menu has nothing to extract, so it must NOT offer the "mp3" key (else an mp3 source
+    # could fall through to a paid summary via the implicit dispatch — the wrong-branch trap).
+    assert {k for k, _ in menu._MP3_ACTION_CHOICES} == {"summary", "transcript", "__back__"}
+
+
+def test_production_reveal_dir_guard_is_monotone_by_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reveal guard exists in two places: StubUI (mirrored, tested above) and the real
+    # RichQuestionaryUI. TD-12 made the production compare load-bearing for THREE levels, so
+    # exercise it directly — a regression ('<' instead of '<=', or a dropped assignment)
+    # would pass every StubUI-based test. Force the non-Windows early return so we test only
+    # the priority arithmetic, and bypass the TTY-required __init__.
+    import os
+
+    monkeypatch.setattr(os, "name", "posix")  # echogist.ui reads os.name (same module object)
+    ui = object.__new__(RichQuestionaryUI)
+    ui._revealed_priority = 0
+    ui.reveal_dir(tmp_path, priority=REVEAL_AUDIO)
+    assert ui._revealed_priority == REVEAL_AUDIO
+    ui.reveal_dir(tmp_path, priority=REVEAL_TRANSCRIPT)  # higher supersedes
+    assert ui._revealed_priority == REVEAL_TRANSCRIPT
+    ui.reveal_dir(tmp_path, priority=REVEAL_AUDIO)  # lower is a no-op
+    assert ui._revealed_priority == REVEAL_TRANSCRIPT
+    ui.reveal_dir(tmp_path, priority=REVEAL_SUMMARY)  # highest supersedes
+    assert ui._revealed_priority == REVEAL_SUMMARY
 
 
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:

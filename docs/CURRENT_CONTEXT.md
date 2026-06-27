@@ -1,8 +1,8 @@
 # Current Context
 
-**Updated:** 2026-06-27 (**TD-16 v2 reviewed; Tier-1 fixes shipped (`52a36ef`); Tier-2 cleanup DONE — gate
-GREEN (345 passed)**). Next: operator paid reference run (TD-16 closure gate) → **v2.0.0** (breaking; v1.1.0
-was last release). TD-14 folder-open fixed; TD-12 menu redesign DESIGN APPROVED (implement next session).
+**Updated:** 2026-06-27 (**TD-16 v2 reviewed; Tier-1 fixes shipped (`52a36ef`); Tier-2 cleanup DONE; TD-12 menu
+redesign IMPLEMENTED + multi-agent /review fixes — gate GREEN (357 passed)**). Next: operator paid reference run (TD-16 closure gate) →
+**v2.0.0** (breaking; v1.1.0 was last release). TD-14 folder-open fixed; TD-12 (MP3-as-baseline video menu) DONE.
 **Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
@@ -56,12 +56,13 @@ are the v2 acceptance bar (CLAUDE.md).
 
 1. **Paid reference acceptance (operator, Windows) — the TD-16 closure gate:** one ~3h-lecture run; check the
    5 fidelity properties by eye, jump each anchor to the recording, confirm ≤5 pp + readable.
-2. **TD-12 — design APPROVED (/office-hours 2026-06-27), implement next session.** New video menu =
-   `MP3 only / Summary / Transcript / ← Back`; MP3 is the BASELINE (kept on every video Summary+Transcript run,
-   no cleanup), order is prominence not cost (Summary middle, Transcript last). `.mp3` menu unchanged
-   (`Summary / Transcript only`). Transcribe the source container directly + extract MP3 separately. Full spec +
-   Next Steps: `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md` (also linked from TECHNICAL_DEBT TD-12).
-   - **TD-14 — DONE** (`reveal_dir(priority)`: summaries>audio, transcripts never revealed; +5 menu tests).
+2. **TD-12 — DONE (implemented 2026-06-27, eng-reviewed design).** Video menu = `MP3 only / Summary / Transcript /
+   ← Back` with semantic keys; MP3 is the BASELINE (kept on every video Summary+Transcript run; MP3-only failure
+   FATAL, Summary/Transcript DEGRADE — warn+continue, catching BOTH ExtractError AND bare OSError per the
+   /review red-team finding). `.mp3` menu unchanged. Container decoded directly; MP3 is an
+   added artifact. Reveal priority `REVEAL_SUMMARY(3) > REVEAL_TRANSCRIPT(2) > REVEAL_AUDIO(1)`; transcript-only now
+   pops `transcripts`. Ships with v2.0.0. Design doc: `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md`.
+   - **TD-14 — DONE** (`reveal_dir(priority)`; the "transcripts never revealed" rule was superseded by TD-12).
 3. **v2.0.0 release** (breaking — Summary shape changed; VERSION 1.1.0 → 2.0.0). Cut it via the release
    script, NOT `/ship`: bump `VERSION` + write the `## [2.0.0]` `CHANGELOG.md` section, `/cp`, push the
    annotated tag `v2.0.0`, then `python3 scripts/release.py` (PAT in `ECHOGIST_GITHUB_TOKEN`). **T8** offline
@@ -70,7 +71,7 @@ are the v2 acceptance bar (CLAUDE.md).
 ## Dev env
 
 WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Gate: `bash scripts/dev-loop` (ruff + mypy
---strict + pytest) — **GREEN: 348 passed**. `ANTHROPIC_API_KEY`
+--strict + pytest) — **GREEN: 357 passed**. `ANTHROPIC_API_KEY`
 not set here; network libs lazy/offline so the killswitch holds.
 Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
@@ -78,8 +79,8 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
 - **Blockers:** none in-repo — gate green. Closure gate is the operator paid reference run (Windows; `ANTHROPIC_API_KEY` not in WSL).
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on paid reference
-  acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) ·
-  **TD-12 (REOPENED — produce-menu redesign, MEDIUM)**. **Closed:** TD-1..6, 8, 10, 11, 13, 14, 15.
+  acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW).
+  **Closed:** TD-1..6, 8, 10, 11, 12, 13, 14, 15.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
   SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
