@@ -319,7 +319,11 @@ def _markdown(summary: Summary) -> str:
     the document header and the de-noised decisions/actions. UTF-8, Cyrillic literal.
     """
     lab = _labels(summary.language)
-    out: list[str] = [f"# {summary.title or _FALLBACK_TITLE}".rstrip(), ""]
+    # Collapse whitespace/newlines in the title for the same reason as the section
+    # headings below: load_summary is verbatim, so a hand-edited/model title with a
+    # newline + `#` must not inject extra Markdown structure on the one `#` title line.
+    title = " ".join((summary.title or _FALLBACK_TITLE).split())
+    out: list[str] = [f"# {title}".rstrip(), ""]
     if summary.core_idea:
         out += [f"## {lab['core_idea']}", "", summary.core_idea, ""]
     for s in summary.synthesis:

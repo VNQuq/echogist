@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -398,12 +398,6 @@ def _default_caller(request: dict[str, Any], api_key: str) -> CallOutcome:
     )
 
 
-def _norm(s: str) -> str:
-    """Normalize for exact dedup: lowercased, whitespace-collapsed. Conservative —
-    only near-identical strings collide on this key (reused by the decision/action merge)."""
-    return " ".join(s.lower().split())
-
-
 def _tc_seconds(timecode: str) -> float:
     """Parse an ``[HH:MM:SS]`` timecode to seconds for ordering; unparseable -> inf
     (sorts last, never crashes the merge)."""
@@ -413,66 +407,6 @@ def _tc_seconds(timecode: str) -> float:
     except (ValueError, TypeError):
         return float("inf")
     return float(h * 3600 + m * 60 + s)
-
-
-def _merge_decisions(decisions: Iterable[Decision]) -> tuple[Decision, ...]:
-    """Dedup decisions by their (normalized) statement, preferring the richer copy.
-
-    Overlap can emit the same decision in two adjacent chunks — once with an empty
-    rationale or anchor, once with one — and chunk order means the emptier copy often
-    comes first. So on a collision a missing rationale OR anchor (TD-16 v2) is
-    back-filled from the later duplicate rather than discarded; a value already present
-    is never overwritten. The anchor MUST be carried through the merge — dropping it
-    would destroy the "jump to where decided" link before validate_anchors ever runs.
-    """
-    index: dict[str, int] = {}
-    out: list[Decision] = []
-    for d in decisions:
-        key = _norm(d.decision)
-        if not key:
-            continue
-        if key not in index:
-            index[key] = len(out)
-            out.append(d)
-        else:
-            kept = out[index[key]]
-            rationale = kept.rationale or d.rationale
-            anchor = kept.anchor or d.anchor
-            if (rationale, anchor) != (kept.rationale, kept.anchor):
-                out[index[key]] = Decision(
-                    decision=kept.decision, rationale=rationale, anchor=anchor
-                )
-    return tuple(out)
-
-
-def _merge_action_items(items: Iterable[ActionItem]) -> tuple[ActionItem, ...]:
-    """Dedup action items by their (normalized) task, preferring the richer copy.
-
-    Like :func:`_merge_decisions`: on a collision a missing owner, estimate, or anchor
-    (TD-16 v2) is back-filled from the later duplicate (overlap can emit the same task
-    twice, the emptier copy often first); a value already present is never overwritten.
-    The anchor MUST survive the merge — dropping it would destroy the "jump to the
-    recording" link before validate_anchors runs.
-    """
-    index: dict[str, int] = {}
-    out: list[ActionItem] = []
-    for a in items:
-        key = _norm(a.task)
-        if not key:
-            continue
-        if key not in index:
-            index[key] = len(out)
-            out.append(a)
-        else:
-            kept = out[index[key]]
-            owner = kept.owner or a.owner
-            estimate = kept.estimate or a.estimate
-            anchor = kept.anchor or a.anchor
-            if (owner, estimate, anchor) != (kept.owner, kept.estimate, kept.anchor):
-                out[index[key]] = ActionItem(
-                    task=kept.task, owner=owner, estimate=estimate, anchor=anchor
-                )
-    return tuple(out)
 
 
 def summarize_auto(
@@ -772,36 +706,37 @@ def _snap_anchor(anchor: str, valid_by_sec: dict[float, str], window: float) -> 
     return valid_by_sec[nearest] if abs(nearest - sec) <= window else None
 
 
-def validate_anchors(
-    summary: Summary,
-    transcript_text: str,
-    *,
-    snap_window_seconds: float = 2.0,
-    log: Logger = print,
-) -> Summary:
-    """Snap or drop every synthesis/decision/action anchor against the real timecodes.
+# Inline [HH:MM:SS] timecodes the model may weave into prose or the reconcile header. These
+# never pass through the validated ``anchors`` array, so they are snapped/dropped here too —
+# nothing timecoded reaches the operator without resolving to a real transcript block.
+_INLINE_TC_RE = re.compile(r"\[\d{1,2}:\d{2}:\d{2}\]")
 
-    The deterministic, offline backbone of the manual fidelity gate (TD-16 v2): the
-    operator trusts "jump to the anchor", so an anchor that is not a real transcript
-    timecode is snapped to the nearest real block (rounding) or dropped entirely
-    (hallucination) — never left as a false coordinate. Runs over section anchors AND
-    each decision/action anchor. Returns a new Summary with the cleaned anchors; logs
-    the exact/snapped/dropped counts. A summary with no synthesis is returned unchanged.
+
+def _make_fixer(
+    valid_by_sec: dict[float, str], window: float
+) -> tuple[
+    Callable[[tuple[str, ...]], tuple[str, ...]],
+    Callable[[str], str],
+    Callable[[str], str],
+    list[int],
+]:
+    """Anchor-fixing closures bound to one timecode set (accept/snap/drop), sharing counts.
+
+    Returns ``(fix_many, fix_str, strip_inline, stats)`` where ``stats`` is
+    ``[exact, snapped, dropped]``. ``fix_many`` cleans + dedups an anchor tuple; ``fix_str``
+    cleans a single optional anchor ("" when dropped/absent); ``strip_inline`` snaps/drops
+    every ``[HH:MM:SS]`` embedded in free text (prose / header) without collapsing newlines.
     """
-    if not summary.synthesis and not summary.decisions and not summary.action_items:
-        return summary
-    valid_by_sec = {_tc_seconds(tc): tc for tc in block_timecodes(transcript_text)}
-    exact = snapped = dropped = 0
+    stats = [0, 0, 0]  # exact, snapped, dropped
 
     def fix_one(anchor: str) -> str | None:
-        nonlocal exact, snapped, dropped
-        resolved = _snap_anchor(anchor, valid_by_sec, snap_window_seconds)
+        resolved = _snap_anchor(anchor, valid_by_sec, window)
         if resolved is None:
-            dropped += 1
+            stats[2] += 1
         elif resolved == anchor.strip():
-            exact += 1
+            stats[0] += 1
         else:
-            snapped += 1
+            stats[1] += 1
         return resolved
 
     def fix_many(anchors: tuple[str, ...]) -> tuple[str, ...]:
@@ -812,14 +747,67 @@ def validate_anchors(
                 out.append(r)
         return tuple(out)
 
-    def fix_item_anchor(anchor: str) -> str:
+    def fix_str(anchor: str) -> str:
         return (fix_one(anchor) or "") if anchor else ""
 
-    sections = tuple(replace(s, anchors=fix_many(s.anchors)) for s in summary.synthesis)
-    decisions = tuple(replace(d, anchor=fix_item_anchor(d.anchor)) for d in summary.decisions)
-    actions = tuple(replace(a, anchor=fix_item_anchor(a.anchor)) for a in summary.action_items)
-    log(f"Validated anchors: {exact} exact, {snapped} snapped, {dropped} dropped.")
-    return replace(summary, synthesis=sections, decisions=decisions, action_items=actions)
+    def strip_inline(text: str) -> str:
+        if not text:
+            return text
+        cleaned = _INLINE_TC_RE.sub(lambda m: fix_one(m.group(0)) or "", text)
+        # A dropped token can leave a double space; collapse runs of spaces/tabs but keep
+        # newlines so multi-paragraph prose still renders as separate paragraphs.
+        return re.sub(r"[ \t]{2,}", " ", cleaned)
+
+    return fix_many, fix_str, strip_inline, stats
+
+
+def validate_anchors(
+    summary: Summary,
+    transcript_text: str,
+    *,
+    snap_window_seconds: float = 2.0,
+    log: Logger = print,
+) -> Summary:
+    """Snap or drop every anchor + inline timecode in ``summary`` against ``transcript_text``.
+
+    The deterministic, offline backbone of the manual fidelity gate (TD-16 v2): the operator
+    trusts "jump to the anchor", so any timecode that is not a real transcript block is
+    snapped to the nearest one (rounding) or dropped (hallucination) — never left as a false
+    coordinate. Runs over section anchors AND each section's prose, the decision/action
+    anchors, AND the reconcile header (core_idea + main_themes), so nothing timecoded reaches
+    the operator unvalidated. In synthesis this is applied PER PHASE against that phase's own
+    timecodes — a phase anchor that only matches some other phase's block is a hallucination,
+    not a citation — and the document header is validated once against the whole transcript.
+    Returns a new Summary; logs the exact/snapped/dropped counts. Nothing to validate -> the
+    summary is returned unchanged.
+    """
+    if not (
+        summary.synthesis
+        or summary.decisions
+        or summary.action_items
+        or summary.core_idea
+        or summary.main_themes
+    ):
+        return summary
+    valid_by_sec = {_tc_seconds(tc): tc for tc in block_timecodes(transcript_text)}
+    fix_many, fix_str, strip_inline, stats = _make_fixer(valid_by_sec, snap_window_seconds)
+    sections = tuple(
+        replace(s, anchors=fix_many(s.anchors), prose=strip_inline(s.prose))
+        for s in summary.synthesis
+    )
+    decisions = tuple(replace(d, anchor=fix_str(d.anchor)) for d in summary.decisions)
+    actions = tuple(replace(a, anchor=fix_str(a.anchor)) for a in summary.action_items)
+    core_idea = strip_inline(summary.core_idea)
+    main_themes = tuple(strip_inline(t) for t in summary.main_themes)
+    log(f"Validated anchors: {stats[0]} exact, {stats[1]} snapped, {stats[2]} dropped.")
+    return replace(
+        summary,
+        synthesis=sections,
+        decisions=decisions,
+        action_items=actions,
+        core_idea=core_idea,
+        main_themes=main_themes,
+    )
 
 
 def _running_summary(
@@ -830,9 +818,10 @@ def _running_summary(
 ) -> Summary:
     """A partial Summary of the phases synthesized so far (artifact-resume persist seam).
 
-    Carries the RAW (un-merged, un-validated) sections/decisions/actions accumulated to
-    this point so a re-run can reload it and continue. The final merge + anchor validation
-    run once at the end over the full set; persisting raw keeps that single source of truth.
+    Carries the per-phase-validated sections/decisions/actions accumulated to this point
+    (each already snapped/dropped against its own phase's timecodes as it landed) so a re-run
+    can reload it and continue without re-validating the resumed phases. Only the reconcile
+    header is written + validated at the end over the full set.
     """
     return Summary(
         title="",
@@ -863,17 +852,21 @@ def synthesize_summary(
     K synthesis calls (forward-only: each phase sees the prior headings + the previous
     phase's tail prose for continuity) + 1 reconcile call when K>1 (the document header;
     a single phase uses its own heading as the title, no extra call — short material runs
-    in one call). Per-phase decisions/actions are merged with the existing anchor-
-    preserving primitives, and every anchor is validated against the real transcript
-    timecodes before returning. A truncated reply on ANY call fails loud, naming the
-    phase; the transcript is already saved.
+    in one call). Each phase's anchors (section + inline prose + decisions + actions) are
+    validated against THAT phase's own transcript timecodes as it lands (a strict per-phase
+    gate); the per-phase decisions/actions are then concatenated (phases are non-overlapping,
+    so there is nothing to dedup — collapsing same-worded distinct points would violate
+    fidelity property #4). A truncated reply on ANY call fails loud, naming the phase; the
+    transcript is already saved.
 
     **Artifact-resume (decision #2).** ``on_phase`` (if given) fires after each phase with
     the running partial Summary — the menu persists it. ``resume_from`` (a previously
-    persisted partial) seeds the already-done phases when its synthesis is a valid PREFIX
-    of this plan (``0 < len < K``); those phases are skipped (no re-pay) but still feed
-    forward as prior context. A stale/complete partial (length 0 or >= K) is ignored and
-    the run starts fresh — no job engine, just "phase N on disk -> skip."
+    persisted partial) seeds the already-done phases when its synthesis is a prefix of this
+    plan, ``0 < len <= K`` — INCLUDING the complete case (a run that finished every phase but
+    died before the durable .json, e.g. reconcile failed): those phases are skipped (no
+    re-pay), only the missing phases + reconcile run. A truly stale partial (len > K, the
+    transcript/K shrank) or an empty one is ignored — no job engine, just "phase N on disk
+    -> skip."
     """
     if not phases:
         raise SummarizeError("No transcript phases to synthesize (empty transcript?).")
@@ -881,7 +874,11 @@ def synthesize_summary(
     decisions: list[Decision] = []
     actions: list[ActionItem] = []
     done = 0
-    if resume_from is not None and 0 < len(resume_from.synthesis) < len(phases):
+    # #2: accept a partial up to AND INCLUDING all K phases (``<= len``). A run that
+    # synthesized every phase but died before the durable .json (reconcile failure / crash)
+    # left a len==K partial; rejecting it would re-run ALL K paid phases. A truly stale
+    # partial (len > K — the transcript/K shrank) or an empty one is still ignored.
+    if resume_from is not None and 0 < len(resume_from.synthesis) <= len(phases):
         sections = list(resume_from.synthesis)
         decisions = list(resume_from.decisions)
         actions = list(resume_from.action_items)
@@ -902,10 +899,25 @@ def synthesize_summary(
                 "max_output_tokens (or lower phase_target_tokens) in models.toml, then "
                 "retry from the saved transcript."
             )
-        section = _synthesis_section(outcome.tool_input)
-        sections.append(section)
-        decisions.extend(_decisions(outcome.tool_input.get("decisions")))
-        actions.extend(_action_items(outcome.tool_input.get("action_items")))
+        # #4: validate THIS phase's anchors against THIS phase's own timecodes. A phase
+        # that cites a timecode resolving only to some OTHER phase's block is hallucinating,
+        # not citing — per-phase (not whole-transcript) is the strict gate. Inline [HH:MM:SS]
+        # woven into the prose is snapped/dropped here too (#3). Persist the validated partial.
+        phase_summary = validate_anchors(
+            Summary(
+                title="",
+                core_idea="",
+                decisions=_decisions(outcome.tool_input.get("decisions")),
+                action_items=_action_items(outcome.tool_input.get("action_items")),
+                language=language,
+                synthesis=(_synthesis_section(outcome.tool_input),),
+            ),
+            ph.text,
+            log=log,
+        )
+        sections.append(phase_summary.synthesis[0])
+        decisions.extend(phase_summary.decisions)
+        actions.extend(phase_summary.action_items)
         total_in += outcome.input_tokens
         total_out += outcome.output_tokens
         if on_phase is not None:  # artifact-resume seam (T5 persists the running partial)
@@ -932,12 +944,19 @@ def synthesize_summary(
     summary = Summary(
         title=title or _fallback_title(source_stem, today),
         core_idea=core_idea,
-        decisions=_merge_decisions(decisions),
-        action_items=_merge_action_items(actions),
+        # #1: phases are contiguous and NON-overlapping, so there are no overlap-duplicates
+        # to merge — concatenate. Cross-phase text dedup would only collapse genuinely
+        # distinct same-worded points from different phases (violating fidelity property #4
+        # "no merged distinctions") and silently drop the second's anchor.
+        decisions=tuple(decisions),
+        action_items=tuple(actions),
         language=language,
         synthesis=tuple(sections),
         main_themes=main_themes,
     )
+    # Sections/decisions/actions are already per-phase validated above; this final pass
+    # validates the reconcile header (core_idea + main_themes) against the whole transcript
+    # (#3) and harmlessly re-confirms the already-clean per-phase anchors.
     summary = validate_anchors(summary, "\n".join(ph.text for ph in phases), log=log)
     log(f"Summary ready: {summary.title}")
     return SummarizeResult(summary=summary, input_tokens=total_in, output_tokens=total_out)

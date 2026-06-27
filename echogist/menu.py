@@ -155,10 +155,12 @@ def _load_resume(resume_path: Path, k: int, ui: UI) -> summarize.Summary | None:
     """Load a within-run phase partial, if one is a valid PREFIX of this K-phase plan.
 
     Artifact-resume (decision #2): a prior run that died mid-way left its completed phases
-    at ``resume_path``. Reuse it only when its synthesis is a strict, non-empty prefix
-    (``0 < len < k``); a stale partial (e.g. the transcript changed so K shifted) or a
-    complete one is ignored and the run starts fresh. Best-effort — any read/parse failure
-    falls back to a fresh run rather than blocking the operator.
+    at ``resume_path``. Reuse it when its synthesis is a non-empty prefix up to AND INCLUDING
+    all K phases (``0 < len <= k``): the complete case (every phase synthesized but the run
+    died before the durable .json, e.g. reconcile failed) is finished — only reconcile re-runs
+    — not re-paid. A truly stale partial (``len > k`` — the transcript/K shrank) is ignored
+    and the run starts fresh. Best-effort — any read/parse failure falls back to a fresh run
+    rather than blocking the operator.
     """
     if not resume_path.is_file():
         return None
@@ -166,7 +168,7 @@ def _load_resume(resume_path: Path, k: int, ui: UI) -> summarize.Summary | None:
         partial = render.load_summary(resume_path)
     except (OSError, ValueError, RenderError):  # unreadable/corrupt partial -> fresh run
         return None
-    if not (0 < len(partial.synthesis) < k):  # stale (K shifted) or already complete
+    if not (0 < len(partial.synthesis) <= k):  # stale only if K shrank below the saved count
         return None
     ui.info(f"Resuming a previous run: {len(partial.synthesis)}/{k} phases already saved.")
     return partial

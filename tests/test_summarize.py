@@ -392,34 +392,6 @@ def test_summarize_auto_single_phase_for_short_input() -> None:
     assert result.summary.title == "Only"
 
 
-def test_merge_decisions_backfills_missing_rationale_from_later_duplicate() -> None:
-    # Overlap order often puts the emptier copy first; the later rationale is back-filled
-    # onto the same (normalized) decision rather than discarded.
-    out = summarize._merge_decisions(
-        [
-            Decision("Adopt int8", ""),
-            Decision("adopt  INT8", "halves VRAM"),  # normalized-equal statement, has rationale
-            Decision("Hire", "growth"),
-        ]
-    )
-    assert [d.decision for d in out] == ["Adopt int8", "Hire"]  # deduped, order kept
-    assert out[0].rationale == "halves VRAM"  # back-filled, not lost
-
-
-def test_merge_decisions_keeps_present_rationale_over_later_duplicate() -> None:
-    out = summarize._merge_decisions(
-        [Decision("X", "first reason"), Decision("x", "second reason")]
-    )
-    assert out == (Decision("X", "first reason"),)  # an existing rationale is never overwritten
-
-
-def test_merge_action_items_backfills_missing_owner_and_estimate() -> None:
-    out = summarize._merge_action_items(
-        [ActionItem("Write spec", "", ""), ActionItem("write  SPEC", "Ann", "2d")]
-    )
-    assert out == (ActionItem("Write spec", "Ann", "2d"),)  # owner + estimate back-filled
-
-
 def test_summarize_auto_runs_multi_phase_synthesis() -> None:
     # TD-16 v2: summarize_auto always phase-splits and synthesizes directly. A tiny
     # phase target forces K>1 (one phase per block), so we see several emit_phase calls
@@ -698,15 +670,41 @@ def test_synthesize_resumes_from_partial_skips_done_phases() -> None:
     assert "Prior prose." in caller.requests[0]["system"]  # type: ignore[attr-defined]
 
 
-def test_synthesize_ignores_stale_partial_and_runs_fresh() -> None:
-    # A partial that is NOT a strict prefix (here: already complete, len == K) is ignored —
-    # the run starts fresh, all K phases + reconcile re-run. No job engine; just skip-if-prefix.
+def test_synthesize_resumes_complete_partial_runs_reconcile_only() -> None:
+    # #2: a partial with ALL K phases (len == K) — a run that synthesized every phase but
+    # died before the durable .json (e.g. reconcile failed) — is FINISHED, not re-paid: the
+    # phases are skipped and only the reconcile call runs.
+    phases = _two_phases()
+    complete = summarize._running_summary(
+        [SynthesisSection("A", "a", ()), SynthesisSection("B", "b", ())],
+        [],
+        [],
+        "en",
+    )
+    caller = _seq_caller(_outcome({"title": "T", "core_idea": "c", "main_themes": ["x"]}))
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+        resume_from=complete,
+    )
+    assert len(caller.requests) == 1  # type: ignore[attr-defined]  # reconcile only, no phase re-pay
+    assert caller.requests[0]["tool_choice"]["name"] == "emit_reconcile"  # type: ignore[attr-defined]
+    assert [s.heading for s in result.summary.synthesis] == ["A", "B"]  # resumed phases kept
+    assert result.summary.title == "T"  # reconcile still produced the header
+
+
+def test_synthesize_ignores_overlong_partial_and_runs_fresh() -> None:
+    # A partial with MORE sections than the plan has phases (len > K — the transcript/K
+    # shrank) is genuinely stale and ignored; the run starts fresh.
     phases = _two_phases()
     stale = summarize._running_summary(
-        [
-            SynthesisSection("A", "a", ()),
-            SynthesisSection("B", "b", ()),
-        ],
+        [SynthesisSection(h, h.lower(), ()) for h in ("A", "B", "C")],  # 3 > K=2
         [],
         [],
         "en",
@@ -822,30 +820,97 @@ def test_validate_anchors_no_timecodes_drops_all() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Anchor-preserving merge (TD-16 v2 regression — caught in adversarial review)
+# TD-16 v2 fixes (caught in /review) — per-phase validation, inline timecodes,
+# no cross-phase merge, header validation
 # --------------------------------------------------------------------------- #
-def test_merge_decisions_back_fills_anchor_not_just_rationale() -> None:
-    # The emptier copy comes first (chunk/phase order); the richer duplicate must
-    # back-fill BOTH rationale and anchor. Dropping the anchor here would silently
-    # break "jump to where decided" before validate_anchors ever runs.
-    merged = summarize._merge_decisions(
-        [
-            Decision("Ship local first", "", anchor=""),
-            Decision("ship local first", "cheaper", anchor="[00:05:00]"),
-        ]
+def test_validate_anchors_strips_hallucinated_inline_timecode_in_prose() -> None:
+    # #3: an [HH:MM:SS] woven into prose (not the anchors array) must also be validated —
+    # a hallucinated one (no real block) is dropped, a real one is kept.
+    summary = Summary(
+        title="t",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection("H", "He spoke [00:05:00] then closed [00:10:00].", ()),),
     )
-    assert len(merged) == 1
-    assert merged[0].rationale == "cheaper"
-    assert merged[0].anchor == "[00:05:00]"  # preserved through the merge
+    out = summarize.validate_anchors(summary, "[00:00:00] a\n[00:10:00] b", log=lambda _m: None)
+    assert "[00:05:00]" not in out.synthesis[0].prose  # hallucinated inline tc dropped
+    assert "[00:10:00]" in out.synthesis[0].prose  # real inline tc kept
 
 
-def test_merge_action_items_back_fills_anchor() -> None:
-    merged = summarize._merge_action_items(
-        [
-            ActionItem("Benchmark int8", "", "", anchor=""),
-            ActionItem("benchmark int8", "Pat", "1d", anchor="[00:10:00]"),
-        ]
+def test_validate_anchors_strips_inline_timecode_in_core_idea_and_themes() -> None:
+    # #3: the reconcile header (core_idea + main_themes) is unvalidated free text — strip
+    # any inline timecode there too so nothing timecoded reaches the operator unchecked.
+    summary = Summary(
+        title="t",
+        core_idea="The key moment was [00:09:00].",  # hallucinated
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection("H", "p", ()),),
+        main_themes=("efficiency [00:00:00]",),  # real
     )
-    assert len(merged) == 1
-    assert merged[0].owner == "Pat" and merged[0].estimate == "1d"
-    assert merged[0].anchor == "[00:10:00]"  # preserved through the merge
+    out = summarize.validate_anchors(summary, "[00:00:00] a\n[00:10:00] b", log=lambda _m: None)
+    assert "[00:09:00]" not in out.core_idea  # dropped
+    assert out.main_themes == ("efficiency [00:00:00]",)  # real tc kept
+
+
+def test_synthesize_validates_each_phase_against_its_own_timecodes() -> None:
+    # #4: a phase that cites a timecode belonging only to ANOTHER phase is hallucinating.
+    # Phase 1's only real block is [00:00:00]; it cites [00:10:00] (a real block, but in
+    # phase 2) — per-phase validation drops it rather than accepting the cross-phase match.
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "p", anchors=["[00:10:00]"])),  # phase-2's block, wrong here
+        _outcome(_phase_ti("Body", "p", anchors=["[00:10:00]"])),  # really in phase 2
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    assert result.summary.synthesis[0].anchors == ()  # dropped — not a phase-1 timecode
+    assert result.summary.synthesis[1].anchors == ("[00:10:00]",)  # kept — real in phase 2
+
+
+def test_synthesize_keeps_distinct_same_worded_decisions_across_phases() -> None:
+    # #1: phases are non-overlapping, so two genuinely distinct same-worded decisions in
+    # different phases must NOT be collapsed (fidelity property #4 "no merged distinctions").
+    phases = _two_phases()
+    caller = _seq_caller(
+        _outcome(
+            _phase_ti(
+                "Intro",
+                "p",
+                decisions=[{"decision": "Approved", "rationale": "", "anchor": "[00:00:00]"}],
+            )
+        ),
+        _outcome(
+            _phase_ti(
+                "Body",
+                "p",
+                decisions=[{"decision": "Approved", "rationale": "", "anchor": "[00:10:00]"}],
+            )
+        ),
+        _outcome({"title": "T", "core_idea": "c", "main_themes": []}),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    # Both "Approved" decisions survive, each with its own phase anchor — not merged into one.
+    assert len(result.summary.decisions) == 2
+    assert {d.anchor for d in result.summary.decisions} == {"[00:00:00]", "[00:10:00]"}
