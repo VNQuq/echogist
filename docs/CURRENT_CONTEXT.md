@@ -55,13 +55,23 @@ are the v2 acceptance bar (CLAUDE.md).
 
 ## Next
 
-1. **Paid reference RE-RUN (operator, Windows) — the TD-16 closure gate:** run #1 (2026-06-27, balanced/Sonnet,
-   $0.39) surfaced a coverage failure — phase 2 (00:45:52→01:27:30) synthesized only its first ~2 min and
-   dropped ~34 min (the author-named point, decider types, the four no-decision positions, fit criterion). Root
-   cause: the synthesis prompt never compelled coverage + the do-not-restate block over-fired on the one phase
-   whose opening continued the prior theme. **Fix applied** (`config/models.toml`, prompt-only): ENTIRE-span
-   coverage directive + narrowed do-not-restate. Re-run must show phase 2 covering 00:55→01:27, then check the
-   5 fidelity properties, jump each anchor, confirm ≤5 pp + readable.
+1. **Paid reference RE-RUN (operator, Windows) — the ONE gate before v2.0.0.** Same transcript
+   (`output/transcripts/2026-06-27-Лекция 3 01.06.26.txt`, 2:58:57), balanced/Sonnet. It validates the TD-16
+   coverage fix AND the TD-18/19/21 prompt+cost changes together (all landed `5d0df0c`/`ba1b973`). Run #1
+   (2026-06-27, $0.39) dropped ~34 min of phase 2 (00:45:52→01:27:30: the author-named point, decider types,
+   the four no-decision positions, fit criterion). **Checklist (each must pass):**
+   - [ ] **Coverage (TD-16):** phase 2 now covers 00:55→01:27 — none of the run-#1 dropped points missing.
+   - [ ] **5 fidelity properties** by eye: grounded · no fabrication (`[интерпретация]:` on any bridge) ·
+     faithful stance · no merged distinctions · coverage. Confirm ≤5 pp drift vs the recording.
+   - [ ] **Every anchor jumps true:** click each `[HH:MM:SS]` (now woven INLINE in prose, no footer) — lands
+     on the right moment. The validator is offline; this is the manual half of the gate.
+   - [ ] **Headings (TD-18):** the phase headings read as ONE coherent outline (meta-frame), not N disjoint
+     labels; each still faithful to its phase. (Reconcile-normalized; K>1.)
+   - [ ] **PDF (TD-20):** readable + finished enough — title/heading hierarchy, leading, no anchor-wall.
+   - [ ] **Cost (TD-21):** the pre-call estimate sits ~tight over the actual bill (target ~1.2×, not 2.4×);
+     it should NOT trip the confirm gate at ~$0.39.
+   - If all green → close TD-16, drop TD-18/19/21 to resolved, ship v2.0.0 (step 3). If coverage still fails →
+     reopen the synthesis prompt; if a NON-coverage item fails → log/iterate that TD, it does not block v2.0.0.
 2. **TD-12 — DONE (implemented 2026-06-27, eng-reviewed design).** Video menu = `MP3 only / Summary / Transcript /
    ← Back` with semantic keys; MP3 is the BASELINE (kept on every video Summary+Transcript run; MP3-only failure
    FATAL, Summary/Transcript DEGRADE — warn+continue, catching BOTH ExtractError AND bare OSError per the
