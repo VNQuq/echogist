@@ -1,9 +1,10 @@
 # Current Context
 
-**Updated:** 2026-06-27 (**TD-16 v2 reviewed; Tier-1 fixes shipped (`52a36ef`); Tier-2 cleanup DONE; TD-12 menu
-redesign IMPLEMENTED + multi-agent /review fixes — gate GREEN (357 passed)**). Next: operator paid reference run (TD-16 closure gate) →
-**v2.0.0** (breaking; v1.1.0 was last release). TD-14 folder-open fixed; TD-12 (MP3-as-baseline video menu) DONE.
-**Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
+**Updated:** 2026-06-27 (**first paid reference run FAILED on coverage — phase 2 dropped ~34 min / ~22% of a
+3h lecture; prompt fix applied to `config/models.toml` (uncommitted); awaiting a clean re-run**). Gate GREEN
+(357 + the prompt change is config-only). v2.0.0 BLOCKED on the re-run. Eyes-review also surfaced TD-18..21
+(headings/anchor-dump/PDF-polish/cost-estimate — none block closure). **Authority:** [CLAUDE.md](../CLAUDE.md)
+· **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
 
@@ -54,8 +55,13 @@ are the v2 acceptance bar (CLAUDE.md).
 
 ## Next
 
-1. **Paid reference acceptance (operator, Windows) — the TD-16 closure gate:** one ~3h-lecture run; check the
-   5 fidelity properties by eye, jump each anchor to the recording, confirm ≤5 pp + readable.
+1. **Paid reference RE-RUN (operator, Windows) — the TD-16 closure gate:** run #1 (2026-06-27, balanced/Sonnet,
+   $0.39) surfaced a coverage failure — phase 2 (00:45:52→01:27:30) synthesized only its first ~2 min and
+   dropped ~34 min (the author-named point, decider types, the four no-decision positions, fit criterion). Root
+   cause: the synthesis prompt never compelled coverage + the do-not-restate block over-fired on the one phase
+   whose opening continued the prior theme. **Fix applied** (`config/models.toml`, prompt-only): ENTIRE-span
+   coverage directive + narrowed do-not-restate. Re-run must show phase 2 covering 00:55→01:27, then check the
+   5 fidelity properties, jump each anchor, confirm ≤5 pp + readable.
 2. **TD-12 — DONE (implemented 2026-06-27, eng-reviewed design).** Video menu = `MP3 only / Summary / Transcript /
    ← Back` with semantic keys; MP3 is the BASELINE (kept on every video Summary+Transcript run; MP3-only failure
    FATAL, Summary/Transcript DEGRADE — warn+continue, catching BOTH ExtractError AND bare OSError per the
@@ -77,10 +83,12 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none in-repo — gate green. Closure gate is the operator paid reference run (Windows; `ANTHROPIC_API_KEY` not in WSL).
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on paid reference
-  acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) ·
-  TD-17 progress bar 100% on failed stage (LOW).
+- **Blockers:** v2.0.0 is BLOCKED on a clean paid re-run (Windows; `ANTHROPIC_API_KEY` not in WSL) proving the
+  coverage fix. In-repo gate is green; the fix is config-only + uncommitted.
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on a clean re-run;
+  T8 eval in its orbit) · **TD-18** heading meta-frame (MEDIUM) · **TD-21** cost estimate ~2.4× actual
+  (MEDIUM) · **TD-19** anchor footer dump (LOW) · **TD-20** PDF polish (LOW) · TD-7 non-TTY UI (LOW) ·
+  TD-9 cheap-call Enter beat (LOW) · TD-17 progress bar 100% on failed stage (LOW).
   **Closed:** TD-1..6, 8, 10, 11, 12, 13, 14, 15.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original

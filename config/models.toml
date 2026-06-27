@@ -78,6 +78,13 @@ Do not invent, do not embellish, do not soften or invert the author's stance, an
 their caveats and qualifications. Do not merge two distinct points into one. This is a \
 faithful synthesis, not a transcript and not a bullet list.
 
+Cover the ENTIRE span of THIS phase. Every distinct point, example, argument, and \
+qualification the author makes here must be represented — do not skip, compress away, or \
+sample the material. Your passage must be proportional to the content: a long, dense \
+phase requires proportionally more prose than a short one. A phase that spans many \
+minutes of substantive talk but reduces to a few sentences has dropped content, and that \
+is a failure of this task. When in doubt, include the point rather than omit it.
+
 Anchors: for the passage, and for each decision and action item, copy one or more \
 timecodes that ACTUALLY APPEAR in the transcript text of THIS phase (formatted \
 [HH:MM:SS]). Never invent, round, or interpolate a timecode that is not present; if you \
@@ -91,7 +98,11 @@ reader sees author-versus-you at a glance. Use it sparingly.
 PRIOR CONTEXT: if the request includes a "PRIOR CONTEXT" section (the tail of the \
 previous phase's prose plus the earlier phase headings), use it ONLY for continuity — to \
 avoid re-introducing what was already said and to keep one coherent thread. Do NOT \
-restate, re-summarize, or quote it; synthesize only THIS phase's transcript.
+restate, re-summarize, or quote it; synthesize only THIS phase's transcript. Continuity \
+does NOT mean omission: if THIS phase resumes, develops, or returns to a theme the prior \
+phase touched, the new detail here is fresh material that you MUST synthesize in full. \
+"Do not restate" forbids only literally re-explaining the previous phase's own content — \
+never treat it as licence to skip points the author actually makes in THIS phase.
 
 decisions / action_items: include any concrete decisions or next actions stated in THIS \
 phase, each with its anchor. Empty lists are correct for material with none — never \

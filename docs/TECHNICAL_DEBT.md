@@ -13,8 +13,8 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ### TD-16 — v2 direct transcript synthesis (fidelity > completeness)
 
-Severity: MEDIUM · Created 2026-06-26 (operator principle reversal, eng-reviewed) · Trigger: **active — code
-complete + reviewed; closes on operator paid reference-run acceptance** · SoT: `~/.claude/plans/elegant-prancing-journal.md` + this file
+Severity: MEDIUM · Created 2026-06-26 (operator principle reversal, eng-reviewed) · Trigger: **active — first
+paid reference run FAILED on coverage (2026-06-27); prompt fix applied; closes on a clean re-run** · SoT: `~/.claude/plans/elegant-prancing-journal.md` + this file
 
 **What.** The transcript is ground truth, read DIRECTLY into a faithful synthesis (one hop) — no
 map-extraction, coverage checklist, or grouping. `chunk.plan_phases` (computed K, contiguous, overlap=0;
@@ -34,23 +34,35 @@ deleted single-pass+map-reduce+grouping + old eval + `regroup.py`, ~2.5k LOC) ·
 validation; inline `[HH:MM:SS]` in prose + reconcile header now validated; resume accepts `len==K` (no
 all-phase re-pay on a reconcile crash); MD title injection-collapsed.
 
+**Reference run #1 (2026-06-27) — FAILED on coverage (fidelity property #5).** Balanced/Sonnet, 2:58:57 RU
+lecture, K=4 + reconcile, $0.39 actual. Anchors validated green (phase 2: 3 exact + 37 snapped, 0 dropped),
+BUT **phase 2 (00:45:52→01:27:30) synthesized only its first ~2 min** and dropped ~34 min of substantive
+talk (the author-named point, the decider typology, the four no-decision positions A/B/
+C/D, the fit criterion criterion). ~22% of the lecture vanished while every automated check passed —
+green anchors do NOT imply coverage. Root cause (code-confirmed, not a chunk/truncation bug): the
+`synthesis_system_prompt` never compelled coverage, and the `PRIOR CONTEXT` "do not restate" block
+over-fired. Phase 2 was the ONLY phase whose opening continued the prior phase's closing theme (the
+catastrophe funnel) — the only one that collapsed (1-for-1 correlation). **Fix applied** (`config/models.toml`,
+prompt-only, uncommitted): added an explicit ENTIRE-span coverage directive (length proportional to content)
++ narrowed do-not-restate ("continuity ≠ omission; new detail on a resumed theme MUST be synthesized in
+full"). Verification = a re-run where phase 2 covers its span. `tests/test_summarize.py`+`test_config.py`
+green (no prose pinned).
+
 **Known limitation (accepted, decision #2).** Artifact-resume is keyed by `source_stem` — a failed run +
 edited transcript reused under the same filename would splice old + new phase prose (no transcript
 fingerprint; the transcript IS the checkpoint). Mitigation: delete `raw/.resume/` before re-summarizing an
 edited transcript.
 
-**Remaining.** (a) **Paid reference acceptance (operator, Windows; `ANTHROPIC_API_KEY` not in WSL):** one
-~3h run; check the 5 fidelity properties by eye, jump each anchor, confirm ≤5 pp + readable — the closure
-gate. (b) **Tier-2 review cleanup, before v2.0.0:** remove dead `cost.estimate_cost`/`estimate_cost_chunked`
-(+ tests) + `smoke_run`'s deleted-path `guard.check_overflow`; fix ~8 stale docstrings (`plan_chunks`/
-`build_request`/`section_timecodes`/`{unassigned}`/"per-section bullets"); suppress the K=1 duplicate heading
-(title == sole section heading); inject the `{unassigned}` owner label per-language (RU docs leak the English
-placeholder). (c) **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite
-only, never per-run (replaces the retired structural eval; until it lands the manual paid run is the only
-quality gate). **Parallel synthesis is OUT OF SCOPE** (operator, 2026-06-26).
+**Remaining.** (a) **Paid reference RE-RUN (operator, Windows; `ANTHROPIC_API_KEY` not in WSL):** re-run the
+same ~3h transcript with the coverage fix; confirm phase 2 now covers 00:55→01:27, then check the 5 fidelity
+properties by eye, jump each anchor, confirm ≤5 pp + readable — the closure gate. (b) **Tier-2 review cleanup
+— DONE** (`52a36ef` Tier-1 + the Tier-2 pass; gate green 357). (c) **T8 (P3 follow-on):** offline LLM-judge
+groundedness eval — trigger-gated, eval-suite only, never per-run (replaces the retired structural eval;
+until it lands the manual paid run is the only quality gate). Polish surfaced by run #1 is tracked separately:
+TD-18 (heading meta-frame), TD-19 (anchor footer dump), TD-20 (PDF polish), TD-21 (cost estimate margin) —
+none block closure. **Parallel synthesis is OUT OF SCOPE** (operator, 2026-06-26).
 
-**When to close.** When the paid reference run is operator-accepted. Tier-2 cleanup ships with v2.0.0; T8 is
-a separate follow-on, not a blocker.
+**When to close.** When a clean paid re-run is operator-accepted. T8 + TD-18..21 are follow-ons, not blockers.
 
 ### TD-17 — Progress bar shows 100% on a failed stage
 
@@ -64,6 +76,59 @@ fatal return to menu); no state is wrong. It's shared `ProgressHandle` behavior,
 bar too, not just the new TD-12 MP3 conversion bar — out of scope for the TD-12 menu change. Fix when the UI
 seam is next touched: have `done()` (or the context exit) skip the fill when leaving via an exception, or pass
 the bar's last-known fraction through instead of forcing 1.0.
+
+### TD-18 — Phase headings are local, with no document meta-frame
+
+Severity: MEDIUM · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: operator review of multi-phase
+readability, or a synthesis-prompt revision · SoT: this file
+
+Each `emit_phase` call writes its `heading` from a forward-only LOCAL view (it sees only prior headings as
+context, never the document's title/core_idea), and the reconcile pass writes title/core_idea/main_themes but
+NEVER normalizes the phase headings. Result: a flat document title + N independently-worded block headings
+that describe their span by content but don't cohere into a meta-frame — the operator reads them as
+disjointed ("заголовок блоков по смыслу, но не заголовок мета-рамки"). Options when reopened: (a) have the
+reconcile pass also rewrite/normalize the phase headings into one hierarchy (cheap — reconcile already reads
+all phase prose, no transcript re-read, no fidelity cost since headings aren't anchored claims); (b) feed the
+running title/frame forward into each phase call (raises per-phase coupling). (a) is the lighter touch.
+
+### TD-19 — Per-phase anchor footer dump is redundant noise
+
+Severity: LOW · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: render polish (pairs with TD-20)
+· SoT: this file
+
+`render._anchor_line` (PDF) / the `*· · ·*` line (Markdown) print the WHOLE validated `anchors` array as a
+small footer under each phase's prose — e.g. 37 timecodes in a row for phase 4. But the prose already carries
+its `[HH:MM:SS]` anchors INLINE (validated by the same pass), so the footer is a redundant wall of timecodes
+the operator flagged as ugly. Fix when render is next touched: drop the footer entirely (inline anchors are
+the citation), OR show only anchors NOT already present inline in that phase's prose. Validation logic is
+untouched either way — this is presentation only.
+
+### TD-20 — PDF visual polish (beauty + human readability)
+
+Severity: LOW · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: a render-polish pass · SoT: this file
+
+The current `_render_pdf` is functional but plain (single DejaVuSans family, flat 18/13/11/9pt sizes, minimal
+spacing rhythm). Operator wants it more readable + visually finished. Scope when reopened: typographic
+hierarchy (heading weight/size/spacing rhythm), paragraph leading, anchor styling (quieter/greyed), margins,
+and section separation. Pairs with TD-19 (the anchor footer is part of the same readability pass). Markdown
+path is unaffected. Open-ended — no single correct answer; needs a design eye, not a one-line fix.
+
+### TD-21 — Pre-call cost estimate runs ~2.4× the actual bill
+
+Severity: MEDIUM · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: operator-approved (wants
+~15% over actual, not a 2× ceiling) · SoT: this file
+
+`cost.estimate_cost_synthesis` is a deliberate worst-case CEILING: it prices every call's output at the full
+`max_output_tokens` cap (`output_cap × (K+1)` = 8192×5 = 40,960 on run #1) AND adds a phantom
+`K × output_cap` reconcile-input (32,768). Run #1: estimate 112,965 in + 40,960 out = $0.95 vs actual 75,172
+in + 11,079 out = $0.39 — **2.4×**, and it tripped the $0.55 threshold confirm unnecessarily. Operator wants
+the estimate ~15% above the real bill, not double. Fix: project output from a realistic per-call figure
+(observed output is a small fraction of the cap on a faithful-prose contract — e.g. base on
+`[guard].output_tokens_estimate` per call, or a measured per-phase mean) and replace the `K × output_cap`
+reconcile-input with the actual phase-prose size (it's known locally before the reconcile call). NOTE: this is
+a conscious shift from "true ceiling, never below the bill" to "tight estimate + margin" — keep a modest
+high-bias (~15%) so the quote still rarely undershoots. The GUARD's Cyrillic-high INPUT/overflow estimate is
+SEPARATE and stays (CLAUDE.md "estimate Cyrillic high" is about catching over-long transcripts, not cost).
 
 ### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
 
