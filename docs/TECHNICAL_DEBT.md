@@ -71,6 +71,32 @@ seam can't express a non-decision pause without a Y/n widget (which could declin
 The above-threshold gate (explicit confirm, default No) + `$0.50` threshold are unchanged. Reopen by adding a
 one-line `ui.text(...)` in `menu._run_summary` — no `cost.py` change.
 
+### TD-12 — "What should EchoGist produce?" menu is misleading + has a gap (REOPENED)
+
+Severity: MEDIUM · Reopened 2026-06-27 (operator-raised; first closed 2026-06-21) · Trigger: **active — operator
+design call needed** · SoT: this file
+
+The action menu (`menu.py:333-410`) misrepresents what happens. Non-mp3 `_ACTION_CHOICES` = Summary / MP3 only /
+Both (MP3 + summary) / ← Back; mp3 `_MP3_ACTION_CHOICES` = Summary / Transcript only / ← Back. Real semantics:
+"Summary" always extracts audio internally to transcribe + summarize, discards the MP3, and always saves the
+transcript checkpoint; "Both" = same but KEEPS the MP3; "MP3 only" = extract + keep MP3, stop. So the labels imply
+"Summary" needs no audio (nonsense for video — extraction is always required to transcribe); the only real
+distinction is whether the MP3 is KEPT. GAP: non-mp3 inputs have NO "Transcript only" option (mp3 does) — you
+can't transcribe-and-stop on a video without paying for a summary. Redesign to be honest about what's KEPT and
+cover all variants (likely Summary / Transcript only / MP3 only / MP3 + summary); remove the misleading framing.
+Needs an operator design call on the exact wording/option set (consider `/office-hours`).
+
+### TD-14 — Folder-open hierarchy reveals the wrong directory (REOPENED)
+
+Severity: LOW · Reopened 2026-06-27 (operator-raised; first closed 2026-06-23) · Trigger: **active** · SoT: this file
+
+`reveal_dir` is once-per-launch (`self._revealed`). `_transcribe_to_checkpoint` (`menu.py:323`) reveals
+`output/transcripts`; MP3-only (`menu.py:404`) reveals `output/audio`; `_run_summary` reveals nothing — so after a
+summary the TRANSCRIPTS folder pops, which is wrong. Operator wants: NEVER open transcripts; reveal
+`output/summaries` (highest priority) or `output/audio`, priority summaries > audio. FIX: remove the transcripts
+reveal from `_transcribe_to_checkpoint`; reveal `output/summaries` after a successful summary in `_run_summary`;
+keep the audio reveal for MP3-only; once-per-launch + summaries-wins-over-audio.
+
 ---
 
 ## Closed debts (compact — verbose history in git)
@@ -91,9 +117,11 @@ one-line `ui.text(...)` in `menu._run_summary` — no `cost.py` change.
   menu-loop-top); full TUI ruled out of scope. `f4fd2ca`.
 - **TD-13 — Submenu back-navigation** ✓ CLOSED 2026-06-23 (was MEDIUM). Explicit `← Back` entries; ESC stays
   exit (distinguishing it would risk the `_ask` cancel/exit contract). `f4fd2ca`.
-- **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23 (was LOW). `UI.reveal_dir` (`nt`-guarded,
-  once/launch); extended 06-25 to MP3-only flow + no-focus-steal `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`.
-- **TD-12 — `.mp3` input offered no-op MP3/Both actions** ✓ CLOSED 2026-06-21. mp3 gets a trimmed menu
+- **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23, ⚠ REOPENED 2026-06-27 (see Open debts — wrong
+  reveal hierarchy). Original close: `UI.reveal_dir` (`nt`-guarded, once/launch); extended 06-25 to MP3-only flow +
+  no-focus-steal `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`.
+- **TD-12 — `.mp3` input offered no-op MP3/Both actions** ✓ CLOSED 2026-06-21, ⚠ REOPENED 2026-06-27 (see Open
+  debts — menu misrepresents what's kept + non-mp3 gap). Original close: mp3 gets a trimmed menu
   (Summary / Transcript only / ← Back) via `extract.is_mp3`. `f4fd2ca`, revised `738cf9e`.
 - **TD-8 — `setuptools<81` pin** ✓ CLOSED 2026-06-21 (premise dismissed). No such pin ever existed; lockfile
   ships `setuptools==82.0.1` and passes. The cuDNN↔ctranslate2 tripwire (the pin that matters) is untouched.

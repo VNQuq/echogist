@@ -1,14 +1,12 @@
 """T8 — cost (plan §3 "Cost flow"). Local, offline, killswitch-safe.
 
-Two numbers bracket the one paid SUMMARIZE call:
+Two numbers bracket the paid SUMMARIZE call(s) (TD-16 v2: K phase calls + 1 reconcile):
 
-* **Before** the call — a cost *estimate* from the local, language-aware token
-  guess (:func:`echogist.guard.estimate_input_tokens`, already computed by the
-  GUARD) on the input side, and a **fixed absolute** output projection
-  (``GuardConfig.output_tokens_estimate``) on the output side. Output is modelled
-  as an absolute, not a fraction of input — but the summary contract is now
-  no-upper-limit (all concepts, per-section bullets), so the estimate is sized for
-  a dense long summary rather than a short fixed one. Always shown.
+* **Before** the call(s) — a cost *estimate* (:func:`estimate_cost_synthesis`) from the
+  local, language-aware per-phase token guess (:func:`echogist.guard.estimate_input_tokens`)
+  on the input side, and a per-call ``max_tokens`` CEILING on the output side. Output is
+  modelled at the cap, not a fraction of input — the v2 contract is dense per-phase prose,
+  so the estimate is sized to never sit below the bill ("estimate high"). Always shown.
 * **After** the call — the *actual* cost from the audited ``response.usage``
   counts carried on :class:`echogist.summarize.SummarizeResult`. The exact,
   billable number.
@@ -32,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from .config import GuardConfig, ModelTier
+from .config import ModelTier
 from .summarize import SummarizeResult
 
 # A confirm widget: takes a prompt + a default and returns the operator's yes/no.
@@ -70,66 +68,6 @@ class CostEstimate:
     def total_usd(self) -> float:
         """Total USD for the call (input + output)."""
         return self.input_cost_usd + self.output_cost_usd
-
-
-def estimate_cost(
-    est_input_tokens: int,
-    tier: ModelTier,
-    guard: GuardConfig,
-) -> CostEstimate:
-    """Pre-call cost estimate (plan §3).
-
-    ``est_input_tokens`` is the GUARD's local language-aware estimate (reused, not
-    recomputed — :class:`echogist.guard.GuardResult.est_input_tokens`). Output is
-    the fixed ``guard.output_tokens_estimate`` absolute. Both priced at the tier's
-    rates. Biased high on the input side because the GUARD estimate already is.
-
-    SELF-AUDIT-FIX (FIX-7): the system prompt + tool schema are ALREADY represented
-    in ``est_input_tokens`` via the GUARD's flat ``_PROMPT_OVERHEAD_TOKENS`` (1000),
-    so the cost estimate already accounts for the prompt. Do NOT add the prompt
-    length here again — that would double-count it. (The measured prompt+schema is
-    ~1270 tok; the flat overhead's small under-shoot is dwarfed by the +20% body
-    bias — see the constant's note in guard.py for why that is harmless.)
-    """
-    return CostEstimate(
-        input_tokens=est_input_tokens,
-        output_tokens=guard.output_tokens_estimate,
-        price_in_per_mtok=tier.price_in_per_mtok,
-        price_out_per_mtok=tier.price_out_per_mtok,
-    )
-
-
-def estimate_cost_chunked(
-    map_input_tokens: Sequence[int],
-    tier: ModelTier,
-    *,
-    output_cap: int,
-) -> CostEstimate:
-    """Pre-call cost estimate for the map-reduce path (TD-5): N map calls + 1 reduce.
-
-    ``map_input_tokens`` is the per-chunk input estimate (one per map call, each already
-    including the prompt overhead via :func:`echogist.guard.estimate_input_tokens`).
-
-    A true CEILING, not an expected value — the operator approves this number, so it must
-    never sit below the bill (the project's "estimate high" rule, applied to the expensive
-    output side). Every one of the N+1 calls can emit up to ``output_cap`` (the request's
-    ``max_tokens``); on a no-upper-limit summary contract a dense chunk really can approach
-    it, and output is priced ~5× input. So each call's output is projected at the full cap,
-    and the reduce call's INPUT (the merged map outputs fed to synthesis) is bounded by the
-    N map outputs, i.e. ``N × output_cap`` — both at the ceiling rather than the smaller
-    ``output_tokens_estimate``. The exact cost still comes from the summed ``response.usage``
-    after the calls; this only governs the pre-call quote the operator confirms against.
-    """
-    n = len(map_input_tokens)
-    reduce_input = n * output_cap  # merged map outputs fed to synthesis, at the ceiling
-    total_input = sum(map_input_tokens) + reduce_input
-    total_output = (n + 1) * output_cap  # N maps + 1 reduce, each capped at output_cap
-    return CostEstimate(
-        input_tokens=total_input,
-        output_tokens=total_output,
-        price_in_per_mtok=tier.price_in_per_mtok,
-        price_out_per_mtok=tier.price_out_per_mtok,
-    )
 
 
 def estimate_cost_synthesis(

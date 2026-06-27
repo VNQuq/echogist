@@ -104,8 +104,8 @@ def check_overflow(
 def overflow_message(result: GuardResult, tier: ModelTier) -> str:
     """The clean §4 "too long" message the menu prints on overflow (F6)."""
     return (
-        f"This transcript is too long for v1 single-pass summarization on the "
-        f"'{tier.name}' tier (estimated {result.est_input_tokens:,} input tokens vs a "
-        f"safe budget of {result.safe_budget:,}). Choose a larger-context model in "
-        f"Settings, or wait for chunked summarization support. Your transcript is saved."
+        f"This transcript is too long for the '{tier.name}' tier (estimated "
+        f"{result.est_input_tokens:,} input tokens vs a safe budget of "
+        f"{result.safe_budget:,}). Choose a larger-context model in Settings. "
+        f"Your transcript is saved."
     )

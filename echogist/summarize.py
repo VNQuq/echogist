@@ -534,9 +534,7 @@ def _phase_tool_schema() -> dict[str, Any]:
                             },
                             "owner": {
                                 "type": "string",
-                                "description": (
-                                    "Who is responsible, or the 'unassigned' label if unstated."
-                                ),
+                                "description": "Who is responsible; leave empty if unstated.",
                             },
                             "estimate": {
                                 "type": "string",

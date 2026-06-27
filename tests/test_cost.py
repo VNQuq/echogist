@@ -14,7 +14,7 @@ import ast
 from pathlib import Path
 
 from echogist import cost
-from echogist.config import GuardConfig, ModelTier
+from echogist.config import ModelTier
 from echogist.summarize import SummarizeResult, Summary
 
 
@@ -25,13 +25,6 @@ def _tier(price_in: float = 3.0, price_out: float = 15.0) -> ModelTier:
         context_window=1_000_000,
         price_in_per_mtok=price_in,
         price_out_per_mtok=price_out,
-    )
-
-
-def _guard(output_tokens_estimate: int = 2000) -> GuardConfig:
-    return GuardConfig(
-        safe_budget_fraction=0.8,
-        output_tokens_estimate=output_tokens_estimate,
     )
 
 
@@ -78,51 +71,6 @@ def test_cost_scales_with_tokens() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# estimate_cost — reuse the GUARD input estimate, fixed absolute output
-# --------------------------------------------------------------------------- #
-def test_estimate_reuses_guard_input_and_fixed_output() -> None:
-    est = cost.estimate_cost(50_000, _tier(), _guard(output_tokens_estimate=2000))
-    assert est.input_tokens == 50_000  # the GUARD's estimate, reused verbatim
-    assert est.output_tokens == 2000  # fixed absolute, NOT a fraction of input
-    assert est.price_in_per_mtok == 3.0
-    assert est.price_out_per_mtok == 15.0
-
-
-def test_estimate_output_is_constant_regardless_of_input() -> None:
-    guard = _guard(output_tokens_estimate=2000)
-    small = cost.estimate_cost(1_000, _tier(), guard)
-    large = cost.estimate_cost(900_000, _tier(), guard)
-    # Output projection is the same constant for a tiny and a huge transcript.
-    assert small.output_tokens == large.output_tokens == 2000
-
-
-# --------------------------------------------------------------------------- #
-# estimate_cost_chunked (TD-5) — a true CEILING over N map calls + 1 reduce
-# --------------------------------------------------------------------------- #
-def test_estimate_cost_chunked_projects_every_call_at_the_output_cap() -> None:
-    # CEILING: each of the N+1 calls projected at the cap (not the smaller per-call
-    # estimate); the reduce INPUT is the merged map outputs, bounded by N * cap.
-    est = cost.estimate_cost_chunked([1000, 2000], _tier(), output_cap=8192)
-    assert est.input_tokens == 3000 + 2 * 8192  # sum(map inputs) + reduce input (N*cap)
-    assert est.output_tokens == 3 * 8192  # (N+1) calls, each at the cap
-    assert est.price_out_per_mtok == 15.0  # tier prices carried through
-
-
-def test_estimate_cost_chunked_single_chunk_is_two_capped_calls() -> None:
-    est = cost.estimate_cost_chunked([1000], _tier(), output_cap=4096)
-    assert est.input_tokens == 1000 + 4096  # one map input + reduce input (N=1)
-    assert est.output_tokens == 2 * 4096  # 1 map + 1 reduce
-
-
-def test_estimate_cost_chunked_is_a_ceiling_over_the_worst_case() -> None:
-    # The whole point of fix #4: the operator approves this quote, so even if every one
-    # of the N+1 calls maxes its output cap the bill cannot exceed the quote.
-    cap = 8192
-    est = cost.estimate_cost_chunked([5000, 5000, 5000], _tier(), output_cap=cap)
-    assert est.output_tokens >= 4 * cap  # 3 maps + 1 reduce all maxing the cap
-
-
-# --------------------------------------------------------------------------- #
 # estimate_cost_synthesis (TD-16 v2) — CEILING over K phase calls + 1 reconcile
 # --------------------------------------------------------------------------- #
 def test_estimate_cost_synthesis_projects_phases_and_reconcile_at_the_cap() -> None:
@@ -162,7 +110,7 @@ def test_actual_cost_from_usage() -> None:
 
 def test_actual_differs_from_estimate() -> None:
     tier = _tier()
-    estimate = cost.estimate_cost(50_000, tier, _guard(output_tokens_estimate=2000))
+    estimate = cost.CostEstimate(50_000, 2_000, 3.0, 15.0)  # a high pre-call quote
     actual = cost.actual_cost(_result(input_tokens=41_000, output_tokens=1_500), tier)
     # The estimate is biased high; the real call usually comes in under it.
     assert actual.total_usd < estimate.total_usd
@@ -219,7 +167,7 @@ def test_confirm_above_threshold_declines_returns_callable_result() -> None:
 # Messages
 # --------------------------------------------------------------------------- #
 def test_estimate_message_names_tier_and_tokens() -> None:
-    est = cost.estimate_cost(50_000, _tier(), _guard())
+    est = cost.CostEstimate(50_000, 2_000, 3.0, 15.0)
     msg = cost.estimate_message(est, _tier())
     assert "balanced" in msg
     assert "50,000" in msg

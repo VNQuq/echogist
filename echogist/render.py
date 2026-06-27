@@ -332,7 +332,10 @@ def _markdown(summary: Summary) -> str:
         # newline + `#` in the model-supplied heading (the summarize side strips, but
         # load_summary is verbatim by design).
         heading = " ".join(s.heading.split())
-        out += [f"## {heading}".rstrip(), ""]
+        # K=1: the sole phase heading IS the document title (no reconcile renamed it), so
+        # don't print it twice. Also skip an empty heading rather than emit a bare "## ".
+        if heading and heading != title:
+            out += [f"## {heading}".rstrip(), ""]
         for para in _paragraphs(s.prose):
             out += [para, ""]
         if s.anchors:
@@ -451,8 +454,12 @@ def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None
     if summary.core_idea:
         _heading(pdf, lab["core_idea"])
         _body(pdf, summary.core_idea)
+    title = " ".join((summary.title or _FALLBACK_TITLE).split())
     for s in summary.synthesis:
-        _heading(pdf, " ".join(s.heading.split()))
+        heading = " ".join(s.heading.split())
+        # K=1: heading == the title already rendered above — don't repeat it.
+        if heading and heading != title:
+            _heading(pdf, heading)
         _paragraphed_body(pdf, s.prose)
         if s.anchors:
             _anchor_line(pdf, " · ".join(s.anchors))  # U+00B7 is in DejaVuSans

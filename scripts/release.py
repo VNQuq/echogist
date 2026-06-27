@@ -17,8 +17,9 @@ the repo (the token lives only in your profile, never in git):
     python3 scripts/release.py            # tag = v<VERSION file>
     python3 scripts/release.py v1.0.1     # explicit tag
 
-The annotated git tag must already exist on the remote (``/ship`` or a manual
-``git push origin <tag>`` creates it). The release notes are the matching
+The annotated git tag must already exist on the remote — create and push it
+manually (``git tag -a <tag> -m "..." && git push origin <tag>``). The release
+notes are the matching
 ``## [X.Y.Z]`` section of ``CHANGELOG.md``. Re-running for a tag that already has
 a release is a no-op (GitHub returns 422, reported, exit 0).
 
