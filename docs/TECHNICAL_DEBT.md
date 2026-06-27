@@ -73,18 +73,23 @@ one-line `ui.text(...)` in `menu._run_summary` — no `cost.py` change.
 
 ### TD-12 — "What should EchoGist produce?" menu is misleading + has a gap (REOPENED)
 
-Severity: MEDIUM · Reopened 2026-06-27 (operator-raised; first closed 2026-06-21) · Trigger: **active — operator
-design call needed** · SoT: this file
+Severity: MEDIUM · Reopened 2026-06-27 (operator-raised; first closed 2026-06-21) · Trigger: **design APPROVED
+2026-06-27 (/office-hours) — implement next session** · SoT: `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md` + this file
 
 The action menu (`menu.py:333-410`) misrepresents what happens. Non-mp3 `_ACTION_CHOICES` = Summary / MP3 only /
 Both (MP3 + summary) / ← Back; mp3 `_MP3_ACTION_CHOICES` = Summary / Transcript only / ← Back. Real semantics:
-"Summary" always extracts audio internally to transcribe + summarize, discards the MP3, and always saves the
-transcript checkpoint; "Both" = same but KEEPS the MP3; "MP3 only" = extract + keep MP3, stop. So the labels imply
-"Summary" needs no audio (nonsense for video — extraction is always required to transcribe); the only real
-distinction is whether the MP3 is KEPT. GAP: non-mp3 inputs have NO "Transcript only" option (mp3 does) — you
-can't transcribe-and-stop on a video without paying for a summary. Redesign to be honest about what's KEPT and
-cover all variants (likely Summary / Transcript only / MP3 only / MP3 + summary); remove the misleading framing.
-Needs an operator design call on the exact wording/option set (consider `/office-hours`).
+"Summary" on a video transcribes the container DIRECTLY (faster-whisper/PyAV, no MP3 written), discards no MP3
+because none is made, and always saves the transcript checkpoint; "Both" = also extracts + KEEPS an MP3; "MP3 only"
+= extract + keep MP3, stop. So the labels imply "Summary" needs no audio (nonsense framing); the only real
+distinction was whether an MP3 is KEPT. GAP: non-mp3 inputs had NO "Transcript only" option (mp3 does).
+
+**Approved design (operator, /office-hours 2026-06-27):** MP3 is the BASELINE for every video path, not a toggle
+or combo. Video menu = `MP3 only / Summary / Transcript / ← Back` (order = prominence, NOT cost: Summary middle,
+Transcript last). Every video Summary + Transcript run keeps the MP3 in `output/audio` (no cleanup). Transcript
+checkpoint still saved silently. `.mp3` input menu UNCHANGED (`Summary / Transcript only`) — no extraction when the
+source already is the audio. Extraction mechanism is implementer's choice (recommend: transcribe the source
+container directly for quality + run `extract_audio` separately for the kept artifact; don't transcribe from the
+lossy MP3). Full spec + Next Steps + Success Criteria in the design doc above.
 
 ---
 
