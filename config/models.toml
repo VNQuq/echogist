@@ -37,13 +37,15 @@ price_out_per_mtok = 25.0
 safe_budget_fraction = 0.8
 # Per-CALL output projection for the cost estimate (TD-21) — NOT the API cap
 # (that is [summarize].max_output_tokens). The synthesis contract is faithful prose, so
-# real output is a small fraction of the cap: run #1 (a dense 3h RU lecture, K=4) averaged
-# ~2.2k output tokens/call. This is sized ~25% above that observed mean — biased high so
-# the quote stays above the bill, but tight enough that it no longer doubles it (run #1's
-# old cap-based estimate ran ~2.4x actual and tripped the confirm gate needlessly). The
-# INPUT side keeps its SEPARATE Cyrillic-high bias (safe_budget_fraction / the guard
-# estimate); that is about catching an over-long transcript, not cost, and is unchanged.
-output_tokens_estimate = 2800
+# real output is a small fraction of the cap. Recalibrated against the full-coverage 3h RU
+# re-run (K=4, balanced/Sonnet): 18,382 output tokens over 5 calls = ~3.7k/call. (The earlier
+# 2,800 was fit to the truncated run #1, which under-produced because it dropped ~22% of the
+# lecture — it ran the quote ~0.91x the bill, UNDER it, breaking the high bias.) This is sized
+# ~25% above the observed mean — biased high so the quote stays above the bill (~1.2x), but
+# tight enough that it no longer doubles it (the old cap-based estimate ran ~2.4x). The INPUT
+# side keeps its SEPARATE Cyrillic-high bias (safe_budget_fraction / the guard estimate);
+# that is about catching an over-long transcript, not cost, and is unchanged.
+output_tokens_estimate = 4600
 
 [summarize]
 # The ONE network stage (plan §3, T6). DATA, not code: edit the prompt TEXT here
