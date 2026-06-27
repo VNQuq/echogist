@@ -233,9 +233,9 @@ def test_flow_clears_screen_on_entry(tmp_path: Path) -> None:
     assert ("clear", "") in stub.messages
 
 
-def test_transcript_save_reveals_folder_once(tmp_path: Path) -> None:
-    # TD-14: a NEW transcript save reveals its folder, and only once per launch even
-    # across two transcribe flows.
+def test_summary_reveals_summaries_folder_once(tmp_path: Path) -> None:
+    # TD-14 (reopened): a Summary run reveals the SUMMARIES folder (never transcripts),
+    # and only once per launch even across two summary flows.
     a = tmp_path / "a.wav"
     a.write_bytes(b"x")
     b = tmp_path / "b.wav"
@@ -243,14 +243,28 @@ def test_transcript_save_reveals_folder_once(tmp_path: Path) -> None:
     deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "1", "1", str(b), "1", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
-    assert len(reveals) == 1  # once per launch, not once per transcribe
-    assert reveals[0][1].endswith("transcripts")
+    assert len(reveals) == 1  # once per launch, not once per summary
+    assert reveals[0][1].endswith("summaries")
+    assert not any(r[1].endswith("transcripts") for r in reveals)  # transcripts never pop
 
 
-def test_saved_transcript_resummarize_does_not_reveal(tmp_path: Path) -> None:
-    # TD-14: re-summarizing an existing transcript does NOT pop the folder (no new save).
+def test_saved_transcript_resummarize_reveals_summaries(tmp_path: Path) -> None:
+    # TD-14 (reopened): re-summarizing an existing transcript produces a summary, so the
+    # SUMMARIES folder pops (the deliverable) — the transcripts folder never does.
     _seed_transcript(tmp_path)
     deps, stub, _ = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0][1].endswith("summaries")
+
+
+def test_transcript_only_reveals_nothing(tmp_path: Path) -> None:
+    # TD-14 (reopened): a transcript-only run (mp3 input → "Transcript only") never pops
+    # a folder — transcripts are intentionally not revealed.
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "transcript", "4"])
     assert menu.run_menu(deps) == 0
     assert not [m for m in stub.messages if m[0] == "reveal_dir"]
 
@@ -276,16 +290,45 @@ def test_mp3_only_reveals_audio_folder(tmp_path: Path) -> None:
     assert reveals[0][1].endswith("audio")
 
 
-def test_both_flow_reveals_transcript_folder_not_audio(tmp_path: Path) -> None:
-    # Bug #2 hierarchy: "Both" transcribes, so the transcript folder is the right reveal
-    # target — the MP3-folder pop is reserved for the MP3-only path.
+def test_both_flow_reveals_summaries_not_audio(tmp_path: Path) -> None:
+    # TD-14 (reopened): "Both" ends on a summary, so the SUMMARIES folder is the reveal
+    # target — not audio (reserved for MP3-only) and never transcripts.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
     deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "3", "4"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
-    assert reveals[0][1].endswith("transcripts")
+    assert reveals[0][1].endswith("summaries")
+
+
+def test_summary_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
+    # TD-14 (reopened): an MP3-only run pops audio; a later Summary run in the same launch
+    # still pops summaries (REVEAL_SUMMARY outranks the once-per-launch audio guard).
+    mp3 = tmp_path / "a.mp3"
+    mp3.write_bytes(b"x")
+    wav = tmp_path / "b.wav"
+    wav.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav), "2", "1", str(mp3), "1", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 2
+    assert reveals[0].endswith("audio")
+    assert reveals[1].endswith("summaries")
+
+
+def test_audio_not_revealed_after_summary(tmp_path: Path) -> None:
+    # TD-14 (reopened): once summaries has popped, a later MP3-only run does not pop audio
+    # (summaries outranks audio for the whole launch).
+    wav_a = tmp_path / "a.wav"
+    wav_a.write_bytes(b"x")
+    wav_b = tmp_path / "b.wav"
+    wav_b.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav_a), "1", "1", str(wav_b), "2", "4"])
+    assert menu.run_menu(deps) == 0
+    reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1
+    assert reveals[0].endswith("summaries")
 
 
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:

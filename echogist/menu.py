@@ -47,7 +47,7 @@ from .model_asset import ProvisionError
 from .render import RenderError
 from .summarize import SummarizeError, SummarizeResult
 from .transcribe import TranscribeError, Transcript
-from .ui import UI, Choice, NotInteractiveError, build_default_ui
+from .ui import REVEAL_AUDIO, REVEAL_SUMMARY, UI, Choice, NotInteractiveError, build_default_ui
 
 Logger = Callable[[str], object]
 
@@ -298,6 +298,9 @@ def _run_summary(
         return
 
     ui.success(f"Done — summary written to {out_path}")
+    # TD-14: pop the summaries folder (Windows, once/launch). REVEAL_SUMMARY outranks an
+    # earlier MP3-only audio reveal, so a "Both" run still ends on the summary.
+    ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
 
 
 def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.ModelConfig) -> str:
@@ -320,7 +323,8 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
         block_seconds=model_config.transcript.block_seconds,
     )
     ui.info(f"Saved transcript: {tpath}")
-    ui.reveal_dir(tpath.parent)  # TD-14: pop the transcript folder (Windows, once/launch)
+    # TD-14: transcripts are never auto-revealed — the operator wants summaries (or, for
+    # an MP3-only run, audio) to pop, not the intermediate checkpoint folder.
     # Summarize the saved checkpoint VERBATIM (not transcript.text) so the fresh-run
     # and recovery (re-summarize saved .txt) paths feed byte-identical, timecoded text
     # to GUARD + SUMMARIZE — the model can cite real section_timecodes on both.
@@ -401,7 +405,7 @@ def _flow_local_file(deps: Deps) -> None:
             bar.done()
         ui.success(f"Saved MP3: {mp3}")
     if action == "2":  # MP3 only — reveal the audio folder (TD-14 hierarchy) and stop
-        ui.reveal_dir(deps.base / "output" / "audio")
+        ui.reveal_dir(deps.base / "output" / "audio", priority=REVEAL_AUDIO)
         return
 
     text = _transcribe_to_checkpoint(deps, source, model_config)

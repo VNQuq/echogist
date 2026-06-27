@@ -64,6 +64,14 @@ class NotInteractiveError(Exception):
     """
 
 
+# Reveal-folder priority (TD-14): the once-per-launch pop fires for the highest
+# priority seen, so a summary's folder always supersedes a bare MP3-only audio pop —
+# even if the audio run came first in the same launch. Transcripts are intentionally
+# absent: they are never revealed.
+REVEAL_AUDIO = 1
+REVEAL_SUMMARY = 2
+
+
 # --------------------------------------------------------------------------- #
 # The seam — Protocols
 # --------------------------------------------------------------------------- #
@@ -97,7 +105,7 @@ class UI(Protocol):
     def pick_file(
         self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
     ) -> str | None: ...
-    def reveal_dir(self, path: Path) -> None: ...
+    def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None: ...
     def info(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
     def warn(self, message: str) -> None: ...
@@ -145,9 +153,10 @@ class RichQuestionaryUI:
             )
         self.console = Console(theme=RICH_THEME)
         self.glyphs: Glyphs = glyphs(detect_caps(self.console))
-        # TD-14: reveal the transcript folder at most once per launch (= per UI
-        # instance). The guard lives here so the menu stays declarative.
-        self._revealed = False
+        # TD-14: reveal the output folder at most once per launch (= per UI instance),
+        # for the highest priority seen. 0 = nothing revealed yet. The guard lives here
+        # so the menu stays declarative.
+        self._revealed_priority = 0
 
     # -- input (cancel → EOFError, the loop's clean-exit) -------------------- #
     def _ask(self, question: questionary.Question) -> object:
@@ -309,19 +318,21 @@ class RichQuestionaryUI:
         return str(answer) if answer else None
 
     # -- reveal (TD-14) ------------------------------------------------------ #
-    def reveal_dir(self, path: Path) -> None:
+    def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None:
         """Open the OS file browser at ``path`` in the background — once per launch.
 
-        Fires once per launch on the folder the chosen flow produced: the transcripts
-        folder after a transcript save, or the audio folder after an MP3-only run (the
-        menu picks which). Windows only (guarded on ``nt``); on the WSL dev box it is a
-        no-op. The pop opens *without* stealing focus from the console (the operator's
-        "в фоне"). Failure is non-fatal — revealing a folder must never mask a completed
-        run — but instead of swallowing it silently we log a one-line fallback so a
-        missing pop is diagnosable."""
-        if self._revealed:
+        Fires once per launch on the folder the chosen flow produced: the ``summaries``
+        folder after a summary (``REVEAL_SUMMARY``) or the ``audio`` folder after an
+        MP3-only run (``REVEAL_AUDIO``). Transcripts are never revealed (TD-14). A higher
+        ``priority`` supersedes a lower one already shown this launch, so a summary's
+        folder always wins over an earlier audio pop. Windows only (guarded on ``nt``); on
+        the WSL dev box it is a no-op. The pop opens *without* stealing focus from the
+        console (the operator's "в фоне"). Failure is non-fatal — revealing a folder must
+        never mask a completed run — but instead of swallowing it silently we log a
+        one-line fallback so a missing pop is diagnosable."""
+        if priority <= self._revealed_priority:
             return
-        self._revealed = True
+        self._revealed_priority = priority
         if os.name != "nt":
             return
         if not self._open_in_background(path):
@@ -478,7 +489,7 @@ class StubUI:
         self.answers: list[object] = list(answers or [])
         self.messages: list[tuple[str, str]] = []
         self.progress_values: list[float] = []
-        self._revealed = False  # mirrors the once-per-launch reveal guard (TD-14)
+        self._revealed_priority = 0  # mirrors the once-per-launch reveal guard (TD-14)
 
     def _pop(self) -> object:
         if not self.answers:
@@ -519,12 +530,13 @@ class StubUI:
         answer = self._pop()
         return None if answer is None else str(answer)
 
-    def reveal_dir(self, path: Path) -> None:
-        """Record the reveal once per instance (mirrors the production once-per-launch
-        guard), so a test can assert it fired exactly once across multiple transcribes."""
-        if self._revealed:
+    def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None:
+        """Record the reveal once per instance for the highest priority seen (mirrors the
+        production guard), so a test can assert summaries supersede an earlier audio pop
+        and that it fires at most once per priority across a launch."""
+        if priority <= self._revealed_priority:
             return
-        self._revealed = True
+        self._revealed_priority = priority
         self.messages.append(("reveal_dir", str(path)))
 
     def info(self, message: str) -> None:

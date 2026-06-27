@@ -86,17 +86,6 @@ can't transcribe-and-stop on a video without paying for a summary. Redesign to b
 cover all variants (likely Summary / Transcript only / MP3 only / MP3 + summary); remove the misleading framing.
 Needs an operator design call on the exact wording/option set (consider `/office-hours`).
 
-### TD-14 — Folder-open hierarchy reveals the wrong directory (REOPENED)
-
-Severity: LOW · Reopened 2026-06-27 (operator-raised; first closed 2026-06-23) · Trigger: **active** · SoT: this file
-
-`reveal_dir` is once-per-launch (`self._revealed`). `_transcribe_to_checkpoint` (`menu.py:323`) reveals
-`output/transcripts`; MP3-only (`menu.py:404`) reveals `output/audio`; `_run_summary` reveals nothing — so after a
-summary the TRANSCRIPTS folder pops, which is wrong. Operator wants: NEVER open transcripts; reveal
-`output/summaries` (highest priority) or `output/audio`, priority summaries > audio. FIX: remove the transcripts
-reveal from `_transcribe_to_checkpoint`; reveal `output/summaries` after a successful summary in `_run_summary`;
-keep the audio reveal for MP3-only; once-per-launch + summaries-wins-over-audio.
-
 ---
 
 ## Closed debts (compact — verbose history in git)
@@ -117,9 +106,12 @@ keep the audio reveal for MP3-only; once-per-launch + summaries-wins-over-audio.
   menu-loop-top); full TUI ruled out of scope. `f4fd2ca`.
 - **TD-13 — Submenu back-navigation** ✓ CLOSED 2026-06-23 (was MEDIUM). Explicit `← Back` entries; ESC stays
   exit (distinguishing it would risk the `_ask` cancel/exit contract). `f4fd2ca`.
-- **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23, ⚠ REOPENED 2026-06-27 (see Open debts — wrong
-  reveal hierarchy). Original close: `UI.reveal_dir` (`nt`-guarded, once/launch); extended 06-25 to MP3-only flow +
-  no-focus-steal `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`.
+- **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23, REOPENED + RE-CLOSED 2026-06-27. Reopen: the
+  once-per-launch `_revealed` bool popped `transcripts` after a summary (transcribe revealed first; `_run_summary`
+  revealed nothing). Fix: `reveal_dir(path, *, priority)` with `REVEAL_AUDIO`/`REVEAL_SUMMARY` — a higher priority
+  supersedes a lower one already shown this launch; transcripts are never revealed; MP3-only pops `audio`,
+  `_run_summary` pops `summaries` (wins over audio). Original close: `nt`-guarded once/launch + no-focus-steal
+  `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`, 06-25 MP3-only ext.
 - **TD-12 — `.mp3` input offered no-op MP3/Both actions** ✓ CLOSED 2026-06-21, ⚠ REOPENED 2026-06-27 (see Open
   debts — menu misrepresents what's kept + non-mp3 gap). Original close: mp3 gets a trimmed menu
   (Summary / Transcript only / ← Back) via `extract.is_mp3`. `f4fd2ca`, revised `738cf9e`.

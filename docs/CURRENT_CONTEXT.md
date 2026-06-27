@@ -2,7 +2,7 @@
 
 **Updated:** 2026-06-27 (**TD-16 v2 reviewed; Tier-1 fixes shipped (`52a36ef`); Tier-2 cleanup DONE — gate
 GREEN (345 passed)**). Next: operator paid reference run (TD-16 closure gate) → **v2.0.0** (breaking; v1.1.0
-was last release). TD-12 menu + TD-14 folder-open reopened in TECHNICAL_DEBT — fix next session.
+was last release). TD-14 folder-open fixed; TD-12 menu redesign still open (next session).
 **Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
@@ -56,15 +56,13 @@ are the v2 acceptance bar (CLAUDE.md).
 
 1. **Paid reference acceptance (operator, Windows) — the TD-16 closure gate:** one ~3h-lecture run; check the
    5 fidelity properties by eye, jump each anchor to the recording, confirm ≤5 pp + readable.
-2. **TD-12 + TD-14 (operator-raised, reopened in TECHNICAL_DEBT — implement next session):**
-   - **TD-12** — "What should EchoGist produce?" menu (`menu.py:333-410`) is misleading + has a gap. "Summary"
-     vs "Both (MP3+summary)" implies Summary uses no audio (nonsense for video — extraction is always needed to
-     transcribe); the real difference is only whether the MP3 is KEPT. And non-mp3 has NO "Transcript only"
-     (mp3 does). Redesign to be honest about what's kept and cover all variants (likely Summary / Transcript
-     only / MP3 only / MP3 + summary); needs an operator design call (`/office-hours`).
-   - **TD-14** — folder-open hierarchy: stop revealing `output/transcripts`; reveal `output/summaries`
-     (priority) or `output/audio`. Move the reveal out of `_transcribe_to_checkpoint` into `_run_summary`
-     (summaries) + keep MP3-only `audio`; once-per-launch, summaries > audio.
+2. **TD-12 (operator-raised — implement next session):** "What should EchoGist produce?" menu
+   (`menu.py:333-410`) is misleading + has a gap. "Summary" vs "Both (MP3+summary)" implies Summary uses no
+   audio (nonsense for video — extraction is always needed to transcribe); the real difference is only whether
+   the MP3 is KEPT. And non-mp3 has NO "Transcript only" (mp3 does). Redesign to be honest about what's kept and
+   cover all variants (likely Summary / Transcript only / MP3 only / MP3 + summary); needs an operator design
+   call (`/office-hours`).
+   - **TD-14 — DONE** (`reveal_dir(priority)`: summaries>audio, transcripts never revealed; +5 menu tests).
 3. **v2.0.0 release** (breaking — Summary shape changed; VERSION 1.1.0 → 2.0.0). Cut it via the release
    script, NOT `/ship`: bump `VERSION` + write the `## [2.0.0]` `CHANGELOG.md` section, `/cp`, push the
    annotated tag `v2.0.0`, then `python3 scripts/release.py` (PAT in `ECHOGIST_GITHUB_TOKEN`). **T8** offline
@@ -73,7 +71,7 @@ are the v2 acceptance bar (CLAUDE.md).
 ## Dev env
 
 WSL `.venv` (py3.12), GPU stack installed, RTX 4060 visible. Gate: `bash scripts/dev-loop` (ruff + mypy
---strict + pytest) — **GREEN: 345 passed** (was 350; 5 dead cost tests removed in Tier-2). `ANTHROPIC_API_KEY`
+--strict + pytest) — **GREEN: 348 passed**. `ANTHROPIC_API_KEY`
 not set here; network libs lazy/offline so the killswitch holds.
 Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 
@@ -82,8 +80,7 @@ Telemetry off, PROACTIVE false. `/cp` is standing commit+push authorization.
 - **Blockers:** none in-repo — gate green. Closure gate is the operator paid reference run (Windows; `ANTHROPIC_API_KEY` not in WSL).
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **TD-16** (active; closes on paid reference
   acceptance; T8 eval is in its orbit) · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) ·
-  **TD-12 (REOPENED — produce-menu redesign, MEDIUM)** · **TD-14 (REOPENED — folder-open: summaries>audio, no
-  transcripts, LOW)**. **Closed:** TD-1..6, 8, 10, 11, 13, 15.
+  **TD-12 (REOPENED — produce-menu redesign, MEDIUM)**. **Closed:** TD-1..6, 8, 10, 11, 13, 14, 15.
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
   SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
