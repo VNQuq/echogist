@@ -176,12 +176,12 @@ def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
     # on top of transcribe → summarize → render.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", True, "4"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 1
     assert calls["render"] == 1
-    assert calls["extract"] == 1  # TD-12: Summary keeps the MP3 baseline
+    assert calls["extract"] == 1  # keep-MP3 confirmed (default), so the MP3 is saved
     assert "Done — summary written to" in stub.log_text
     # The MP3 baseline landed in output/audio, and the transcript checkpoint was saved.
     assert list((tmp_path / "output" / "audio").glob("*.mp3"))
@@ -204,9 +204,9 @@ def test_local_file_transcript_keeps_mp3_and_skips_summarize(tmp_path: Path) -> 
     # saves the checkpoint, and STOPS before the paid summary (the new gap-closing path).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "transcript", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "transcript", True, "4"])
     assert menu.run_menu(deps) == 0
-    assert calls["extract"] == 1  # MP3 baseline kept
+    assert calls["extract"] == 1  # keep-MP3 confirmed (default), so the MP3 is saved
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 0  # stops before paying for a summary
     assert list((tmp_path / "output" / "audio").glob("*.mp3"))
@@ -245,6 +245,34 @@ def test_mp3_source_transcript_only(tmp_path: Path) -> None:
     assert list((tmp_path / "output" / "transcripts").glob("*.txt"))
 
 
+def test_mp3_source_reencode(tmp_path: Path) -> None:
+    # Operator request (reverses TD-12): an mp3 source can be re-encoded to a smaller VBR mp3.
+    # It runs the SAME extraction path as a video MP3-only, never transcribes/summarizes, and
+    # pops the audio folder. The progress label distinguishes a re-encode from a conversion.
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "mp3", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1  # the mp3 is re-encoded
+    assert calls["transcribe"] == 0
+    assert calls["summarize"] == 0
+    assert ("progress", "Re-encoding MP3") in stub.messages  # not "Converting to MP3"
+    reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
+    assert len(reveals) == 1 and reveals[0][1].endswith("audio")
+
+
+def test_mp3_source_reencode_failure_is_fatal(tmp_path: Path) -> None:
+    # Re-encode IS the deliverable, so a failed extract is fatal — it aborts to the menu
+    # (like a video MP3-only), never silently degrades.
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "mp3", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 1
+    assert calls["transcribe"] == 0
+    assert "Returning to the main menu" in stub.log_text  # bubbled to the loop handler
+
+
 def test_local_file_action_back_returns_to_menu(tmp_path: Path) -> None:
     # TD-13: "← Back" from the action menu does nothing and returns to the main menu.
     src = tmp_path / "clip.wav"
@@ -261,7 +289,9 @@ def test_video_summary_extract_failure_degrades(tmp_path: Path) -> None:
     # to transcribe + summarize (the paid deliverable outranks the audio artifact).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"], extract_error=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["1", str(src), "summary", True, "4"], extract_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # attempted
     assert calls["transcribe"] == 1  # but the run continued
@@ -277,7 +307,9 @@ def test_video_summary_extract_oserror_degrades(tmp_path: Path) -> None:
     # transcription, destroying the primary deliverable the DEGRADE contract must preserve.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"], extract_oserror=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["1", str(src), "summary", True, "4"], extract_oserror=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # attempted
     assert calls["transcribe"] == 1  # degraded + continued, did NOT abort to menu
@@ -291,7 +323,9 @@ def test_video_transcript_extract_failure_degrades(tmp_path: Path) -> None:
     # warns and continues to transcribe + reveal transcripts, never aborts.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "transcript", "4"], extract_error=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["1", str(src), "transcript", True, "4"], extract_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 1  # continued
@@ -313,11 +347,51 @@ def test_video_mp3_only_extract_failure_is_fatal(tmp_path: Path) -> None:
     assert "Returning to the main menu" in stub.log_text  # bubbled to the loop handler
 
 
+def test_video_summary_keep_mp3_declined_skips_extract(tmp_path: Path) -> None:
+    # Operator request #3: the keep-MP3 confirm is checked by default; declining it (False)
+    # skips the conversion entirely on a Summary run — no extract call, no MP3 on disk — while
+    # the primary summary pipeline still runs.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", False, "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 0  # opted out of keeping the MP3
+    assert calls["transcribe"] == 1
+    assert calls["summarize"] == 1
+    assert not list((tmp_path / "output" / "audio").glob("*.mp3"))  # no MP3 kept
+    assert ("confirm", "Also save the converted MP3?") in stub.messages
+
+
+def test_video_transcript_keep_mp3_declined_skips_extract(tmp_path: Path) -> None:
+    # The same opt-out applies to a Transcript run: decline → no conversion, transcript still
+    # produced.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "transcript", False, "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 0
+    assert calls["transcribe"] == 1
+    assert calls["summarize"] == 0
+    assert not list((tmp_path / "output" / "audio").glob("*.mp3"))
+
+
+def test_mp3_source_summary_never_asks_keep_mp3(tmp_path: Path) -> None:
+    # An mp3 source has nothing to extract, so the keep-MP3 confirm must NOT appear (it would
+    # be a meaningless prompt). The trimmed flow goes straight to transcribe → summarize.
+    src = tmp_path / "clip.mp3"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["extract"] == 0
+    assert calls["summarize"] == 1
+    assert ("confirm", "Also save the converted MP3?") not in stub.messages
+
+
 def test_flow_clears_screen_on_entry(tmp_path: Path) -> None:
     # TD-11: each flow clears the console on entry so prior menu chrome doesn't pile up.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "summary", "4"])
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "summary", True, "4"])
     assert menu.run_menu(deps) == 0
     assert ("clear", "") in stub.messages
 
@@ -329,7 +403,9 @@ def test_summary_reveals_summaries_folder_once(tmp_path: Path) -> None:
     a.write_bytes(b"x")
     b = tmp_path / "b.wav"
     b.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(a), "summary", "1", str(b), "summary", "4"])
+    deps, stub, _ = _make_deps(
+        tmp_path, ["1", str(a), "summary", True, "1", str(b), "summary", True, "4"]
+    )
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1  # once per launch, not once per summary
@@ -469,7 +545,9 @@ def test_audio_not_revealed_after_summary(tmp_path: Path) -> None:
     wav_a.write_bytes(b"x")
     wav_b = tmp_path / "b.wav"
     wav_b.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["1", str(wav_a), "summary", "1", str(wav_b), "mp3", "4"])
+    deps, stub, _ = _make_deps(
+        tmp_path, ["1", str(wav_a), "summary", True, "1", str(wav_b), "mp3", "4"]
+    )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
@@ -483,7 +561,7 @@ def test_transcript_not_revealed_after_summary(tmp_path: Path) -> None:
     wav.write_bytes(b"x")
     mp3 = tmp_path / "b.mp3"
     mp3.write_bytes(b"x")
-    answers = ["1", str(wav), "summary", "1", str(mp3), "transcript", "4"]
+    answers = ["1", str(wav), "summary", True, "1", str(mp3), "transcript", "4"]
     deps, stub, _ = _make_deps(tmp_path, answers)
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -511,9 +589,14 @@ def test_action_choice_keys_match_flow_branches(tmp_path: Path) -> None:
     # not surface in a behavior test. Pin the menu Choice keys to the keys the flow handles.
     # Video menu: extraction (mp3), summary, transcript, plus the back control.
     assert {k for k, _ in menu._ACTION_CHOICES} == {"mp3", "summary", "transcript", "__back__"}
-    # mp3 menu has nothing to extract, so it must NOT offer the "mp3" key (else an mp3 source
-    # could fall through to a paid summary via the implicit dispatch — the wrong-branch trap).
-    assert {k for k, _ in menu._MP3_ACTION_CHOICES} == {"summary", "transcript", "__back__"}
+    # mp3 menu now offers the "mp3" key too — an mp3 source can be re-encoded to a smaller VBR
+    # file (operator request, reversing TD-12). It shares the "mp3" branch with the video menu.
+    assert {k for k, _ in menu._MP3_ACTION_CHOICES} == {
+        "summary",
+        "transcript",
+        "mp3",
+        "__back__",
+    }
 
 
 def test_production_reveal_dir_guard_is_monotone_by_priority(
@@ -561,7 +644,7 @@ def test_local_file_picker_remembers_directory(
 ) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "1", "4"])
+    deps, _, calls = _make_deps(tmp_path, ["1", str(src), "summary", True, "4"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert isolate_last_dir == [src.parent]  # the picked file's parent is saved

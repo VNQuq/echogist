@@ -4,8 +4,9 @@ The main menu loops until the operator explicitly exits. It wires the pure stage
 (extract, transcribe, guard, summarize, render) and the cost flow (T8) around the
 three input sources:
 
-* **1. Local file** — audio or video. A video → {MP3 only · summary · transcript} with
-  MP3 always kept as the baseline (TD-12); an mp3 → {summary · transcript only}.
+* **1. Local file** — audio or video. A video → {MP3 only · summary · transcript}; on a
+  summary/transcript run the MP3 is kept by default with a per-run opt-out confirm. An mp3 →
+  {summary · transcript only · re-encode to a smaller MP3}.
 * **2. Saved transcript** — pick a saved ``output/transcripts/*.txt`` or type a
   path; re-summarize it. This is the artifact-based recovery path (plan §3): a
   summarize that failed (F2/F4/F5) re-runs from here without re-transcribing.
@@ -383,13 +384,15 @@ _ACTION_CHOICES: tuple[Choice, ...] = (
     ("__back__", "← Back"),
 )
 
-# TD-12: an mp3 has nothing to extract — re-encoding it would only lose quality — so the
-# MP3-only option is meaningless and dropped. The operator still chooses whether to stop at
-# the saved transcript or go on to a summary. Shares the semantic "summary"/"transcript"
-# keys with the video menu so the flow ladder is one shared branch.
+# TD-12 dropped MP3-only for an mp3 source (re-encoding only loses quality). Reversed by
+# operator request: a re-encode to VBR ~q2 meaningfully SHRINKS an oversized/high-bitrate
+# mp3, which is the whole point here — the "mp3" key drives the same _convert_to_mp3 path as
+# the video menu (extract_audio re-encodes an mp3 source fine). Shares the semantic keys with
+# the video menu so the flow ladder is one shared branch.
 _MP3_ACTION_CHOICES: tuple[Choice, ...] = (
     ("summary", "Summary"),
     ("transcript", "Transcript only"),
+    ("mp3", "Re-encode to a smaller MP3"),
     ("__back__", "← Back"),
 )
 
@@ -405,10 +408,12 @@ _AV_FILETYPES: tuple[tuple[str, str], ...] = (
 def _flow_local_file(deps: Deps) -> None:
     """Source 1 — a local audio/video file → {MP3 only · summary · transcript} (§5, TD-12).
 
-    For a video, MP3 is the baseline: every branch extracts and keeps it in output/audio
-    (MP3-only fails loud if extraction fails; Summary/Transcript degrade — warn + continue,
-    since the paid/primary deliverable outranks the audio artifact). An mp3 source skips
-    extraction and offers the two-way {summary · transcript only}.
+    For a video, MP3-only fails loud if extraction fails; on a Summary/Transcript run the MP3
+    is a kept-by-default SECONDARY artifact (a per-run confirm, checked by default, lets the
+    operator opt out) and degrades — warn + continue — since the paid/primary deliverable
+    outranks the audio artifact. An mp3 source skips that keep-question and offers a three-way
+    {summary · transcript only · re-encode to a smaller MP3}; the re-encode re-runs extraction
+    on the mp3 to shrink an oversized/high-bitrate file.
 
     The operator picks the file through :meth:`UI.pick_file` (TD-10): a native OS
     dialog where one is available, an in-console Tab-completing prompt otherwise. The
@@ -446,31 +451,35 @@ def _flow_local_file(deps: Deps) -> None:
     if action == "__back__":  # TD-13: back out to the main menu, do nothing
         return
 
-    # TD-12: MP3 is the baseline for every video path — extract + KEEP it on every branch
-    # (an mp3 source has nothing to extract). The conversion is the one long blocking step,
-    # so drive a %/ETA bar off ffmpeg's progress.
-    if not is_mp3:
-        audio_dir = deps.base / "output" / "audio"
+    # MP3 conversion (the one long blocking step, so it runs behind a %/ETA bar off ffmpeg's
+    # progress). It is either the deliverable — a video "MP3 only" extraction, or an mp3
+    # source re-encoded to a smaller VBR file (operator request) — or a kept-by-default
+    # SECONDARY artifact on a video Summary/Transcript run.
+    audio_dir = deps.base / "output" / "audio"
 
-        def _convert_to_mp3() -> None:
-            with ui.progress("Converting to MP3", total=1.0) as bar:
-                mp3 = deps.extract_audio(source, audio_dir, progress=bar.advance_to, log=ui.info)
-                bar.done()
-            ui.success(f"Saved MP3: {mp3}")
+    def _convert_to_mp3() -> None:
+        label = "Re-encoding MP3" if is_mp3 else "Converting to MP3"
+        with ui.progress(label, total=1.0) as bar:
+            mp3 = deps.extract_audio(source, audio_dir, progress=bar.advance_to, log=ui.info)
+            bar.done()
+        ui.success(f"Saved MP3: {mp3}")
 
-        if action == "mp3":
-            # MP3-only: extraction IS the deliverable, so a failure is fatal — let it bubble
-            # to the loop's abort-to-menu handler (nothing else to make).
-            _convert_to_mp3()
-            ui.reveal_dir(audio_dir, priority=REVEAL_AUDIO)  # TD-14: pop audio, then stop
-            return
-        # Summary / Transcript: the MP3 is the SECONDARY artifact (Issue 1 — DEGRADE). The
-        # primary deliverable (paid summary / transcript) outranks it, so a failed extract
-        # warns and continues. extract_audio raises ExtractError (ffmpeg/F11) OR a bare
-        # OSError (mkdir / os.replace into a locked output/audio — likely on Windows, where
-        # reveal_dir may be holding that folder open); BOTH are in _RECOVERABLE and would
-        # otherwise bubble to the loop's abort-to-menu handler, destroying the primary
-        # deliverable. Catch both here so an audio failure degrades instead of aborting.
+    if action == "mp3":
+        # The MP3 IS the deliverable (video extraction or an mp3 re-encode), so a failure is
+        # fatal — let it bubble to the loop's abort-to-menu handler (nothing else to make).
+        _convert_to_mp3()
+        ui.reveal_dir(audio_dir, priority=REVEAL_AUDIO)  # TD-14: pop audio, then stop
+        return
+
+    # Summary / Transcript. For a video/non-mp3 source the MP3 is a SECONDARY artifact kept
+    # BY DEFAULT (operator request, reversing TD-12's silent-baseline): a per-run confirm,
+    # checked by default, lets the operator opt out. An mp3 source has nothing to extract, so
+    # the question never arises. On the kept path a failed extract DEGRADES (warn + continue):
+    # the primary deliverable (paid summary / transcript) outranks the audio artifact, so
+    # catch both ExtractError (ffmpeg/F11) and a bare OSError (mkdir / os.replace into a
+    # locked output/audio on Windows) here — either would otherwise bubble to the loop's
+    # abort-to-menu handler and destroy the primary deliverable.
+    if not is_mp3 and ui.confirm("Also save the converted MP3?", default=True):
         try:
             _convert_to_mp3()
         except (ExtractError, OSError) as exc:
