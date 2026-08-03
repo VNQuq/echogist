@@ -369,6 +369,42 @@ def test_mp3_conversion_drives_progress_bar(tmp_path: Path) -> None:
     assert ("progress", "Converting to MP3") in stub.messages
 
 
+def test_successful_stage_completes_progress_bar(tmp_path: Path) -> None:
+    # TD-17 baseline: a clean run completes its bar and never records a failure.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "mp3", "4"])
+    assert menu.run_menu(deps) == 0
+    assert "fail" not in stub.progress_events
+    assert "done" in stub.progress_events
+
+
+def test_failed_stage_fails_progress_bar_not_completes_it(tmp_path: Path) -> None:
+    # TD-17 (fatal path): when the conversion stage raises, its bar is FAILED (stopped at its
+    # last fraction), never snapped to a false 100% just before the error panel. MP3-only is
+    # fatal, so exactly one bar runs and it fails.
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, _ = _make_deps(tmp_path, ["1", str(src), "mp3", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert stub.progress_events == ["fail"]  # failed, never "done"
+    assert "Returning to the main menu" in stub.log_text  # still aborted to the menu
+
+
+def test_degraded_stage_fails_its_bar_then_next_bar_completes(tmp_path: Path) -> None:
+    # TD-17 (degrade path, shared handle): on a video Summary a failed MP3 extract DEGRADES —
+    # its conversion bar fails, then the transcription bar that follows completes normally. The
+    # fix is per-bar, so one failure never taints the next bar. (Default auto-accept → no beat.)
+    src = tmp_path / "clip.wav"
+    src.write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["1", str(src), "summary", "4"], extract_error=True)
+    assert menu.run_menu(deps) == 0
+    assert calls["transcribe"] == 1  # degraded + continued
+    assert stub.progress_events[0] == "fail"  # the conversion bar failed
+    assert "fail" not in stub.progress_events[1:]  # no later bar failed
+    assert "done" in stub.progress_events  # the transcription bar completed
+
+
 def test_mp3_only_reveals_audio_folder(tmp_path: Path) -> None:
     # Bug #2: an MP3-only run pops the audio folder (the chosen flow's output), not the
     # transcripts folder, and only once per launch.
@@ -591,12 +627,39 @@ def test_over_threshold_yes_makes_call(tmp_path: Path) -> None:
 
 def test_below_threshold_proceeds_without_confirm(tmp_path: Path) -> None:
     # A cheap call must NOT consume a confirm answer — the shown estimate is the
-    # acknowledgment (v1.1 §5). Queue has no confirm bool between pick and exit.
+    # acknowledgment (v1.1 §5). Auto-accept is on by default, so the below-threshold path also
+    # shows no "press Enter" beat: the queue has no confirm bool AND no text beat before exit.
     _write_settings(tmp_path, confirm_threshold_usd=100.0)  # everything is "cheap"
     _seed_transcript(tmp_path)
-    deps, _, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
+    assert not [m for m in stub.messages if m[0] == "text" and "Press Enter" in m[1]]
+
+
+def test_below_threshold_shows_beat_when_auto_accept_off(tmp_path: Path) -> None:
+    # TD-9: with auto-accept turned OFF, the cheap path gains a non-decision "press Enter"
+    # acknowledge beat before the paid call — a last chance to Ctrl-C out. The queued "" is
+    # that Enter; the beat is non-blocking, so the call still runs.
+    _write_settings(tmp_path, confirm_threshold_usd=100.0, auto_accept_under_threshold=False)
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 1
+    beats = [m for m in stub.messages if m[0] == "text" and "Press Enter to summarize" in m[1]]
+    assert len(beats) == 1  # fired exactly once, on the below-threshold path
+
+
+def test_above_threshold_confirms_even_with_auto_accept_on(tmp_path: Path) -> None:
+    # Auto-accept only governs the cheap path — above the threshold the explicit y/N gate
+    # ALWAYS applies (and no beat), even with auto-accept on (the default).
+    _write_settings(tmp_path, confirm_threshold_usd=0.0, auto_accept_under_threshold=True)
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", True, "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 1
+    assert any(m[0] == "confirm" for m in stub.messages)  # explicit gate fired
+    assert not [m for m in stub.messages if m[0] == "text" and "Press Enter" in m[1]]  # no beat
 
 
 # --------------------------------------------------------------------------- #
@@ -721,6 +784,15 @@ def test_settings_bad_threshold_unchanged(tmp_path: Path) -> None:
     deps, stub, _ = _make_deps(tmp_path, ["3", "4", "abc", "4"])
     assert menu.run_menu(deps) == 0
     assert "isn't a number" in stub.log_text
+
+
+def test_settings_toggle_auto_accept_persists(tmp_path: Path) -> None:
+    # menu -> settings -> field "5" (auto-accept) -> confirm False. Default is True, so this
+    # flips it off and persists. The confirm answer is popped as a bool by StubUI.
+    deps, stub, _ = _make_deps(tmp_path, ["3", "5", False, "4"])
+    assert menu.run_menu(deps) == 0
+    assert "Saved." in stub.log_text
+    assert config.load_settings(tmp_path / "settings.json").auto_accept_under_threshold is False
 
 
 # --------------------------------------------------------------------------- #

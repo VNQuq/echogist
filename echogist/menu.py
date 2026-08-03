@@ -243,12 +243,25 @@ def _run_summary(
         )
     ui.info(cost.estimate_message(estimate, tier))
 
-    def _confirm(prompt: str, default: bool) -> bool:  # adapt ui.confirm's kw-only default
-        return ui.confirm(prompt, default=default)
+    # Threshold friction (plan §3): above the operator's threshold, an explicit y/N gate
+    # (default No) must clear before spending — always, regardless of the flag below. At/below
+    # threshold the call always runs (a y/N there could wrongly decline a call that just
+    # proceeds); TD-9 makes that path operator-controlled via settings.auto_accept_under_threshold.
+    # Default (True) → proceed immediately, the shown estimate is the acknowledgment. False → a
+    # non-decision "press Enter" acknowledge beat first, so the operator can Ctrl-C out.
+    if cost.requires_explicit_confirmation(estimate, settings.confirm_threshold_usd):
 
-    if not cost.confirm_proceed(estimate, settings.confirm_threshold_usd, confirm=_confirm):
-        ui.info("Summarization cancelled; your transcript is saved.")
-        return
+        def _confirm(prompt: str, default: bool) -> bool:  # adapt ui.confirm's kw-only default
+            return ui.confirm(prompt, default=default)
+
+        if not cost.confirm_proceed(estimate, settings.confirm_threshold_usd, confirm=_confirm):
+            ui.info("Summarization cancelled; your transcript is saved.")
+            return
+    elif not settings.auto_accept_under_threshold:
+        # Auto-accept off: the operator wants a non-decision acknowledge beat on the cheap
+        # path — a chance to Ctrl-C out before spending. Default is auto-accept ON, where the
+        # shown estimate is the acknowledgment and the call just proceeds.
+        ui.text("Press Enter to summarize, or Ctrl-C to cancel")
 
     summaries_dir = deps.base / "output" / "summaries"
     # Artifact-resume (decision #2): completed phases persist to a STABLE per-source path
@@ -509,6 +522,7 @@ _SETTINGS_FIELDS: tuple[Choice, ...] = (
     ("2", "Output format"),
     ("3", "Model tier"),
     ("4", "Cost confirm threshold"),
+    ("5", "Auto-accept at or below threshold"),
     ("__back__", "← Back"),
 )
 
@@ -526,6 +540,7 @@ def _flow_settings(deps: Deps) -> None:
             ("Output format", settings.output_format),
             ("Model tier", settings.model_tier),
             ("Confirm threshold", f"${settings.confirm_threshold_usd:,.2f}"),
+            ("Auto-accept ≤ threshold", "on" if settings.auto_accept_under_threshold else "off"),
         ],
     )
 
@@ -552,6 +567,11 @@ def _flow_settings(deps: Deps) -> None:
             ui.warn("Threshold must be >= 0; unchanged.")
             return
         settings.confirm_threshold_usd = threshold
+    elif field_choice == "5":
+        settings.auto_accept_under_threshold = ui.confirm(
+            "Auto-accept summaries whose estimate is at or below the threshold?",
+            default=settings.auto_accept_under_threshold,
+        )
 
     config.save_settings(settings, deps.settings_path)
     ui.success("Saved.")

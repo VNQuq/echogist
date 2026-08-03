@@ -53,9 +53,11 @@ core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-v
 ## Blockers / debts / SoT
 
 - **Blockers:** none. v2.0.0 shipped.
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): TD-20 (PDF iteration, LOW, operator-accepted as-is)
-  · TD-7 non-TTY UI (LOW) · TD-9 cheap-call Enter beat (LOW) · TD-17 progress bar 100% on failed stage (LOW).
-  **Closed:** TD-1..6, 8, 10..16, 18, 19, 21.
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** The registry is fully closed on branch
+  `chore/close-tech-debt` (2026-08-03) — TD-9 (cheap-path acknowledge beat, gated by a new Settings flag
+  `auto_accept_under_threshold`, default True = auto-accept) + TD-17 (failure-aware progress bar) implemented;
+  TD-7 (non-TTY UI) + TD-20 (PDF polish) closed WONTFIX. **Closed:** TD-1..21. Only forward item is T8 (offline
+  LLM-judge eval, P3 enhancement, not debt).
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
   SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).

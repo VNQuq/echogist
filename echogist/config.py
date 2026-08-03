@@ -207,6 +207,13 @@ class Settings:
     output_format: str
     model_tier: str
     confirm_threshold_usd: float
+    # When True (default), a summary whose estimate is at or below ``confirm_threshold_usd``
+    # runs immediately — the shown estimate is the acknowledgment. When False, that cheap
+    # path first shows a non-decision "press Enter" acknowledge beat so the operator can
+    # Ctrl-C out (TD-9). Above the threshold an explicit y/N confirm always applies,
+    # regardless of this flag. Has a default so an older settings.json (written before the
+    # field existed) still loads, and direct ``Settings(...)`` callers stay valid.
+    auto_accept_under_threshold: bool = True
 
 
 def default_settings() -> Settings:
@@ -223,6 +230,7 @@ def default_settings() -> Settings:
         output_format="pdf",
         model_tier="economy",
         confirm_threshold_usd=0.50,
+        auto_accept_under_threshold=True,
     )
 
 
@@ -485,11 +493,18 @@ def _validate_settings(data: dict[str, Any], source: str) -> Settings:
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or threshold < 0:
         raise ConfigError(f"{source}: confirm_threshold_usd must be a number >= 0.")
 
+    # Optional (added after the original four): absent in an older settings.json → default
+    # True (auto-accept). Present-but-not-a-bool is a loud error, like the other fields.
+    auto_accept = data.get("auto_accept_under_threshold", True)
+    if not isinstance(auto_accept, bool):
+        raise ConfigError(f"{source}: auto_accept_under_threshold must be true or false.")
+
     return Settings(
         summary_language=language,
         output_format=output_format,
         model_tier=model_tier,
         confirm_threshold_usd=float(threshold),
+        auto_accept_under_threshold=auto_accept,
     )
 
 

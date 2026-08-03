@@ -282,6 +282,41 @@ def test_missing_key_errors(tmp_path: Path) -> None:
         load_settings(tmp_path / "settings.json")
 
 
+def test_auto_accept_defaults_true() -> None:
+    # New field: defaults to auto-accepting the below-threshold (cheap) path.
+    assert default_settings().auto_accept_under_threshold is True
+
+
+def test_auto_accept_absent_in_old_file_defaults_true(tmp_path: Path) -> None:
+    # Backward-compat: a settings.json written before the field existed (the original four keys
+    # only) still loads — the missing flag defaults to True, not a "missing setting" error.
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf",'
+        '"model_tier":"balanced","confirm_threshold_usd":0.5}',
+    )
+    assert load_settings(tmp_path / "settings.json").auto_accept_under_threshold is True
+
+
+def test_auto_accept_explicit_false_loads(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf","model_tier":"balanced",'
+        '"confirm_threshold_usd":0.5,"auto_accept_under_threshold":false}',
+    )
+    assert load_settings(tmp_path / "settings.json").auto_accept_under_threshold is False
+
+
+def test_auto_accept_non_bool_errors(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf","model_tier":"balanced",'
+        '"confirm_threshold_usd":0.5,"auto_accept_under_threshold":"yes"}',
+    )
+    with pytest.raises(ConfigError, match="auto_accept_under_threshold"):
+        load_settings(tmp_path / "settings.json")
+
+
 def test_corrupt_settings_json_errors(tmp_path: Path) -> None:
     _write(tmp_path / "settings.json", "{not json")
     with pytest.raises(ConfigError, match="Could not read"):

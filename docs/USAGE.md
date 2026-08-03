@@ -112,7 +112,7 @@ flowchart LR
 
 ## Настройки
 
-**Settings** меняет четыре параметра и пишет их в `config/settings.json`.
+**Settings** меняет пять параметров и пишет их в `config/settings.json`.
 
 ![Меню настроек](images/settings.png)
 
@@ -122,6 +122,11 @@ flowchart LR
 | **Output format** | `pdf` / `md` | `pdf` |
 | **Model tier** | `economy` / `balanced` / `flagship` | `economy` |
 | **Cost confirm threshold** | сумма в USD | `$0.50` |
+| **Auto-accept at or below threshold** | вкл / выкл | вкл |
+
+При **Auto-accept = вкл** (по умолчанию) резюме дешевле порога запускается сразу. Выключи — и
+перед платным вызовом появится пауза «нажми Enter», чтобы можно было отменить (Ctrl-C). Дороже
+порога всегда спрашивает `y/n`, независимо от этой настройки.
 
 Тарифы модели:
 

@@ -80,10 +80,17 @@ REVEAL_SUMMARY = 3
 @runtime_checkable
 class ProgressHandle(Protocol):
     """A live progress bar. ``advance_to`` takes a 0.0..1.0 fraction (known duration →
-    %/ETA) or a running count (unknown duration → no-ETA readout); ``done`` completes it."""
+    %/ETA) or a running count (unknown duration → no-ETA readout); ``done`` completes it.
+
+    ``fail`` is the failure-aware counterpart to ``done`` (TD-17): when the stage inside
+    the bar raises, the context manager calls ``fail`` INSTEAD of ``done`` so the bar is
+    stopped at its last real fraction rather than snapped to a false 100% right before the
+    error panel. The two are mutually exclusive per run — exactly one fires on context exit.
+    """
 
     def advance_to(self, value: float) -> None: ...
     def done(self) -> None: ...
+    def fail(self) -> None: ...
 
 
 @runtime_checkable
@@ -397,9 +404,17 @@ class RichQuestionaryUI:
         ) as prog:
             task_id = prog.add_task(label, total=total)
             handle = _RichProgressHandle(prog, task_id, total)
+            # TD-17: complete the bar on a clean exit, but STOP (don't fill) it when the
+            # stage raised — a false 100% must never precede the error panel. ``BaseException``
+            # so a KeyboardInterrupt / GeneratorExit mid-stage is treated as a failure too,
+            # not a success; the exception is always re-raised, so the loop's error handling
+            # (warn/degrade or fatal return-to-menu) is unchanged.
             try:
                 yield handle
-            finally:
+            except BaseException:
+                handle.fail()
+                raise
+            else:
                 handle.done()
 
     @contextmanager
@@ -427,6 +442,13 @@ class _RichProgressHandle:
 
     def done(self) -> None:
         self._prog.update(self._task_id, completed=self._total)
+
+    def fail(self) -> None:
+        """Stop the bar WITHOUT completing it (TD-17): freeze the timer and leave the bar
+        at its last real fraction so a failed stage shows how far it got, not a false 100%.
+        ``stop_task`` marks the task stopped (elapsed/ETA freeze) but never touches
+        ``completed``; rich stops rendering when the enclosing ``Progress`` context exits."""
+        self._prog.stop_task(self._task_id)
 
 
 class _RichSpinnerHandle:
@@ -465,16 +487,22 @@ def build_default_ui() -> UI:
 # --------------------------------------------------------------------------- #
 class _StubProgressHandle:
     """No-op :class:`ProgressHandle`: records advances so a test can assert progress
-    fired, but renders nothing (no TTY)."""
+    fired, but renders nothing (no TTY). ``done``/``fail`` append their name to a shared
+    ``events`` list so a test can assert the bar completed on success and was FAILED (not
+    completed) when the stage raised (TD-17)."""
 
-    def __init__(self, recorder: list[float]) -> None:
+    def __init__(self, recorder: list[float], events: list[str]) -> None:
         self._recorder = recorder
+        self._events = events
 
     def advance_to(self, value: float) -> None:
         self._recorder.append(value)
 
     def done(self) -> None:
-        pass
+        self._events.append("done")
+
+    def fail(self) -> None:
+        self._events.append("fail")
 
 
 class _StubSpinnerHandle:
@@ -492,6 +520,7 @@ class StubUI:
         self.answers: list[object] = list(answers or [])
         self.messages: list[tuple[str, str]] = []
         self.progress_values: list[float] = []
+        self.progress_events: list[str] = []  # "done"/"fail" per bar exit (TD-17)
         self._revealed_priority = 0  # mirrors the once-per-launch reveal guard (TD-14)
 
     def _pop(self) -> object:
@@ -562,7 +591,16 @@ class StubUI:
     @contextmanager
     def progress(self, label: str, *, total: float = 1.0) -> Iterator[ProgressHandle]:
         self.messages.append(("progress", label))
-        yield _StubProgressHandle(self.progress_values)
+        handle = _StubProgressHandle(self.progress_values, self.progress_events)
+        # Mirror the production failure-awareness (TD-17) so a menu-level test sees the same
+        # done-vs-fail bar outcome the real UI would render.
+        try:
+            yield handle
+        except BaseException:
+            handle.fail()
+            raise
+        else:
+            handle.done()
 
     @contextmanager
     def spinner(self, label: str) -> Iterator[SpinnerHandle]:

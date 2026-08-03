@@ -213,6 +213,46 @@ def test_stub_progress_records_advances() -> None:
     assert stub.progress_values == [0.25, 1.0]
 
 
+def test_stub_progress_records_done_on_clean_exit() -> None:
+    # TD-17: a clean exit records "done" (the bar completed), never "fail".
+    stub = StubUI()
+    with stub.progress("work", total=1.0) as bar:
+        bar.advance_to(0.5)
+    assert "done" in stub.progress_events
+    assert "fail" not in stub.progress_events
+
+
+def test_stub_progress_records_fail_on_exception() -> None:
+    # TD-17: when the stage raises, the bar is FAILED (not completed) and the exception still
+    # propagates. This is the seam the menu-level tests assert against.
+    stub = StubUI()
+    with pytest.raises(RuntimeError, match="boom"), stub.progress("work", total=1.0) as bar:
+        bar.advance_to(0.5)
+        raise RuntimeError("boom")
+    assert stub.progress_events == ["fail"]  # failed, never "done"
+
+
+def test_production_progress_completes_bar_on_clean_exit() -> None:
+    # TD-17: the real rich bar is filled to 100% at a clean context exit (success safety net).
+    ui_ = _tty_ui()
+    with ui_.progress("work", total=1.0) as bar:
+        bar.advance_to(0.5)
+    assert bar._prog.tasks[0].completed == 1.0  # type: ignore[attr-defined]
+
+
+def test_production_progress_stops_bar_without_completing_on_failure() -> None:
+    # TD-17 (the core fix): when the stage raises, the real bar is stopped at its last real
+    # fraction — NOT snapped to a false 100% right before the error panel — and the exception
+    # still propagates unchanged.
+    ui_ = _tty_ui()
+    with pytest.raises(RuntimeError, match="stage blew up"), ui_.progress("work", total=1.0) as bar:
+        bar.advance_to(0.4)
+        raise RuntimeError("stage blew up")
+    task = bar._prog.tasks[0]  # type: ignore[attr-defined]
+    assert task.completed == 0.4  # left where it was
+    assert not task.finished  # never forced to the 100% "done" state
+
+
 def test_stub_spinner_is_noop_context_manager() -> None:
     stub = StubUI()
     with stub.spinner("loading model") as sp:

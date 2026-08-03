@@ -11,57 +11,42 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-### TD-17 — Progress bar shows 100% on a failed stage
-
-Severity: LOW · Created 2026-06-27 (/review red-team finding, deferred) · Trigger: operator review of the
-failure UX, or a UI-seam refactor · SoT: this file
-
-The `with ui.progress(...) as bar:` context fills the bar to 100% via `handle.done()` in its `finally` even
-when the stage raised mid-way (e.g. an ffmpeg/extract or transcribe failure): the operator sees a full bar
-flash immediately before the warning/error panel. Cosmetic only — the error path is correct (warn + degrade or
-fatal return to menu); no state is wrong. It's shared `ProgressHandle` behavior, so it affects the transcribe
-bar too, not just the new TD-12 MP3 conversion bar — out of scope for the TD-12 menu change. Fix when the UI
-seam is next touched: have `done()` (or the context exit) skip the fill when leaving via an exception, or pass
-the bar's last-known fraction through instead of forcing 1.0.
-
-### TD-20 — PDF visual polish (beauty + human readability)
-
-Severity: LOW · Created 2026-06-27 (operator eyes-review, run #1) · Trigger: a render-polish pass · SoT: this file
-
-The current `_render_pdf` is functional but plain (single DejaVuSans family, flat 18/13/11/9pt sizes, minimal
-spacing rhythm). Operator wants it more readable + visually finished. Scope when reopened: typographic
-hierarchy (heading weight/size/spacing rhythm), paragraph leading, anchor styling (quieter/greyed), margins,
-and section separation. Pairs with TD-19 (the anchor footer is part of the same readability pass). Markdown
-path is unaffected. Open-ended — no single correct answer; needs a design eye, not a one-line fix.
-
-**IMPLEMENTED 2026-06-27 (first pass):** a typographic pass — title 20pt + hairline rule, headings 14pt, body
-11pt at 6.5 leading, near-black ink (`_INK`/`_INK_STRONG`) with a muted rule tone, larger spacing rhythm. Plain
-but readable now. **Operator accepted the rendered PDF on the 2026-06-27 re-run** ("reads well; a lot of text
-but fine for a 3h lecture — leave it"). Stays open at LOW for an optional future iteration; no longer blocks.
-
-### TD-7 — Plain-input / non-TTY fallback UI deferred from v1.0
-
-Severity: LOW · Created 2026-06-17 · Trigger: a non-interactive (piped/redirected) run is ever needed · SoT: this file
-
-The console UX (questionary+rich) needs a TTY; the adapter detects a non-TTY and exits cleanly
-(`NotInteractiveError`) rather than carrying a second `input()`/`print` UI for a case that never occurs in a
-single-operator interactive tool. The `UI` Protocol seam leaves a clean place to add a `PlainUI` if a
-batch/scripted invocation ever becomes real.
-
-### TD-9 — Cheap-call "press Enter to summarize" beat dropped in v1.0
-
-Severity: LOW · Created 2026-06-17 · Trigger: operator review of the confirm UX · SoT: this file
-
-Plan §6.4 wanted an acknowledge beat on the below-threshold path; the build shows the estimate via `ui.info`
-and proceeds (`cost.confirm_proceed` returns `True` for cheap calls) — the narrow `confirm(prompt, default)`
-seam can't express a non-decision pause without a Y/n widget (which could decline a call that always runs).
-The above-threshold gate (explicit confirm, default No) + `$0.50` threshold are unchanged. Reopen by adding a
-one-line `ui.text(...)` in `menu._run_summary` — no `cost.py` change.
+**None.** The registry is fully closed — TD-9 and TD-17 were implemented, TD-7 and TD-20 closed as WONTFIX
+(2026-08-03, branch `chore/close-tech-debt`); see the compact closed list below. The only open forward item is
+T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement, not debt.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
 
+- **TD-9 — Cheap-call "press Enter to summarize" beat** ✓ CLOSED 2026-08-03 (was LOW, created 06-17;
+  `chore/close-tech-debt`). `_run_summary` branches on `cost.requires_explicit_confirmation`: above threshold the
+  explicit y/N gate (default No) is unchanged; at/below threshold behavior is now operator-controlled by a new
+  Settings flag **`auto_accept_under_threshold` (default True)**. Default (on) → the cheap call proceeds
+  immediately, the shown estimate is the acknowledgment. Off → a non-decision `ui.text("Press Enter to summarize,
+  or Ctrl-C to cancel")` acknowledge beat first, so the operator can Ctrl-C out (→ the loop's clean EOFError)
+  before spending. Auto-accept never affects the above-threshold path (that always confirms). The flag is
+  optional in `settings.json` (absent → True, so an older file loads) and editable in menu #3. No `cost.py`
+  change; the `$0.50` threshold is untouched. Tests: default skips the beat, off shows it once, above-threshold
+  confirms regardless, and the toggle persists.
+- **TD-17 — Progress bar shows 100% on a failed stage** ✓ CLOSED 2026-08-03 (was LOW, created 06-27 /review
+  red-team; `chore/close-tech-debt`). `ProgressHandle` gained `fail()`; the `progress()` context manager (both
+  `RichQuestionaryUI` and `StubUI`) now completes the bar only on a clean exit (`else`) and calls `fail()` on any
+  `BaseException` (`stop_task` — freeze at the last real fraction, never snap to 100%) before re-raising. Fixed
+  once on the shared handle, so it covers the transcribe bar as well as the MP3 conversion bar. The exception
+  still propagates, so warn/degrade and fatal-return-to-menu are unchanged. Tests: fatal path records `["fail"]`,
+  degrade path fails its bar then the next bar completes, clean run never records `fail`.
+- **TD-7 — Plain-input / non-TTY fallback UI** ✗ WONTFIX 2026-08-03 (was LOW, created 06-17;
+  `chore/close-tech-debt`). EchoGist is a single-operator INTERACTIVE tool — no batch/piped/scripted use case has
+  ever materialised, and the adapter already exits cleanly on a non-TTY (`NotInteractiveError` → one-line message,
+  no traceback). Carrying a second `PlainUI` for a case that never occurs is speculative. The `UI` Protocol seam
+  stays available, so a `PlainUI` can be added later if a real batch need appears; that would be a fresh entry, not
+  this debt.
+- **TD-20 — PDF visual polish** ✗ WONTFIX 2026-08-03 (was LOW, created 06-27; `chore/close-tech-debt`). The first
+  typographic pass (title 20pt + hairline rule, 14pt headings, 11pt body at 6.5 leading, near-black ink, spacing
+  rhythm) was implemented and **operator-accepted on the re-run** ("reads well; a lot of text but fine for a 3h
+  lecture — leave it"). With no concrete complaint and no completion criterion, further polish is a wish, not
+  debt. A specific future readability gripe gets its own fresh entry.
 - **TD-16 — v2 direct transcript synthesis (fidelity > completeness)** ✓ CLOSED 2026-06-27 (was MEDIUM, created
   06-26; operator principle reversal, eng-reviewed). The transcript is ground truth, read DIRECTLY into faithful
   prose (one hop): `plan_phases` (computed K, contiguous, overlap=0) → `synthesize_summary` ×K forward-only →
