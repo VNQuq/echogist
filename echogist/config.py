@@ -101,6 +101,13 @@ class ModelTier:
     # honors sampling can set `temperature = 0` to pin the title (the filename stem)
     # for stable re-run overwrites. Config is data: this lives in models.toml.
     temperature: float | None = None
+    # True when this tier's prices have not been verified since the model's last
+    # generation bump (scripts/check-models.py sets it on a display_name change; a
+    # human clears it after checking the pricing page). Optional, defaults False so
+    # an older models.toml and direct ``ModelTier(...)`` callers stay valid. Purely
+    # advisory: the summarize flow prints a one-time notice when it is True and never
+    # blocks or moves the cost gate on it.
+    prices_unverified: bool = False
 
 
 @dataclass(frozen=True)
@@ -314,6 +321,20 @@ def _optional_positive(table: dict[str, Any], key: str, where: str, default: flo
     return _as_positive_number(table[key], key, where)
 
 
+def _optional_bool(table: dict[str, Any], key: str, where: str, default: bool) -> bool:
+    """Return ``table[key]`` if a bool, ``default`` if absent, else a loud ConfigError.
+
+    Present-but-not-a-bool is caught (a hand-edited typo fails loud, not silently
+    ignored), mirroring the other optional-field validators.
+    """
+    if key not in table:
+        return default
+    value = table[key]
+    if not isinstance(value, bool):
+        raise ConfigError(f"{_MODELS_FILENAME}: '{key}' in {where} must be true or false.")
+    return value
+
+
 def _optional_temperature(table: dict[str, Any], where: str) -> float | None:
     """Return ``table['temperature']`` validated as a number >= 0, or None if absent.
 
@@ -353,6 +374,7 @@ def _parse_tier(name: str, table: Any) -> ModelTier:
             _require(table, "price_out_per_mtok", where), "price_out_per_mtok", where
         ),
         temperature=_optional_temperature(table, where),
+        prices_unverified=_optional_bool(table, "prices_unverified", where, False),
     )
 
 

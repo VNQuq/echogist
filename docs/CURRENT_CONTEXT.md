@@ -37,6 +37,14 @@ core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-v
   `[интерпретация]:` marker is plain text, survives MD+PDF.
 - **Default tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings. **Prompt is data**
   (`config/models.toml`); tool SCHEMAs stay in `summarize.py`.
+- **Model currency (2026-08-03):** all tiers pin **floating aliases** (`claude-haiku-4-5`,
+  `claude-sonnet-5`, `claude-opus-4-8`) — always-latest, reproducibility intentionally dropped.
+  `scripts/check-models.py` (standalone, offline-of-the-pipeline, killswitch-safe like `release.py`)
+  reports retired/valid + context drift against `GET /v1/models`, **derives** `context_window`, and
+  sets per-tier `prices_unverified` on a generation bump (display_name change vs the
+  `config/model_names.json` cache; gitignored). **Prices stay manual** — no pricing endpoint. While a
+  tier is `prices_unverified`, `_run_summary` prints a one-time non-blocking notice; the `$0.50` gate
+  is unchanged. `balanced` prices verified 2026-08-03 (Sonnet 5 = $3/$15, same as 4.6); flag cleared.
 - **Anchors are TEXTUAL references, not links** — `[HH:MM:SS]` woven inline in prose (TD-19) point to a moment
   in the recording/MP3; nothing to click. The validator guarantees each resolves to a real transcript block; a
   manual content spot-check against the recording is optional, not a required gate step.

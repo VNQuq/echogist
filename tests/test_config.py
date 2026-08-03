@@ -119,6 +119,29 @@ def test_negative_temperature_errors(tmp_path: Path) -> None:
         load_model_config(_write(tmp_path / "models.toml", text))
 
 
+def test_prices_unverified_defaults_false(tmp_path: Path) -> None:
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.tier("economy").prices_unverified is False
+
+
+def test_prices_unverified_true_loads(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace(
+        'model_id = "claude-haiku-4-5"',
+        'model_id = "claude-haiku-4-5"\nprices_unverified = true',
+    )
+    cfg = load_model_config(_write(tmp_path / "models.toml", text))
+    assert cfg.tier("economy").prices_unverified is True
+
+
+def test_prices_unverified_non_bool_errors(tmp_path: Path) -> None:
+    text = VALID_MODELS_TOML.replace(
+        'model_id = "claude-haiku-4-5"',
+        'model_id = "claude-haiku-4-5"\nprices_unverified = "yes"',
+    )
+    with pytest.raises(ConfigError, match="prices_unverified.*must be true or false"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
 def test_negative_price_errors(tmp_path: Path) -> None:
     text = VALID_MODELS_TOML.replace("price_in_per_mtok = 1.0", "price_in_per_mtok = -1.0")
     with pytest.raises(ConfigError, match="must be > 0"):

@@ -6,9 +6,23 @@
 # Prices are USD per million tokens (MTok). Verify model IDs + prices against
 # the Claude API reference when bumping. A deprecated/unknown model does not
 # crash the app — the summarize call surfaces it and Settings guides re-select.
+#
+# FLOATING ALIASES (intentional — freshness over reproducibility). Every tier
+# pins an UNDATED alias (claude-haiku-4-5, not claude-haiku-4-5-YYYYMMDD).
+# Anthropic migrates an alias to its newest snapshot within ~a week of release,
+# so we drift forward to the latest model for free, with no edit here. The
+# ACCEPTED tradeoff: model behavior can shift under us between runs, and output
+# is NOT reproducible across a silent snapshot migration. That is the desired
+# behavior for this tool — always-latest — not a bug. Only a GENERATION bump
+# (e.g. Sonnet 4.6 -> 5) is a deliberate human edit to the model_id below.
+#
+# `context_window` is DERIVED, not hand-maintained: scripts/check-models.py reads
+# it from the live model list (GET /v1/models -> max_input_tokens) and updates it
+# here. `price_in/out_per_mtok` stay MANUAL — there is no pricing API endpoint, so
+# a human verifies them against the pricing page (see `prices_unverified` below).
 
-# Optional per-tier `temperature`: OMITTED here on purpose. The current Claude 4.x
-# models (Haiku 4.5 / Sonnet 4.6 / Opus 4.8) deprecate the temperature parameter and
+# Optional per-tier `temperature`: OMITTED here on purpose. The current Claude models
+# (Haiku 4.5 / Sonnet 5 / Opus 4.8) deprecate the temperature parameter and
 # reject the request (HTTP 400) if it is sent. Add `temperature = 0` to a tier ONLY
 # for an older model that still honors sampling and where you want a pinned title
 # (the summary filename stem) so a re-run overwrites instead of making a -2/-3 copy.
@@ -20,10 +34,15 @@ price_in_per_mtok = 1.0
 price_out_per_mtok = 5.0
 
 [tiers.balanced]
-model_id = "claude-sonnet-4-6"
+model_id = "claude-sonnet-5"
 context_window = 1000000
 price_in_per_mtok = 3.0
 price_out_per_mtok = 15.0
+# scripts/check-models.py sets this true on a generation bump; a human clears it
+# after verifying the prices above against the Anthropic pricing page. While true,
+# the summarize flow prints a one-time non-blocking notice (it never blocks the run
+# or moves the gate). Verified 2026-08-03: Sonnet 5 is $3 / $15 in/out, same as 4.6.
+prices_unverified = false
 
 [tiers.flagship]
 model_id = "claude-opus-4-8"

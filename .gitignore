@@ -46,6 +46,9 @@ models/
 config/settings.json
 # Picker state (TD-10) — last-used input dir, written by the app, not source
 config/state.json
+# Model display-name cache — local memory for scripts/check-models.py bump
+# detection, written by that tool (derived state, machine-local, not source)
+config/model_names.json
 # Operator test clips — placed locally per tests/fixtures/audio/README.md, never committed
 tests/fixtures/audio/*
 !tests/fixtures/audio/README.md

@@ -243,6 +243,18 @@ def _run_summary(
         )
     ui.info(cost.estimate_message(estimate, tier))
 
+    # Unverified-price notice: scripts/check-models.py flags a tier whose model had a
+    # generation bump but whose prices a human has not re-confirmed yet. The estimate
+    # above uses those carried-over prices, so it may under-state the bill. One-time,
+    # non-blocking (fires once per run) — it does NOT move the gate or the threshold.
+    if tier.prices_unverified:
+        ui.warn(
+            f"Model generation changed for the '{tier.name}' tier — prices unconfirmed, so "
+            f"the estimate above may under-state the real bill and clear the "
+            f"${settings.confirm_threshold_usd:g} gate when it should not. "
+            "Verify the pricing page and clear prices_unverified in config/models.toml."
+        )
+
     # Threshold friction (plan §3): above the operator's threshold, an explicit y/N gate
     # (default No) must clear before spending — always, regardless of the flag below. At/below
     # threshold the call always runs (a y/N there could wrongly decline a call that just

@@ -25,7 +25,7 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
-files = ["echogist", "tests", "scripts/measure_model.py", "scripts/smoke_run.py", "scripts/release.py"]
+files = ["echogist", "tests", "scripts/measure_model.py", "scripts/smoke_run.py", "scripts/release.py", "scripts/check-models.py"]
 
 # Runtime wheels are GPU/native and not installed in the dev/CI venv; they are
 # imported lazily inside functions, so stub-less imports are fine to ignore.

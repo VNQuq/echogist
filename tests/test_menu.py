@@ -662,6 +662,41 @@ def test_above_threshold_confirms_even_with_auto_accept_on(tmp_path: Path) -> No
     assert not [m for m in stub.messages if m[0] == "text" and "Press Enter" in m[1]]  # no beat
 
 
+def test_unverified_prices_warns_but_does_not_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A tier flagged prices_unverified (a generation bump whose prices no human has
+    # re-checked) prints a one-time non-blocking notice near the estimate. It never
+    # moves the gate: this cheap, auto-accept-on run still reaches the wire.
+    from dataclasses import replace
+
+    _write_settings(tmp_path, confirm_threshold_usd=100.0)
+    _seed_transcript(tmp_path)
+    real = config.load_model_config
+
+    def patched(*a: Any, **k: Any) -> config.ModelConfig:
+        cfg = real(*a, **k)
+        flagged = replace(cfg.tiers["economy"], prices_unverified=True)
+        return replace(cfg, tiers={**cfg.tiers, "economy": flagged})
+
+    monkeypatch.setattr(config, "load_model_config", patched)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 1  # not blocked
+    notices = [m for m in stub.messages if m[0] == "warn" and "prices unconfirmed" in m[1]]
+    assert len(notices) == 1
+
+
+def test_no_unverified_notice_when_prices_confirmed(tmp_path: Path) -> None:
+    # The default economy tier is not flagged, so the notice must stay silent.
+    _write_settings(tmp_path, confirm_threshold_usd=100.0)
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert calls["summarize"] == 1
+    assert not [m for m in stub.messages if m[0] == "warn" and "prices unconfirmed" in m[1]]
+
+
 # --------------------------------------------------------------------------- #
 # §12 return-to-menu failure modes
 # --------------------------------------------------------------------------- #
