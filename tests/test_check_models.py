@@ -165,6 +165,27 @@ def test_report_generation_bump_needs_prior_cache(api_models: dict[str, Any]) ->
     assert steady["balanced"].generation_bump is False
 
 
+def test_new_alias_is_reported_but_never_written(api_models: dict[str, Any]) -> None:
+    """A hand-edited model_id is a first sighting, so the display_name bump check
+    cannot see it. Report it (prices likely moved) but never flip the flag — only a
+    human can confirm prices. An EMPTY cache is a first run: nothing is 'new' there.
+    """
+    # Cache knows the other tiers but not balanced's alias -> a human swapped it.
+    cache = {"claude-haiku-4-5": "Claude Haiku 4.5"}
+    findings = {f.name: f for f in cm.build_report(_tiers(), api_models, cache)}
+    assert findings["balanced"].new_alias is True
+    assert findings["balanced"].generation_bump is False
+    assert findings["economy"].new_alias is False  # known alias
+    # Report says so; the write plan does not.
+    report = cm.format_report(list(findings.values()), {})
+    assert any("NEW alias 'claude-sonnet-5'" in line for line in report.lines)
+    # balanced still gets its context_window write (real drift), but NOT the flag.
+    assert cm.plan_writes(list(findings.values()))["balanced"].set_prices_unverified is False
+    # First run (empty cache): everything is a first sighting, nothing is "new".
+    fresh = {f.name: f for f in cm.build_report(_tiers(), api_models, {})}
+    assert all(not f.new_alias for f in fresh.values())
+
+
 def test_plan_writes_context_and_flag_but_never_prices(api_models: dict[str, Any]) -> None:
     cache = {"claude-sonnet-5": "Claude Sonnet 4.6"}
     findings = cm.build_report(_tiers(), api_models, cache)

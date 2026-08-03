@@ -21,7 +21,10 @@ like the app.
 **What it reports, per tier**
   * still valid, or missing from the live list (= retired / deprecated);
   * context drift — ``context_window`` in the config vs ``max_input_tokens`` from the API;
-  * a generation bump — the model's ``display_name`` changed since last seen.
+  * a generation bump — the model's ``display_name`` changed since last seen;
+  * a new alias — a ``model_id`` never seen before, on a non-empty cache, i.e. a
+    hand-edited tier. Reported only (a human must confirm the prices themselves);
+    the tool does NOT set ``prices_unverified`` for this case.
 
 **What it writes (never prices)**
   * ``context_window`` — DERIVED from ``max_input_tokens``; this field is no longer
@@ -96,6 +99,11 @@ class TierFinding:
     context_drift: bool
     generation_bump: bool
     cached_display_name: str | None
+    # True when this alias has never been seen BUT the cache is non-empty — i.e. a
+    # human just swapped model_id (or added a tier). Reported, never written: the
+    # deliberate swap is the case where prices most likely moved, but only a human
+    # can confirm them, so this nudges rather than flipping prices_unverified.
+    new_alias: bool = False
 
 
 @dataclass
@@ -213,6 +221,9 @@ def build_report(
         cached = cached_names.get(model_id)
         drift = matched.max_input_tokens is not None and matched.max_input_tokens != config_context
         bump = cached is not None and cached != matched.display_name
+        # An empty cache is a first run: everything is a first sighting, so nothing is
+        # "new". Once the cache has entries, an unknown alias means a human edited it.
+        new_alias = cached is None and bool(cached_names)
         findings.append(
             TierFinding(
                 name=name,
@@ -226,6 +237,7 @@ def build_report(
                 context_drift=drift,
                 generation_bump=bump,
                 cached_display_name=cached,
+                new_alias=new_alias,
             )
         )
     return findings
@@ -381,9 +393,23 @@ def load_name_cache(path: Path = _NAME_CACHE) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items() if isinstance(v, str)}
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a sibling temp file + ``os.replace`` (atomic on POSIX and Windows).
+
+    ``write_text`` truncates first, so a run interrupted mid-write (Ctrl-C, a cron
+    kill, a full disk) would leave a HALF-WRITTEN models.toml — which the app then
+    refuses to start on, every time, until a human restores it. The name cache gets
+    the same treatment: a truncated cache reads as "no prior sighting" and silently
+    loses the next generation bump.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def save_name_cache(names: dict[str, str], path: Path = _NAME_CACHE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(names, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _atomic_write(path, json.dumps(names, indent=2, sort_keys=True) + "\n")
 
 
 def resolve_api_key() -> str | None:
@@ -439,7 +465,10 @@ def fetch_models(api_key: str, url: str = _API_URL) -> list[dict[str, Any]]:
         if not (isinstance(payload, dict) and payload.get("has_more")):
             break
         last = payload.get("last_id")
-        if not isinstance(last, str) or not last:
+        # `last == after` guards a non-advancing cursor: an API that keeps returning
+        # has_more=true with an unchanged last_id would otherwise spin forever, growing
+        # `out` without bound. Termination must not depend on the server behaving.
+        if not isinstance(last, str) or not last or last == after:
             break
         after = last
     return out
@@ -476,6 +505,12 @@ def format_report(findings: list[TierFinding], writes: dict[str, TierWrite]) -> 
                 f"        generation bump: display_name '{f.cached_display_name}' -> "
                 f"'{f.display_name}' — setting prices_unverified (VERIFY PRICES manually)"
             )
+        if f.new_alias:
+            report.lines.append(
+                f"        NEW alias '{f.model_id}' (not seen before) — a hand-edited "
+                "model_id or a new tier. VERIFY PRICES against the pricing page; set "
+                "prices_unverified = true yourself if they are not confirmed."
+            )
     if not writes:
         report.lines.append("  No config changes needed.")
     return report
@@ -492,7 +527,7 @@ def apply_changes(
     a non-dry run and only after the report has printed."""
     if writes:
         original = models_path.read_text(encoding="utf-8")
-        models_path.write_text(rewrite_toml(original, writes), encoding="utf-8")
+        _atomic_write(models_path, rewrite_toml(original, writes))
     save_name_cache(new_cache, cache_path)
 
 
