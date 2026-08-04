@@ -1,8 +1,8 @@
 # Current Context
 
-**Updated:** 2026-08-04 (**ESSENCE BLOCK on `main`, unreleased** — the summary document now opens with a
-1-2 page block: главная мысль / главный навык / 3 проверочных вопроса, answers at the very end. Last
-release: **v2.1.0** — model-currency automation + the technical-debt registry closed, TD-1..21).
+**Updated:** 2026-08-05 (**two unreleased features on `main`:** the ESSENCE BLOCK opening every summary, and
+the MP3 conversion options in menu #1. Last release: **v2.1.0** — model-currency automation + the
+technical-debt registry closed, TD-1..21).
 **Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
@@ -37,6 +37,16 @@ material is short would make the feature silently absent). Short material is **2
 (~500 words per rendered PDF page). Gate green: ruff + mypy --strict + **410 tests**. Released through
 `v2.1.0` (`712890c`); this sits on top and needs a version bump.
 
+## MP3 conversion options (menu #1, on `main` 2026-08-05, NOT yet released)
+
+Written 2026-08-03 on `feat/mp3-conversion-options`, left unmerged by mistake and only landed now (the app
+kept showing TD-12 behavior for two days). Both reversals operator-approved, both local/offline:
+**(1) keep-MP3 is opt-out, default ON** — a video Summary/Transcript run asks `confirm("Also save the
+converted MP3?", default=True)`, reversing TD-12's silent MP3 baseline; **(2) an mp3 source can be
+re-encoded** — the `.mp3` menu gains "Re-encode to a smaller MP3" (VBR ~q2, same `_convert_to_mp3` path),
+reversing TD-12's "an mp3 has nothing to extract". An mp3 Summary/Transcript run asks nothing about audio —
+operator decision 2026-08-05: shrinking an mp3 is a deliberate separate action, not a per-run prompt.
+
 ## Config / behavior notes
 
 - Tool names `emit_phase`/`emit_reconcile`. `{interpretation}` substituted per-language; inline
@@ -65,7 +75,8 @@ material is short would make the feature silently absent). Short material is **2
 1. **Paid validation run of the essence block** (Windows — WSL has no key). Judge the three points against
    the recording: is the навык the one the author actually teaches, are the questions answerable only by
    someone who followed the material, and does the block land inside 1-2 pages? The word budgets in
-   `reconcile_system_prompt` are the knob if it over/under-runs. Then cut a release (minor bump → v2.2.0).
+   `reconcile_system_prompt` are the knob if it over/under-runs. Then cut a release (minor bump → v2.2.0,
+   covering BOTH the essence block and the MP3 conversion options).
 2. **First live run of `check-models.py`** on a box with an API key. It seeds `config/model_names.json` and
    confirms the real `GET /v1/models` shape. First run is a pure baseline — the cache is empty, so nothing
    is reported as new and nothing is flagged; the signal starts on run two.
@@ -73,7 +84,7 @@ material is short would make the feature silently absent). Short material is **2
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. v2.1.0 shipped; the essence block is unreleased on `main`.
+- **Blockers:** none. v2.1.0 shipped; the essence block + the MP3 options are unreleased on `main`.
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** Registry fully closed 2026-08-03 —
   TD-9 (acknowledge beat, Settings flag `auto_accept_under_threshold`, default True) + TD-17 (failure-aware
   progress bar) implemented; TD-7 (non-TTY UI) + TD-20 (PDF polish) WONTFIX. **Closed: TD-1..21.**
