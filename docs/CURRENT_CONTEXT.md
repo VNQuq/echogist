@@ -1,100 +1,63 @@
 # Current Context
 
-**Updated:** 2026-08-05 (**two unreleased features on `main`:** the ESSENCE BLOCK opening every summary, and
-the MP3 conversion options in menu #1. Last release: **v2.1.0** — model-currency automation + the
-technical-debt registry closed, TD-1..21).
-**Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
+**Updated:** 2026-08-05 — two unreleased features on `main`, the ESSENCE BLOCK and the MP3 conversion options.
+Last release **v2.1.0** (model currency + the TD registry closed, TD-1..21). **Authority:**
+[CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here. **Max:** ≈ 60 lines.
 
----
-
-## Pipeline — TD-16 v2 direct synthesis (released in v2.0.0)
-
-**Principle (in CLAUDE.md):** fidelity > completeness. The transcript is ground truth, read DIRECTLY into a
-faithful synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. The manual operator
-re-check + deterministic anchor validation is the fidelity gate (no LLM-judge). Supersedes TD-5/TD-15.
+## Pipeline — TD-16 v2 direct synthesis (v2.0.0)
 
 **The only path:** transcript → `chunk.plan_phases` (computed K, contiguous, overlap=0; short = K=1) →
-`synthesize_summary` ×K sequential forward-only (each phase reads its span + prior headings + prior phase's
-TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept/snap-2s/drop vs that phase's own
-timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title + ESSENCE BLOCK +
-main_themes + normalized headings — **always**, incl. K=1) → header anchor-validation → one readable doc.
+`synthesize_summary` ×K sequential forward-only (each phase sees its span + prior headings + the prior
+phase's TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept / snap-2s / drop vs that
+phase's own timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title +
+essence block + main_themes + normalized headings — **always**, incl. K=1) → header validation → one doc.
+**Validated 2026-06-27** (Sonnet, 2:58:57 RU lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
 
-**Validated 2026-06-27** (balanced/Sonnet, 2:58:57 RU lecture, K=4, actual $0.5237) — full evidence in the
-TD-16 closed entry: coverage restored, 131/131 anchors resolve, headings cohere, PDF accepted, cost ~1.2×.
+## Unreleased on `main` (both ride the v2.2.0 bump)
 
-## Essence block (operator-requested 2026-08-04, on `main`, NOT yet released)
+**Essence block** (2026-08-04). Opens with «Суть» — `core_idea` ~250-350 words, `main_skill` ~150-200 (empty
+when the material teaches none), 3 `test_questions` — and CLOSES with «Ориентиры для ответов»: answers sit at
+the far end because seeing a question must not hand you its answer. Written by **reconcile** from phase prose
+only (never a second transcript read), passed through `validate_anchors`; prompt word budgets are the knob for
+the 1-2 page cap (~500 words per PDF page). **Cost:** reconcile now runs ALWAYS incl. K=1 — skipping it when
+material is short would make the feature silently absent — so short input is **2 calls, not 1**.
 
-The document OPENS with «Суть» — **главная мысль** (`core_idea`, ~250-350 words), **главный навык**
-(`main_skill`, ~150-200 words, empty when the material teaches none), **3 проверочных вопроса**
-(`test_questions`) — and CLOSES with «Ориентиры для ответов». Questions and answers sit at opposite ends by
-design: seeing a question must not hand you its answer. Written by the **reconcile** pass from phase prose
-only (never a second transcript read), and passed through `validate_anchors` like `core_idea`, so a timecode
-copied into the block still resolves to a real block or is dropped.
-
-**Cost change:** reconcile now runs ALWAYS, incl. K=1 (operator decision — skipping the block exactly when
-material is short would make the feature silently absent). Short material is **2 cloud calls, not 1**;
-`cost.estimate_cost_synthesis` and the menu copy match. Prompt word budgets hold the block to 1-2 pages
-(~500 words per rendered PDF page). Gate green: ruff + mypy --strict + **410 tests**. Released through
-`v2.1.0` (`712890c`); this sits on top and needs a version bump.
-
-## MP3 conversion options (menu #1, on `main` 2026-08-05, NOT yet released)
-
-Written 2026-08-03 on `feat/mp3-conversion-options`, left unmerged by mistake and only landed now (the app
-kept showing TD-12 behavior for two days). Both reversals operator-approved, both local/offline:
-**(1) keep-MP3 is opt-out, default ON** — a video Summary/Transcript run asks `confirm("Also save the
-converted MP3?", default=True)`, reversing TD-12's silent MP3 baseline; **(2) an mp3 source can be
-re-encoded** — the `.mp3` menu gains "Re-encode to a smaller MP3" (VBR ~q2, same `_convert_to_mp3` path),
-reversing TD-12's "an mp3 has nothing to extract". An mp3 Summary/Transcript run asks nothing about audio —
-operator decision 2026-08-05: shrinking an mp3 is a deliberate separate action, not a per-run prompt.
+**MP3 options in menu #1** (written 2026-08-03, unmerged by mistake, landed 2026-08-05). Both reverse TD-12,
+operator-approved, offline: a video Summary/Transcript run now asks `confirm("Also save the converted MP3?",
+default=True)` instead of writing it silently; an mp3 source gains "Re-encode to a smaller MP3" (VBR ~q2,
+same `_convert_to_mp3` path) but its Summary/Transcript run asks nothing — shrinking an mp3 is a deliberate
+action, not a per-run prompt (operator, 2026-08-05).
 
 ## Config / behavior notes
 
-- Tool names `emit_phase`/`emit_reconcile`. `{interpretation}` substituted per-language; inline
-  `[интерпретация]:` marker is plain text, survives MD+PDF.
-- **Default tier = `economy` (Haiku)**; `balanced`/`flagship` in Settings. **Prompt is data**
-  (`config/models.toml`); tool SCHEMAs stay in `summarize.py`.
-- **Model currency (2026-08-03):** all tiers pin **floating aliases** (`claude-haiku-4-5`,
-  `claude-sonnet-5`, `claude-opus-4-8`) — always-latest, reproducibility intentionally dropped.
-  `scripts/check-models.py` (standalone, offline-of-the-pipeline, killswitch-safe like `release.py`)
-  reports retired/valid + context drift against `GET /v1/models`, **derives** `context_window`, and
-  sets per-tier `prices_unverified` on a generation bump (display_name change vs the
-  `config/model_names.json` cache; gitignored). **Prices stay manual** — no pricing endpoint. While a
-  tier is `prices_unverified`, `_run_summary` prints a one-time non-blocking notice; the `$0.50` gate
-  is unchanged. `balanced` prices verified 2026-08-03 (Sonnet 5 = $3/$15, same as 4.6); flag cleared.
-- **Anchors are TEXTUAL references, not links** — `[HH:MM:SS]` woven inline in prose (TD-19) point to a moment
-  in the recording/MP3; nothing to click. The validator guarantees each resolves to a real transcript block; a
-  manual content spot-check against the recording is optional, not a required gate step.
-- **Output:** recovery `.json` → `output/summaries/raw/`; resume partial → `raw/.resume/`; readable `.pdf`/`.md`
-  → `output/summaries/`; triplet shares one stem. **Transcripts are gitignored (`output/`), machine-local** — a
-  Windows-produced summary can only be re-validated in WSL against ITS transcript, not a stale copy.
-- **API key:** `ANTHROPIC_API_KEY` env first, then gitignored `config/secrets.toml`. Not in WSL — paid runs are
-  operator-run on Windows.
+- Tools `emit_phase`/`emit_reconcile`; the inline `[интерпретация]:` marker is plain text, surviving MD+PDF.
+  **Default tier `economy` (Haiku)**. **Prompt is data** (`config/models.toml`), SCHEMAs stay in code.
+- **Model currency:** tiers pin floating aliases (`claude-haiku-4-5`, `-sonnet-5`, `-opus-4-8`) —
+  always-latest, reproducibility intentionally dropped. `scripts/check-models.py` (standalone,
+  killswitch-safe) reports retired/valid + context drift vs `GET /v1/models`, derives `context_window`, flags
+  a tier `prices_unverified` on a generation bump. **Prices stay manual** — no pricing endpoint; while
+  flagged `_run_summary` prints a one-time notice ($0.50 gate unchanged). `balanced` verified 2026-08-03.
+- **Anchors are TEXTUAL, not links** — `[HH:MM:SS]` inline in prose (TD-19), nothing to click; the validator
+  guarantees each resolves to a real transcript block.
+- **Output:** recovery `.json` → `output/summaries/raw/`, resume partial → `raw/.resume/`, readable
+  `.pdf`/`.md` → `output/summaries/`, one shared stem. `output/` is gitignored and machine-local, so a
+  Windows-produced summary is only re-validatable in WSL against ITS transcript. **API key:**
+  `ANTHROPIC_API_KEY` env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs happen on
+  Windows.
 
 ## Next
 
-1. **Paid validation run of the essence block** (Windows — WSL has no key). Judge the three points against
-   the recording: is the навык the one the author actually teaches, are the questions answerable only by
-   someone who followed the material, and does the block land inside 1-2 pages? The word budgets in
-   `reconcile_system_prompt` are the knob if it over/under-runs. Then cut a release (minor bump → v2.2.0,
-   covering BOTH the essence block and the MP3 conversion options).
-2. **First live run of `check-models.py`** on a box with an API key. It seeds `config/model_names.json` and
-   confirms the real `GET /v1/models` shape. First run is a pure baseline — the cache is empty, so nothing
-   is reported as new and nothing is flagged; the signal starts on run two.
-3. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+1. **Paid validation run of the essence block** (Windows — WSL has no key). Against the recording: is the
+   навык the one the author actually teaches, are the 3 questions answerable only by someone who followed the
+   material, does the block fit 1-2 pages? Then cut **v2.2.0** — essence block AND the MP3 options.
+2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
+   real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
+3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. v2.1.0 shipped; the essence block + the MP3 options are unreleased on `main`.
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** Registry fully closed 2026-08-03 —
-  TD-9 (acknowledge beat, Settings flag `auto_accept_under_threshold`, default True) + TD-17 (failure-aware
-  progress bar) implemented; TD-7 (non-TTY UI) + TD-20 (PDF polish) WONTFIX. **Closed: TD-1..21.**
-- **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
-  [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
-  SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).
-
-## Hard constraints (carry-over)
-
-- API key from env / local config only; never in code/committed.
-- Killswitch: `SUMMARIZE` (synthesis + reconcile) is the only network stage; everything left is offline +
-  stub-testable. Phase-split, anchor validation, cost estimate, render are local.
-- Every push to `main` passes ruff + mypy + tests. (Development is on `main` directly.)
+- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) **fully closed** — TD-1..21, shut
+  2026-08-03 (TD-7 non-TTY UI + TD-20 PDF polish WONTFIX).
+- **SoT:** locked build spec [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates,
+  operator-approved) · original SOW [`ТЗ`](./archive/ТЗ_аудио_резюме_приложение.md) · plan
+  `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared).
