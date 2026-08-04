@@ -1,13 +1,13 @@
 # Current Context
 
-**Updated:** 2026-06-27 (**v2.0.0 RELEASED** — tag `v2.0.0` cut via `scripts/release.py`). The TD-16
-coverage fix + TD-18/19/21 follow-ons were validated on the paid re-run; cost recalibrated (`230deee`);
-usage docs (README + USAGE) rewritten and de-personalised for v2. **Authority:** [CLAUDE.md](../CLAUDE.md)
-· **Max length:** ≤ 2 pages (≈ 60 lines).
+**Updated:** 2026-08-04 (**v2.1.0 RELEASED** — tag `v2.1.0` cut via `scripts/release.py`). Maintenance
+release on top of the v2.0.0 pipeline (unchanged): model-currency automation (`scripts/check-models.py`,
+floating aliases, `prices_unverified`) + the technical-debt registry closed (TD-1..21; TD-9/TD-17 done,
+TD-7/TD-20 wontfix). **Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
 
-## Active scope — TD-16 v2: direct transcript synthesis (DONE, pending release)
+## Active scope — TD-16 v2: direct transcript synthesis (DONE, released in v2.0.0)
 
 **Principle (operator, eng-reviewed, in CLAUDE.md):** fidelity > completeness. The transcript is ground truth,
 read DIRECTLY into a faithful synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. The
@@ -20,10 +20,10 @@ phase's TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (
 phase's real timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title/
 core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-validation → one readable doc.
 
-## Status — RELEASE-READY
+## Status — SHIPPED (v2.1.0)
 
-- **Code complete on `main`**, gate green (`bash scripts/dev-loop`: ruff + mypy --strict + 360 tests). Last
-  commits: `5d0df0c` (TD-18/19/20/21), `ba1b973` (TD-16 coverage fix), `0df39b7` (docs), `230deee` (TD-21 cost).
+- **Code complete on `main`**, gate green (`bash scripts/dev-loop`: ruff + mypy --strict + 401 tests). Post-v2.0.0
+  commits: `39094d5` (TD-9/17 + registry closed), `c0191f3` (model currency), `283c98c` (review fixes).
 - **Paid re-run VALIDATED 2026-06-27** (balanced/Sonnet, transcript `output/transcripts/2026-06-27-Лекция 3
   01.06.26-2.txt`, 2:58:57, K=4, actual $0.5237) — full evidence in the TD-16 closed entry. Every gate item
   passed: coverage restored (phase 2 covers 00:44→01:31); anchors 131/131 + 9/9 + 131/131 resolve (log "0
@@ -56,11 +56,14 @@ core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-v
 
 ## Next
 
-1. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+1. **First live run of `check-models.py`** on a box with an API key (Windows; WSL has none). It seeds
+   `config/model_names.json` and confirms the real `GET /v1/models` shape. First run is a pure baseline — the
+   cache is empty, so nothing is reported as new and nothing is flagged; the signal starts on run two.
+2. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. v2.0.0 shipped.
+- **Blockers:** none. v2.1.0 shipped.
 - **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** The registry is fully closed on branch
   `chore/close-tech-debt` (2026-08-03) — TD-9 (cheap-path acknowledge beat, gated by a new Settings flag
   `auto_accept_under_threshold`, default True = auto-accept) + TD-17 (failure-aware progress bar) implemented;
