@@ -82,12 +82,12 @@ def test_estimate_cost_synthesis_projects_phases_and_reconcile_per_call() -> Non
     assert est.price_out_per_mtok == 15.0  # tier prices carried through
 
 
-def test_estimate_cost_synthesis_single_phase_has_no_reconcile() -> None:
-    # K=1 is degenerate: one phase, its heading is the title, NO reconcile call — so no
-    # reconcile input and only one per-call output.
+def test_estimate_cost_synthesis_single_phase_still_prices_the_reconcile() -> None:
+    # K=1 pays for the reconcile call too — it writes the essence block the document opens
+    # with, so it is not skipped for short material and the quote must include it.
     est = cost.estimate_cost_synthesis([1000], _tier(), per_call_output_tokens=2800)
-    assert est.input_tokens == 1000  # one phase input, no reconcile input added
-    assert est.output_tokens == 2800  # one per-call output only
+    assert est.input_tokens == 1000 + 2800  # phase input + the reconcile's input (1*per_call)
+    assert est.output_tokens == 2 * 2800  # one phase + one reconcile
 
 
 def test_estimate_cost_synthesis_is_tighter_than_the_old_cap_ceiling() -> None:

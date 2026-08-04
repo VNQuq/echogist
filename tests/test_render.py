@@ -18,11 +18,11 @@ import pytest
 
 from echogist import render, summarize
 from echogist.render import RenderError
-from echogist.summarize import ActionItem, Decision, Summary, SynthesisSection
+from echogist.summarize import ActionItem, CheckQuestion, Decision, Summary, SynthesisSection
 
 
 def _summary(title: str = "The Talk", language: str = "en") -> Summary:
-    """A representative TD-16 v2 summary: phases + anchors + header + decisions/actions."""
+    """A representative TD-16 v2 summary: essence block + phases + anchors + decisions."""
     return Summary(
         title=title,
         core_idea="AI is becoming infrastructure.",
@@ -34,6 +34,12 @@ def _summary(title: str = "The Talk", language: str = "en") -> Summary:
             SynthesisSection("Body", "Second idea here.", ("[00:10:00]",)),
         ),
         main_themes=("efficiency", "access"),
+        main_skill="Size the model to the machine.",
+        test_questions=(
+            CheckQuestion("Why does int8 help here?", "It halves the VRAM the weights need."),
+            CheckQuestion("When would you not quantize?", "When accuracy matters more."),
+            CheckQuestion("What distinction is missed?", "Load-time quantization is not storage."),
+        ),
     )
 
 
@@ -45,7 +51,7 @@ def test_markdown_synthesis_renders_phases_anchors_and_themes(tmp_path: Path) ->
         encoding="utf-8"
     )
     assert text.startswith("# The Talk\n")
-    assert "## Core idea" in text and "AI is becoming infrastructure." in text
+    assert "### Core idea" in text and "AI is becoming infrastructure." in text
     assert "## Intro" in text and "First idea here." in text  # phase heading + prose
     assert "*[00:00:00]*" not in text  # TD-19: no per-phase anchor footer wall
     assert "## Main themes" in text and "- efficiency" in text
@@ -59,11 +65,71 @@ def test_markdown_synthesis_uses_russian_headings(tmp_path: Path) -> None:
     text = render.render(_summary(title="Состояние ИИ", language="ru"), tmp_path, "md").read_text(
         encoding="utf-8"
     )
-    assert "## Главная мысль" in text  # core idea
+    assert "## Суть" in text  # the essence block
+    assert "### Главная мысль" in text  # essence point 1
+    assert "### Главный навык" in text  # essence point 2
+    assert "### Проверочные вопросы" in text  # essence point 3
+    assert "## Ориентиры для ответов" in text  # the answers, at the end
     assert "## Основные темы" in text  # main themes
     assert "## Принятые решения" in text  # decisions
     assert "## Пункты к выполнению" in text  # action items
     assert "Состояние ИИ" in text  # Cyrillic stays literal, not \\u-escaped
+
+
+def test_markdown_essence_block_opens_and_answers_close_the_document(tmp_path: Path) -> None:
+    # The block is the first thing after the title; the answers are the LAST thing in the
+    # document, deliberately far from their questions so a question does not give itself
+    # away. Questions are numbered, and the answers repeat the number to match.
+    text = render.render(_summary(), tmp_path, "md", log=lambda _m: None).read_text(
+        encoding="utf-8"
+    )
+    assert text.index("## Essence") < text.index("## Intro")  # block precedes the phases
+    assert text.index("## Reference answers") > text.index("## Action items")  # ...answers last
+    assert "### Key skill" in text and "Size the model to the machine." in text
+    assert "1. Why does int8 help here?" in text  # numbered question in the block
+    assert "**1. Why does int8 help here?**" in text  # repeated over its answer at the end
+    assert "It halves the VRAM the weights need." in text
+    # The answer text must NOT appear next to its question in the block.
+    block = text[text.index("## Essence") : text.index("## Intro")]
+    assert "It halves the VRAM" not in block
+
+
+def test_markdown_answers_keep_the_question_numbering_when_one_has_no_answer(
+    tmp_path: Path,
+) -> None:
+    # A question that came back without an answer still renders in the block (keeping its
+    # number) and is simply absent from the answers section — the two never drift apart.
+    s = replace(
+        _summary(),
+        test_questions=(
+            CheckQuestion("First?", ""),  # no answer
+            CheckQuestion("Second?", "Because of Y."),
+        ),
+    )
+    text = render.render(s, tmp_path, "md", log=lambda _m: None).read_text(encoding="utf-8")
+    assert "1. First?" in text and "2. Second?" in text  # both numbered in the block
+    answers = text[text.index("## Reference answers") :]
+    assert "**2. Second?**" in answers and "Because of Y." in answers
+    assert "**1. First?**" not in answers  # nothing to answer with -> no entry
+
+
+def test_markdown_omits_the_essence_block_when_the_summary_predates_it(tmp_path: Path) -> None:
+    # A .json saved before the block existed loads with all three points empty; it must
+    # re-render as a valid document with no bare "Essence" heading and no answers section.
+    s = replace(_summary(), core_idea="", main_skill="", test_questions=())
+    text = render.render(s, tmp_path, "md", log=lambda _m: None).read_text(encoding="utf-8")
+    assert "## Essence" not in text
+    assert "## Reference answers" not in text
+    assert "## Intro" in text  # the rest of the document is unaffected
+
+
+def test_markdown_collapses_a_multiline_question_onto_one_list_item(tmp_path: Path) -> None:
+    # load_summary is verbatim, so a newline in a hand-edited question would break out of
+    # its numbered list item and inject structure into the document.
+    s = replace(_summary(), test_questions=(CheckQuestion("Why\n\n## Injected?", "Because."),))
+    text = render.render(s, tmp_path, "md", log=lambda _m: None).read_text(encoding="utf-8")
+    assert "1. Why ## Injected?" in text
+    assert "\n## Injected?" not in text
 
 
 def test_markdown_decision_without_anchor_has_no_parens(tmp_path: Path) -> None:

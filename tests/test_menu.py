@@ -724,6 +724,18 @@ def test_long_transcript_synthesizes_in_phases(tmp_path: Path) -> None:  # TD-16
     assert calls["summarize"] == 1  # reached the wire (phase-split happens inside the seam)
 
 
+def test_short_transcript_still_pays_for_the_reconcile_call(tmp_path: Path) -> None:
+    # Short material collapses to K=1, but the reconcile call is no longer skipped — it
+    # writes the essence block the document opens with. The menu must quote TWO cloud
+    # calls, not one, so the operator is never surprised by a second charge.
+    _seed_transcript(tmp_path, text="[00:00:00] короткая расшифровка")
+    deps, stub, calls = _make_deps(tmp_path, ["2", "0", "4"])
+    assert menu.run_menu(deps) == 0
+    assert "in 1 phase (+1 reconcile)" in stub.log_text  # singular, not "1 phases"
+    assert "2 cloud calls" in stub.log_text
+    assert calls["summarize"] == 1  # still ONE seam call; the split happens inside it
+
+
 def test_phase_path_still_guards_an_oversize_phase(tmp_path: Path) -> None:  # TD-16 v2 / F6
     # Phase-split lowers the per-call input but does NOT repeal the overflow guard. A single
     # un-splittable block (plan_phases never cuts mid-block, K is clamped to len(blocks))

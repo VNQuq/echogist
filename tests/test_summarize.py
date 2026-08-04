@@ -372,9 +372,12 @@ def test_default_caller_status_error_surfaces_api_body_reason(
 
 
 def test_summarize_auto_single_phase_for_short_input() -> None:
-    # TD-16 v2: short material collapses to K=1 — one synthesis call, no reconcile. Its
-    # heading becomes the document title.
-    caller = _seq_caller(_outcome(_phase_ti("Only", "Only prose.", anchors=["[00:00:00]"])))
+    # TD-16 v2: short material collapses to K=1 — one synthesis call. The reconcile call
+    # still runs (it writes the essence block the document opens with), so K=1 is 2 calls.
+    caller = _seq_caller(
+        _outcome(_phase_ti("Only", "Only prose.", anchors=["[00:00:00]"])),
+        _outcome(_reconcile_ti(title="Short Talk")),
+    )
     cfg = ChunkConfig(phase_target_tokens=10_000_000)  # everything fits in one phase
     result = summarize.summarize_auto(
         "[00:00:00] short transcript",
@@ -388,8 +391,8 @@ def test_summarize_auto_single_phase_for_short_input() -> None:
         log=lambda _m: None,
     )
     assert isinstance(result, SummarizeResult)
-    assert len(caller.requests) == 1  # type: ignore[attr-defined]  # one phase, no reconcile
-    assert result.summary.title == "Only"
+    assert len(caller.requests) == 2  # type: ignore[attr-defined]  # one phase + reconcile
+    assert result.summary.title == "Short Talk"
 
 
 def test_summarize_auto_runs_multi_phase_synthesis() -> None:
@@ -452,6 +455,28 @@ def _phase_ti(
         "decisions": decisions or [],
         "action_items": action_items or [],
     }
+
+
+def _reconcile_ti(
+    *,
+    title: str = "T",
+    core_idea: str = "c",
+    main_skill: str = "",
+    test_questions: list[dict[str, Any]] | None = None,
+    main_themes: list[str] | None = None,
+    phase_headings: list[str] | None = None,
+) -> dict[str, Any]:
+    """An emit_reconcile tool_input (header + essence block)."""
+    out: dict[str, Any] = {
+        "title": title,
+        "core_idea": core_idea,
+        "main_skill": main_skill,
+        "test_questions": test_questions or [],
+        "main_themes": main_themes or [],
+    }
+    if phase_headings is not None:
+        out["phase_headings"] = phase_headings
+    return out
 
 
 def _seq_caller(*outcomes: CallOutcome) -> summarize.Caller:
@@ -613,9 +638,15 @@ def test_synthesize_forward_only_passes_prior_context_to_later_phase() -> None:
     assert "Gamma sentence." in phase2_system  # the prior phase's tail prose, verbatim
 
 
-def test_synthesize_single_phase_skips_reconcile_uses_heading_as_title() -> None:
+def test_synthesize_single_phase_still_reconciles_for_the_essence_block() -> None:
+    # K=1 no longer skips reconcile: the essence block is the point of the document, and
+    # skipping it exactly when the material is short would make the feature silently
+    # absent (operator decision). Short material is therefore 2 calls, not 1.
     phases = [Phase(text="[00:00:00] only", index=1, total=1, start_seconds=0.0, end_seconds=0.0)]
-    caller = _seq_caller(_outcome(_phase_ti("Lone Heading", "Only prose.", anchors=["[00:00:00]"])))
+    caller = _seq_caller(
+        _outcome(_phase_ti("Lone Heading", "Only prose.", anchors=["[00:00:00]"])),
+        _outcome(_reconcile_ti(title="Lone Talk", main_skill="Do the thing.", main_themes=["a"])),
+    )
     result = summarize.synthesize_summary(
         phases,
         _tier(),
@@ -626,9 +657,107 @@ def test_synthesize_single_phase_skips_reconcile_uses_heading_as_title() -> None
         caller=caller,
         log=lambda _m: None,
     )
-    assert len(caller.requests) == 1  # type: ignore[attr-defined]  # no reconcile call for K=1
+    assert len(caller.requests) == 2  # type: ignore[attr-defined]  # phase + reconcile
+    assert caller.requests[1]["tool_choice"]["name"] == "emit_reconcile"  # type: ignore[attr-defined]
+    assert result.summary.title == "Lone Talk"
+    assert result.summary.main_skill == "Do the thing."
+    assert result.summary.main_themes == ("a",)
+
+
+def test_synthesize_single_phase_falls_back_to_heading_when_reconcile_gives_no_title() -> None:
+    # The K=1 degenerate case: the sole phase IS the document, so its heading beats the
+    # dated source-stem fallback when the reconcile call comes back with an empty title.
+    phases = [Phase(text="[00:00:00] only", index=1, total=1, start_seconds=0.0, end_seconds=0.0)]
+    caller = _seq_caller(
+        _outcome(_phase_ti("Lone Heading", "Only prose.", anchors=["[00:00:00]"])),
+        _outcome(_reconcile_ti(title="")),
+    )
+    result = summarize.synthesize_summary(
+        phases,
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
     assert result.summary.title == "Lone Heading"
-    assert result.summary.main_themes == ()
+
+
+def test_synthesize_carries_the_essence_block_off_the_reconcile_call() -> None:
+    # The reconcile pass writes all three essence points; they land on the Summary intact,
+    # with each question keeping its own answer (they render at opposite ends of the doc).
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "First. Second. Third.", anchors=["[00:00:00]"])),
+        _outcome(_phase_ti("Body", "Body prose.", anchors=["[00:10:00]"])),
+        _outcome(
+            _reconcile_ti(
+                core_idea="The central claim.",
+                main_skill="Notice the distinction, then act on it.",
+                test_questions=[
+                    {"question": "Why does X fail without Y?", "answer": "Because Y supplies Z."},
+                    {"question": "When would you not apply it?", "answer": "When the cost is low."},
+                    {"question": "What distinction is easy to miss?", "answer": "X is not W."},
+                ],
+            )
+        ),
+    )
+    result = summarize.synthesize_summary(
+        _two_phases(),
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="s",
+        api_key="k",
+        caller=caller,
+        log=lambda _m: None,
+    )
+    s = result.summary
+    assert s.core_idea == "The central claim."
+    assert s.main_skill == "Notice the distinction, then act on it."
+    assert len(s.test_questions) == 3
+    assert s.test_questions[0].question == "Why does X fail without Y?"
+    assert s.test_questions[0].answer == "Because Y supplies Z."
+
+
+def test_test_questions_parser_drops_answer_only_entries() -> None:
+    # An entry with no question is dropped rather than faked — the block and the answers
+    # section number off the SAME list, so a phantom entry would renumber them apart.
+    parsed = summarize._test_questions(
+        [
+            {"question": " Real? ", "answer": " Yes. "},
+            {"answer": "orphan answer"},  # no question -> dropped
+            {"question": "No answer yet"},  # kept: renders in the block, not in the answers
+            "not a dict",
+        ]
+    )
+    assert [q.question for q in parsed] == ["Real?", "No answer yet"]
+    assert [q.answer for q in parsed] == ["Yes.", ""]
+
+
+def test_validate_anchors_strips_inline_timecode_in_the_essence_block() -> None:
+    # The essence block is reconcile-written free text like core_idea: a timecode the model
+    # copied over from the phase prose must resolve to a real block or be dropped, holding
+    # the "every anchor resolves to a real timecode" invariant across the new fields.
+    summary = Summary(
+        title="t",
+        core_idea="",
+        main_skill="Apply it at [00:09:00], not [00:00:00].",  # first is hallucinated
+        test_questions=(
+            summarize.CheckQuestion(
+                question="What happens at [00:09:00]?", answer="It lands at [00:00:00]."
+            ),
+        ),
+        decisions=(),
+        action_items=(),
+        language="en",
+    )
+    out = summarize.validate_anchors(summary, "[00:00:00] real block\n[00:10:00] another")
+    assert "[00:09:00]" not in out.main_skill
+    assert "[00:00:00]" in out.main_skill  # the real one survives
+    assert "[00:09:00]" not in out.test_questions[0].question
+    assert "[00:00:00]" in out.test_questions[0].answer
 
 
 def test_synthesize_phase_max_tokens_fails_loud_naming_phase() -> None:

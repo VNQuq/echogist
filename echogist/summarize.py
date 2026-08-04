@@ -115,6 +115,23 @@ class ActionItem:
 
 
 @dataclass(frozen=True)
+class CheckQuestion:
+    """One self-check question over the WHOLE material, plus its reference answer.
+
+    The essence block's third point. The questions render up front (a reader can try to
+    answer them before or after reading); the ``answer`` texts render as a separate
+    section at the very END of the document, so seeing a question does not give away its
+    answer. Both are written by the reconcile pass from the phase prose only — the same
+    grounding rule as everything else — so an answer is a pointer back into the material,
+    never new content. ``answer`` defaults empty so a hand-edited/older saved ``.json``
+    still constructs; an empty answer simply renders no entry in the answers section.
+    """
+
+    question: str
+    answer: str = ""
+
+
+@dataclass(frozen=True)
 class SynthesisSection:
     """One synthesized phase (TD-16 v2): a heading, faithful prose, and its anchors.
 
@@ -138,12 +155,17 @@ class Summary:
 
     The readable document is the ordered ``synthesis`` phases (heading + faithful prose
     + validated anchors) plus ``main_themes`` (the reconcile pass's ~5-8 cross-phase
-    threads) and ``core_idea``. ``title`` is always non-empty — the F10 fallback fills it
-    when the reconcile/phase returns none. ``decisions`` / ``action_items`` are the
-    meeting/planning half, each carrying a validated anchor: empty for material (a lecture,
-    a monologue) that has none. The pre-v2 map-reduce/grouping fields
+    threads) and the ESSENCE BLOCK — ``core_idea`` + ``main_skill`` + ``test_questions``,
+    the 1-2 page digest the reconcile pass writes over the finished phases. ``title`` is
+    always non-empty — the F10 fallback fills it when the reconcile/phase returns none.
+    ``decisions`` / ``action_items`` are the meeting/planning half, each carrying a
+    validated anchor: empty for material (a lecture, a monologue) that has none. The
+    pre-v2 map-reduce/grouping fields
     (overview/key_takeaways/section_timecodes/recurring_themes/*_groups) were removed when
     map-reduce retired — v2 reads the transcript directly, one hop, no extracted checklist.
+
+    The essence fields all default empty, so a ``.json`` saved before the block existed
+    still loads and re-renders (it simply has no block).
     """
 
     title: str
@@ -153,6 +175,8 @@ class Summary:
     language: str
     synthesis: tuple[SynthesisSection, ...] = ()
     main_themes: tuple[str, ...] = ()
+    main_skill: str = ""
+    test_questions: tuple[CheckQuestion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -242,6 +266,23 @@ def _action_items(value: Any) -> tuple[ActionItem, ...]:
                 anchor=str(item.get("anchor", "")).strip(),  # optional, "" pre-v2
             )
         )
+    return tuple(out)
+
+
+def _test_questions(value: Any) -> tuple[CheckQuestion, ...]:
+    """Coerce the test_questions array to :class:`CheckQuestion`s; skip entries with no
+    question. A question with no answer is KEPT (it still renders in the block) — only the
+    answers section skips it, so the two never renumber out of step."""
+    if not isinstance(value, list):
+        return ()
+    out: list[CheckQuestion] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question", "")).strip()
+        if not question:  # an answer with no question is dropped, not faked
+            continue
+        out.append(CheckQuestion(question=question, answer=str(item.get("answer", "")).strip()))
     return tuple(out)
 
 
@@ -555,10 +596,13 @@ def _phase_tool_schema() -> dict[str, Any]:
 
 
 def _reconcile_tool_schema() -> dict[str, Any]:
-    """The forced emit_reconcile tool: the document header over the synthesized phases."""
+    """The forced emit_reconcile tool: the document header + essence block over the phases."""
     return {
         "name": _RECONCILE_TOOL_NAME,
-        "description": "Return the document title, core idea, and main themes over the phases.",
+        "description": (
+            "Return the document title, the essence block (core idea, key skill, "
+            "self-check questions with answers), and the main themes over the phases."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -572,9 +616,46 @@ def _reconcile_tool_schema() -> dict[str, Any]:
                 "core_idea": {
                     "type": "string",
                     "description": (
-                        "The single central point a reader should leave with — as many "
-                        "sentences as it takes. Note any cross-phase contradiction here."
+                        "Essence block point 1: the single central point a reader should "
+                        "leave with, ~250-350 words. Note any cross-phase contradiction here."
                     ),
+                },
+                "main_skill": {
+                    "type": "string",
+                    "description": (
+                        "Essence block point 2: the ONE thing the material teaches the "
+                        "reader to DO, ~150-200 words — what it is, when to apply it, how "
+                        "the author says to do it. Empty only if the material teaches none."
+                    ),
+                },
+                "test_questions": {
+                    "type": "array",
+                    "description": (
+                        "Essence block point 3: exactly 3 questions that check whether the "
+                        "reader understood the material, each with a short reference answer."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": (
+                                    "One self-check question over the whole material, "
+                                    "answerable only by someone who understood it. One "
+                                    "sentence; no answer, no hint."
+                                ),
+                            },
+                            "answer": {
+                                "type": "string",
+                                "description": (
+                                    "The reference answer, 2-4 sentences, grounded in the "
+                                    "phase passages. It renders far from the question, so "
+                                    "it must stand on its own."
+                                ),
+                            },
+                        },
+                        "required": ["question", "answer"],
+                    },
                 },
                 "main_themes": {
                     "type": "array",
@@ -591,7 +672,14 @@ def _reconcile_tool_schema() -> dict[str, Any]:
                     ),
                 },
             },
-            "required": ["title", "core_idea", "main_themes", "phase_headings"],
+            "required": [
+                "title",
+                "core_idea",
+                "main_skill",
+                "test_questions",
+                "main_themes",
+                "phase_headings",
+            ],
         },
     }
 
@@ -781,8 +869,8 @@ def validate_anchors(
     trusts "jump to the anchor", so any timecode that is not a real transcript block is
     snapped to the nearest one (rounding) or dropped (hallucination) — never left as a false
     coordinate. Runs over section anchors AND each section's prose AND heading, the
-    decision/action anchors, AND the reconcile header (core_idea + main_themes), so nothing
-    timecoded reaches
+    decision/action anchors, AND the reconcile header (core_idea + main_skill + the essence
+    block's questions/answers + main_themes), so nothing timecoded reaches
     the operator unvalidated. In synthesis this is applied PER PHASE against that phase's own
     timecodes — a phase anchor that only matches some other phase's block is a hallucination,
     not a citation — and the document header is validated once against the whole transcript.
@@ -795,6 +883,8 @@ def validate_anchors(
         or summary.action_items
         or summary.core_idea
         or summary.main_themes
+        or summary.main_skill
+        or summary.test_questions
     ):
         return summary
     valid_by_sec = {_tc_seconds(tc): tc for tc in block_timecodes(transcript_text)}
@@ -815,6 +905,13 @@ def validate_anchors(
     actions = tuple(replace(a, anchor=fix_str(a.anchor)) for a in summary.action_items)
     core_idea = strip_inline(summary.core_idea)
     main_themes = tuple(strip_inline(t) for t in summary.main_themes)
+    # The essence block is reconcile-written free text like core_idea, so a timecode the
+    # model copied over from the phase prose is snapped/dropped here too.
+    main_skill = strip_inline(summary.main_skill)
+    questions = tuple(
+        replace(q, question=strip_inline(q.question), answer=strip_inline(q.answer))
+        for q in summary.test_questions
+    )
     log(f"Validated anchors: {stats[0]} exact, {stats[1]} snapped, {stats[2]} dropped.")
     return replace(
         summary,
@@ -823,6 +920,8 @@ def validate_anchors(
         action_items=actions,
         core_idea=core_idea,
         main_themes=main_themes,
+        main_skill=main_skill,
+        test_questions=questions,
     )
 
 
@@ -889,9 +988,11 @@ def synthesize_summary(
     """Synthesize ``phases`` sequentially into one transcript-grounded Summary (TD-16 v2).
 
     K synthesis calls (forward-only: each phase sees the prior headings + the previous
-    phase's tail prose for continuity) + 1 reconcile call when K>1 (the document header
-    AND a normalized phase-heading outline, TD-18 — applied fail-soft; a single phase uses
-    its own heading as the title, no extra call — short material runs in one call).
+    phase's tail prose for continuity) + 1 reconcile call, ALWAYS — it writes the document
+    header, the essence block (core idea / key skill / 3 self-check questions + answers),
+    and a normalized phase-heading outline (TD-18, applied fail-soft). K=1 pays for that
+    second call too: the block is the point of the document, and skipping it exactly when
+    the material is short would make the feature silently absent (operator decision).
 
     Each phase's anchors (section + inline prose + decisions + actions) are
     validated against THAT phase's own transcript timecodes as it lands (a strict per-phase
@@ -964,26 +1065,25 @@ def synthesize_summary(
         if on_phase is not None:  # artifact-resume seam (T5 persists the running partial)
             on_phase(_running_summary(sections, decisions, actions, language))
 
-    title = core_idea = ""
-    main_themes: tuple[str, ...] = ()
-    if len(sections) > 1:
-        log("Reconciling the phases into a document header...")
-        rec = caller(build_reconcile_request(sections, tier, cfg, language=language), api_key)
-        if rec.stop_reason == "max_tokens":
-            raise SummarizeError(
-                "The reconcile step hit the output cap. Raise max_output_tokens in "
-                "models.toml, then retry from the saved transcript."
-            )
-        total_in += rec.input_tokens
-        total_out += rec.output_tokens
-        title = str(rec.tool_input.get("title", "")).strip()
-        core_idea = str(rec.tool_input.get("core_idea", "")).strip()
-        main_themes = _str_list(rec.tool_input.get("main_themes"))
-        # TD-18: normalize the forward-only phase headings into one coherent outline.
-        sections = _apply_normalized_headings(
-            sections, rec.tool_input.get("phase_headings"), log=log
+    log("Reconciling the phases into a document header + essence block...")
+    rec = caller(build_reconcile_request(sections, tier, cfg, language=language), api_key)
+    if rec.stop_reason == "max_tokens":
+        raise SummarizeError(
+            "The reconcile step hit the output cap. Raise max_output_tokens in "
+            "models.toml, then retry from the saved transcript."
         )
-    else:  # K=1: the single phase IS the document; its heading is the title, no reconcile
+    total_in += rec.input_tokens
+    total_out += rec.output_tokens
+    title = str(rec.tool_input.get("title", "")).strip()
+    core_idea = str(rec.tool_input.get("core_idea", "")).strip()
+    main_skill = str(rec.tool_input.get("main_skill", "")).strip()
+    test_questions = _test_questions(rec.tool_input.get("test_questions"))
+    main_themes = _str_list(rec.tool_input.get("main_themes"))
+    # TD-18: normalize the forward-only phase headings into one coherent outline.
+    sections = _apply_normalized_headings(sections, rec.tool_input.get("phase_headings"), log=log)
+    if not title and len(sections) == 1:
+        # K=1 degenerate: the sole phase IS the document, so its heading is a better title
+        # than the dated source stem when reconcile returned none.
         title = sections[0].heading
 
     summary = Summary(
@@ -998,6 +1098,8 @@ def synthesize_summary(
         language=language,
         synthesis=tuple(sections),
         main_themes=main_themes,
+        main_skill=main_skill,
+        test_questions=test_questions,
     )
     # Sections/decisions/actions are already per-phase validated above; this final pass
     # validates the reconcile header (core_idea + main_themes) against the whole transcript

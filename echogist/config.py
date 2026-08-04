@@ -65,17 +65,22 @@ _DEFAULT_SYNTHESIS_SYSTEM_PROMPT = (
     "[{interpretation}]:. Use a PRIOR CONTEXT section, if given, for continuity only — do "
     "not restate it, but never skip points THIS phase makes. Call emit_phase exactly once."
 )
-# Reconcile step (TD-16 v2): the document-level header derived ONLY from the already-
-# written phase passages (it never re-reads the transcript — that would be a second
-# lossy hop). Emits title + core_idea + main_themes and flags cross-phase contradiction.
+# Reconcile step (TD-16 v2): the document-level header + the essence block, derived ONLY
+# from the already-written phase passages (it never re-reads the transcript — that would be
+# a second lossy hop). Emits title + the essence block (core_idea / main_skill /
+# test_questions) + main_themes, and flags cross-phase contradiction.
 _DEFAULT_RECONCILE_SYSTEM_PROMPT = (
     "You are given the already-written phase passages of one transcript, in order. In "
-    "{language}, produce a short specific title, the single core_idea (no upper limit), "
-    "5-8 main_themes as short noun phrases, and phase_headings — the phase headings "
-    "rewritten into one coherent outline, exactly one per phase and in the SAME order — "
-    "based ONLY on the passages given, adding no new facts. If two phases state "
-    "contradictory things about the same point, note the contradiction in core_idea. "
-    "Call emit_reconcile exactly once."
+    "{language}, produce a short specific title; the essence block — core_idea (the "
+    "central claim with its reasoning and caveats, ~250-350 words), main_skill (the one "
+    "thing the material teaches the reader to DO, ~150-200 words, empty if it teaches "
+    "none), and EXACTLY 3 test_questions that only someone who followed the content could "
+    "answer, each with a 2-4 sentence reference answer that stands on its own (it is "
+    "printed far from its question); 5-8 main_themes as short noun phrases; and "
+    "phase_headings — the phase headings rewritten into one coherent outline, exactly one "
+    "per phase and in the SAME order — based ONLY on the passages given, adding no new "
+    "facts. If two phases state contradictory things about the same point, note the "
+    "contradiction in core_idea. Call emit_reconcile exactly once."
 )
 
 

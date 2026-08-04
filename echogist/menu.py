@@ -235,12 +235,13 @@ def _run_summary(
         return
 
     k = len(plan)
-    calls = k + (1 if k > 1 else 0)  # K phase calls + 1 reconcile when K>1 (matches the cost)
-    if k > 1:
-        ui.info(
-            f"Synthesizing the transcript in {k} phases (+1 reconcile) so it reads as one "
-            f"faithful document — {calls} cloud calls."
-        )
+    # K phase calls + 1 reconcile, always (matches the cost estimate): the reconcile writes
+    # the essence block the document opens with, so even K=1 short material pays for it.
+    calls = k + 1
+    ui.info(
+        f"Synthesizing the transcript in {k} phase{'s' if k > 1 else ''} (+1 reconcile) so it "
+        f"reads as one faithful document — {calls} cloud calls."
+    )
     ui.info(cost.estimate_message(estimate, tier))
 
     # Unverified-price notice: scripts/check-models.py flags a tier whose model had a
@@ -289,8 +290,7 @@ def _run_summary(
         with contextlib.suppress(OSError):
             summarize.write_summary_json(partial, resume_path)
 
-    spin_label = f"Summarizing ({calls} cloud calls)" if k > 1 else "Summarizing (one cloud call)"
-    with ui.spinner(spin_label) as sp:
+    with ui.spinner(f"Summarizing ({calls} cloud calls)") as sp:
         try:
             result = deps.summarize(
                 transcript_text,

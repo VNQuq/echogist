@@ -138,17 +138,39 @@ invent one. Write naturally in {language}, not a word-for-word translation. Call
 emit_phase tool exactly once.
 """
 
-# Reconcile step (TD-16 v2): the document-level header, derived ONLY from the already-
-# written phase passages — it never re-reads the transcript (that would be a second lossy
-# hop). It also flags any contradiction the phases left across a seam. The emit_reconcile
-# tool SCHEMA lives in echogist/summarize.py.
+# Reconcile step (TD-16 v2): the document-level header + the ESSENCE BLOCK, derived ONLY
+# from the already-written phase passages — it never re-reads the transcript (that would be
+# a second lossy hop). It also flags any contradiction the phases left across a seam. The
+# emit_reconcile tool SCHEMA lives in echogist/summarize.py.
+#
+# The essence block (core_idea + main_skill + test_questions) is the 1-2 page digest that
+# opens the rendered document: what the material says, what it teaches you to DO, and three
+# questions that check whether you actually got it. The word budgets below are what keeps it
+# to 1-2 pages — a rendered PDF page is roughly 500 words at the body size, so ~600 words of
+# block plus three one-line questions lands just over one page. The ANSWERS are written here
+# too but render at the very END of the document, far from their questions, so reading a
+# question does not hand you its answer; that is why each answer must stand alone.
 reconcile_system_prompt = """
 You are given the already-written phase passages (their headings and prose) of ONE \
 transcript that was synthesized phase by phase, in order. Produce the document-level \
-header, written entirely in {language}, by calling the emit_reconcile tool exactly once:
+header and the essence block, written entirely in {language}, by calling the \
+emit_reconcile tool exactly once:
 - title: a short, specific, human-meaningful title (no date, no extension, no quotes).
-- core_idea: the single central point a reader should leave with, in as many sentences \
-as it takes — no upper limit.
+- core_idea: ESSENCE POINT 1 — the single central point a reader should leave with, \
+about 250-350 words. Not a list of topics: the actual claim the material makes, with the \
+reasoning that supports it and the conditions the author puts on it.
+- main_skill: ESSENCE POINT 2 — the ONE thing this material teaches the reader to DO, \
+about 150-200 words: what the skill is, when to apply it, and how the author says to \
+carry it out. Prefer the skill the author spends the most effort teaching over the one \
+that merely sounds most impressive. If the material genuinely teaches no skill (a status \
+meeting, a news roundup), return an empty string — do NOT invent one.
+- test_questions: ESSENCE POINT 3 — EXACTLY 3 questions that check whether the reader \
+understood this material, each with its reference answer. A question must be answerable \
+ONLY by someone who followed the content — never a yes/no, never something answerable \
+from the title alone, and it must not contain or hint at its own answer. Aim one question \
+at the core idea, one at the main skill, and one at a distinction or caveat a careless \
+reader would miss. Each answer is 2-4 sentences, grounded in the passages; it is printed \
+far away from its question, so write it to stand on its own.
 - main_themes: the 5-8 threads that run across the phases, each a short noun phrase.
 - phase_headings: rewrite the phase headings into ONE coherent outline for the whole \
 document, EXACTLY one per phase and in the SAME order as the phases given. They were \

@@ -6,8 +6,11 @@ default) or ``<title>.md``. It is LOCAL and offline — no network, no key — s
 sits to the left of the killswitch like every stage except summarize.
 
 **The v2 document (TD-16).** The summary is the ordered ``synthesis`` phases (heading +
-faithful prose + validated anchors) plus ``core_idea``, ``main_themes``, and the
-decisions/actions — one readable document, no flat/grouped fallback (map-reduce retired).
+faithful prose + validated anchors) plus ``main_themes`` and the decisions/actions — one
+readable document, no flat/grouped fallback (map-reduce retired). It OPENS with the
+essence block (``core_idea`` / ``main_skill`` / ``test_questions``, ~1-2 pages) and CLOSES
+with the questions' reference answers: the two are deliberately at opposite ends so
+reading a self-check question does not hand the reader its answer.
 
 **Grouping the triplet.** Summarize (T6) already wrote the raw
 ``output/summaries/raw/<title>.json`` (F13). Render reuses THAT file's stem for the
@@ -43,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from . import naming
-from .summarize import ActionItem, Decision, Summary, SynthesisSection
+from .summarize import ActionItem, CheckQuestion, Decision, Summary, SynthesisSection
 
 Logger = Callable[[str], object]
 
@@ -72,14 +75,22 @@ _LABELS: dict[str, dict[str, str]] = {
         "decisions": "Decisions",
         "action_items": "Action items",
         "estimate": "estimate",
+        "essence": "Essence",
         "core_idea": "Core idea",
+        "main_skill": "Key skill",
+        "test_questions": "Self-check questions",
+        "answers": "Reference answers",
         "main_themes": "Main themes",
     },
     "ru": {
         "decisions": "Принятые решения",
         "action_items": "Пункты к выполнению",
         "estimate": "оценка",
+        "essence": "Суть",
         "core_idea": "Главная мысль",
+        "main_skill": "Главный навык",
+        "test_questions": "Проверочные вопросы",
+        "answers": "Ориентиры для ответов",
         "main_themes": "Основные темы",
     },
 }
@@ -152,6 +163,27 @@ def load_summary(json_path: Path) -> Summary:
         language=str(raw.get("language", "")),
         synthesis=_synthesis_sections(raw.get("synthesis")),
         main_themes=_str_tuple(raw.get("main_themes")),
+        # Essence block: absent in a .json saved before it existed -> empty, so an older
+        # artifact still re-renders (just without the block), never a KeyError.
+        main_skill=str(raw.get("main_skill", "")),
+        test_questions=_test_questions(raw.get("test_questions")),
+    )
+
+
+def _test_questions(value: Any) -> tuple[CheckQuestion, ...]:
+    """Reconstruct the essence block's self-check questions from saved JSON (defensive).
+
+    Missing/garbage -> empty, so a pre-block or hand-edited ``.json`` loads with no
+    questions rather than crashing. Entries with no question text are skipped: the block
+    and the answers section number off the SAME list, so a phantom entry would renumber
+    the answers out of step with the questions.
+    """
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        CheckQuestion(question=str(q.get("question", "")), answer=str(q.get("answer", "")))
+        for q in value
+        if isinstance(q, dict) and str(q.get("question", "")).strip()
     )
 
 
@@ -257,6 +289,38 @@ def _action_text(item: ActionItem, lab: dict[str, str], *, unassigned: str = "")
 
 
 # --------------------------------------------------------------------------- #
+# The essence block (core idea / key skill / self-check questions) — Markdown + PDF agree
+# --------------------------------------------------------------------------- #
+def _has_essence(summary: Summary) -> bool:
+    """True if there is anything to put in the opening essence block.
+
+    All three points are optional: material that teaches no skill leaves ``main_skill``
+    empty, and a summary loaded from a pre-block ``.json`` has none of them. An empty
+    block is skipped entirely rather than rendered as a bare heading.
+    """
+    return bool(summary.core_idea or summary.main_skill or summary.test_questions)
+
+
+def _answered(summary: Summary) -> list[tuple[int, CheckQuestion]]:
+    """The essence questions that have a reference answer, each with its DISPLAY number.
+
+    The number is the question's position in the full block list, not in this filtered
+    one, so the answers at the end of the document line up with the questions at the top
+    even when one of them came back without an answer.
+    """
+    return [(i, q) for i, q in enumerate(summary.test_questions, 1) if q.answer.strip()]
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace/newlines to a single line (a question, a heading, a title).
+
+    ``load_summary`` is verbatim by design, so a newline in a model-written or
+    hand-edited question would break out of its Markdown list item and inject structure.
+    """
+    return " ".join(text.split())
+
+
+# --------------------------------------------------------------------------- #
 # Paragraphing — break a long single-blob field into readable paragraphs
 # --------------------------------------------------------------------------- #
 # Sentences per paragraph when the model emits a phase's prose as one unbroken slab.
@@ -312,28 +376,64 @@ def _md_decisions_actions(summary: Summary, lab: dict[str, str]) -> list[str]:
     return out
 
 
-def _markdown(summary: Summary) -> str:
-    """The TD-16 v2 readable document as Markdown: core idea -> phases -> themes -> actions.
+def _md_essence(summary: Summary, lab: dict[str, str]) -> list[str]:
+    """The opening essence block: core idea, key skill, the 3 self-check questions.
 
-    The document is the synthesized prose (heading + paragraphs + validated anchors) plus
-    the document header and the de-noised decisions/actions. UTF-8, Cyrillic literal.
+    The answers deliberately do NOT appear here — they render at the very end of the
+    document (:func:`_md_answers`), so reading a question does not hand you its answer.
+    """
+    if not _has_essence(summary):
+        return []
+    out: list[str] = [f"## {lab['essence']}", ""]
+    if summary.core_idea:
+        out += [f"### {lab['core_idea']}", ""]
+        out += [line for para in _paragraphs(summary.core_idea) for line in (para, "")]
+    if summary.main_skill:
+        out += [f"### {lab['main_skill']}", ""]
+        out += [line for para in _paragraphs(summary.main_skill) for line in (para, "")]
+    if summary.test_questions:
+        out += [f"### {lab['test_questions']}", ""]
+        out += [f"{i}. {_one_line(q.question)}" for i, q in enumerate(summary.test_questions, 1)]
+        out += [""]
+    return out
+
+
+def _md_answers(summary: Summary, lab: dict[str, str]) -> list[str]:
+    """The reference answers, last in the document — numbered to match the questions."""
+    answered = _answered(summary)
+    if not answered:
+        return []
+    out: list[str] = [f"## {lab['answers']}", ""]
+    for i, q in answered:
+        # The question is repeated (bold, not a heading — it stays out of the outline) so
+        # each answer stands on its own without paging back to the block.
+        out += [f"**{i}. {_one_line(q.question)}**", ""]
+        out += [line for para in _paragraphs(q.answer) for line in (para, "")]
+    return out
+
+
+def _markdown(summary: Summary) -> str:
+    """The TD-16 v2 readable document as Markdown: essence -> phases -> themes -> answers.
+
+    The document is the opening essence block (core idea / key skill / self-check
+    questions), the synthesized prose (heading + paragraphs + validated anchors), the
+    de-noised decisions/actions, and last the reference answers. UTF-8, Cyrillic literal.
     """
     lab = _labels(summary.language)
     # Collapse whitespace/newlines in the title for the same reason as the section
     # headings below: load_summary is verbatim, so a hand-edited/model title with a
     # newline + `#` must not inject extra Markdown structure on the one `#` title line.
-    title = " ".join((summary.title or _FALLBACK_TITLE).split())
+    title = _one_line(summary.title or _FALLBACK_TITLE)
     out: list[str] = [f"# {title}".rstrip(), ""]
-    if summary.core_idea:
-        out += [f"## {lab['core_idea']}", "", summary.core_idea, ""]
+    out += _md_essence(summary, lab)
     for s in summary.synthesis:
         # Collapse any whitespace/newlines in the heading: a heading is one line, and a
         # garbled/hand-edited transcript must not inject extra Markdown structure via a
         # newline + `#` in the model-supplied heading (the summarize side strips, but
         # load_summary is verbatim by design).
-        heading = " ".join(s.heading.split())
-        # K=1: the sole phase heading IS the document title (no reconcile renamed it), so
-        # don't print it twice. Also skip an empty heading rather than emit a bare "## ".
+        heading = _one_line(s.heading)
+        # K=1: the sole phase heading may BE the document title (reconcile returned none),
+        # so don't print it twice. Also skip an empty heading rather than emit a bare "## ".
         if heading and heading != title:
             out += [f"## {heading}".rstrip(), ""]
         for para in _paragraphs(s.prose):
@@ -344,6 +444,7 @@ def _markdown(summary: Summary) -> str:
     if summary.main_themes:
         out += [f"## {lab['main_themes']}", "", *(f"- {t}" for t in summary.main_themes), ""]
     out += _md_decisions_actions(summary, lab)
+    out += _md_answers(summary, lab)  # last in the document, by design
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -447,6 +548,15 @@ def _heading(pdf: Any, text: str) -> None:
     pdf.ln(1.5)
 
 
+def _subheading(pdf: Any, text: str) -> None:
+    """A second-level heading — the essence block's three points inside its one section."""
+    pdf.ln(2.5)
+    pdf.set_text_color(*_INK_STRONG)
+    pdf.set_font(_FONT_FAMILY, "B", 12)
+    _line(pdf, 6.5, text)
+    pdf.ln(1)
+
+
 def _body(pdf: Any, text: str) -> None:
     pdf.set_text_color(*_INK)
     pdf.set_font(_FONT_FAMILY, "", 11)
@@ -467,15 +577,47 @@ def _bullet(pdf: Any, text: str) -> None:
     _line(pdf, 6.5, f"•  {text}")  # DejaVuSans carries U+2022, so no tofu bullet
 
 
-def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
-    """The TD-16 v2 PDF body: core idea -> phases (prose + anchors) -> themes -> decisions."""
+def _numbered(pdf: Any, number: int, text: str) -> None:
+    pdf.set_text_color(*_INK)
+    pdf.set_font(_FONT_FAMILY, "", 11)
+    _line(pdf, 6.5, f"{number}.  {text}")
+
+
+def _pdf_essence(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
+    """The opening essence block. The answers are NOT here — see :func:`_pdf_answers`."""
+    if not _has_essence(summary):
+        return
+    _heading(pdf, lab["essence"])
     if summary.core_idea:
-        _heading(pdf, lab["core_idea"])
-        _body(pdf, summary.core_idea)
-    title = " ".join((summary.title or _FALLBACK_TITLE).split())
+        _subheading(pdf, lab["core_idea"])
+        _paragraphed_body(pdf, summary.core_idea)
+    if summary.main_skill:
+        _subheading(pdf, lab["main_skill"])
+        _paragraphed_body(pdf, summary.main_skill)
+    if summary.test_questions:
+        _subheading(pdf, lab["test_questions"])
+        for i, q in enumerate(summary.test_questions, 1):
+            _numbered(pdf, i, _one_line(q.question))
+
+
+def _pdf_answers(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
+    """The reference answers, last on the page — numbered to match the questions."""
+    answered = _answered(summary)
+    if not answered:
+        return
+    _heading(pdf, lab["answers"])
+    for i, q in answered:
+        _subheading(pdf, f"{i}. {_one_line(q.question)}")
+        _paragraphed_body(pdf, q.answer)
+
+
+def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None:
+    """The TD-16 v2 PDF body: essence -> phases (prose + anchors) -> themes -> answers."""
+    _pdf_essence(pdf, summary, lab)
+    title = _one_line(summary.title or _FALLBACK_TITLE)
     for s in summary.synthesis:
-        heading = " ".join(s.heading.split())
-        # K=1: heading == the title already rendered above — don't repeat it.
+        heading = _one_line(s.heading)
+        # K=1: heading may BE the title already rendered above — don't repeat it.
         if heading and heading != title:
             _heading(pdf, heading)
         _paragraphed_body(pdf, s.prose)
@@ -493,3 +635,4 @@ def _pdf_synthesis_body(pdf: Any, summary: Summary, lab: dict[str, str]) -> None
         _heading(pdf, lab["action_items"])
         for action in summary.action_items:
             _bullet(pdf, _action_text(action, lab, unassigned=unassigned))
+    _pdf_answers(pdf, summary, lab)  # last in the document, by design

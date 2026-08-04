@@ -1,35 +1,41 @@
 # Current Context
 
-**Updated:** 2026-08-04 (**v2.1.0 RELEASED** — tag `v2.1.0` cut via `scripts/release.py`). Maintenance
-release on top of the v2.0.0 pipeline (unchanged): model-currency automation (`scripts/check-models.py`,
-floating aliases, `prices_unverified`) + the technical-debt registry closed (TD-1..21; TD-9/TD-17 done,
-TD-7/TD-20 wontfix). **Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
+**Updated:** 2026-08-04 (**ESSENCE BLOCK on `main`, unreleased** — the summary document now opens with a
+1-2 page block: главная мысль / главный навык / 3 проверочных вопроса, answers at the very end. Last
+release: **v2.1.0** — model-currency automation + the technical-debt registry closed, TD-1..21).
+**Authority:** [CLAUDE.md](../CLAUDE.md) · **Max length:** ≤ 2 pages (≈ 60 lines).
 
 ---
 
-## Active scope — TD-16 v2: direct transcript synthesis (DONE, released in v2.0.0)
+## Pipeline — TD-16 v2 direct synthesis (released in v2.0.0)
 
-**Principle (operator, eng-reviewed, in CLAUDE.md):** fidelity > completeness. The transcript is ground truth,
-read DIRECTLY into a faithful synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. The
-manual operator re-check against the recording + deterministic anchor validation is the fidelity gate (no
-LLM-judge). Supersedes TD-5 (map-reduce) and TD-15 (group-keep-all), both closed + deleted.
+**Principle (in CLAUDE.md):** fidelity > completeness. The transcript is ground truth, read DIRECTLY into a
+faithful synthesis (one hop) — no map-extraction, no coverage checklist, no grouping. The manual operator
+re-check + deterministic anchor validation is the fidelity gate (no LLM-judge). Supersedes TD-5/TD-15.
 
-**Pipeline (the only path):** transcript → `chunk.plan_phases` (computed K, contiguous, overlap=0; short = K=1)
-→ `summarize.synthesize_summary` ×K sequential forward-only (each phase reads its span + prior headings + prior
-phase's TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept/snap-2s/drop vs that
-phase's real timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title/
-core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-validation → one readable doc.
+**The only path:** transcript → `chunk.plan_phases` (computed K, contiguous, overlap=0; short = K=1) →
+`synthesize_summary` ×K sequential forward-only (each phase reads its span + prior headings + prior phase's
+TAIL PROSE as do-not-restate context) → per-phase `validate_anchors` (accept/snap-2s/drop vs that phase's own
+timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/actions → reconcile (title + ESSENCE BLOCK +
+main_themes + normalized headings — **always**, incl. K=1) → header anchor-validation → one readable doc.
 
-## Status — SHIPPED (v2.1.0)
+**Validated 2026-06-27** (balanced/Sonnet, 2:58:57 RU lecture, K=4, actual $0.5237) — full evidence in the
+TD-16 closed entry: coverage restored, 131/131 anchors resolve, headings cohere, PDF accepted, cost ~1.2×.
 
-- **Code complete on `main`**, gate green (`bash scripts/dev-loop`: ruff + mypy --strict + 401 tests). Post-v2.0.0
-  commits: `39094d5` (TD-9/17 + registry closed), `c0191f3` (model currency), `283c98c` (review fixes).
-- **Paid re-run VALIDATED 2026-06-27** (balanced/Sonnet, transcript `output/transcripts/2026-06-27-Лекция 3
-  01.06.26-2.txt`, 2:58:57, K=4, actual $0.5237) — full evidence in the TD-16 closed entry. Every gate item
-  passed: coverage restored (phase 2 covers 00:44→01:31); anchors 131/131 + 9/9 + 131/131 resolve (log "0
-  dropped", re-verified offline); headings cohere (TD-18); PDF operator-accepted (TD-20); cost recalibrated to
-  ~1.2× (TD-21, `output_tokens_estimate` 2800→4600); fidelity spot-check clean (12/12 grounded, no fabrication).
-  "the author-named point" absent only because Whisper garbled the surname upstream (concept covered).
+## Essence block (operator-requested 2026-08-04, on `main`, NOT yet released)
+
+The document OPENS with «Суть» — **главная мысль** (`core_idea`, ~250-350 words), **главный навык**
+(`main_skill`, ~150-200 words, empty when the material teaches none), **3 проверочных вопроса**
+(`test_questions`) — and CLOSES with «Ориентиры для ответов». Questions and answers sit at opposite ends by
+design: seeing a question must not hand you its answer. Written by the **reconcile** pass from phase prose
+only (never a second transcript read), and passed through `validate_anchors` like `core_idea`, so a timecode
+copied into the block still resolves to a real block or is dropped.
+
+**Cost change:** reconcile now runs ALWAYS, incl. K=1 (operator decision — skipping the block exactly when
+material is short would make the feature silently absent). Short material is **2 cloud calls, not 1**;
+`cost.estimate_cost_synthesis` and the menu copy match. Prompt word budgets hold the block to 1-2 pages
+(~500 words per rendered PDF page). Gate green: ruff + mypy --strict + **410 tests**. Released through
+`v2.1.0` (`712890c`); this sits on top and needs a version bump.
 
 ## Config / behavior notes
 
@@ -56,19 +62,21 @@ core_idea/main_themes + normalized phase headings, K>1 only) → header anchor-v
 
 ## Next
 
-1. **First live run of `check-models.py`** on a box with an API key (Windows; WSL has none). It seeds
-   `config/model_names.json` and confirms the real `GET /v1/models` shape. First run is a pure baseline — the
-   cache is empty, so nothing is reported as new and nothing is flagged; the signal starts on run two.
-2. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+1. **Paid validation run of the essence block** (Windows — WSL has no key). Judge the three points against
+   the recording: is the навык the one the author actually teaches, are the questions answerable only by
+   someone who followed the material, and does the block land inside 1-2 pages? The word budgets in
+   `reconcile_system_prompt` are the knob if it over/under-runs. Then cut a release (minor bump → v2.2.0).
+2. **First live run of `check-models.py`** on a box with an API key. It seeds `config/model_names.json` and
+   confirms the real `GET /v1/models` shape. First run is a pure baseline — the cache is empty, so nothing
+   is reported as new and nothing is flagged; the signal starts on run two.
+3. **T8 (P3 follow-on):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. v2.1.0 shipped.
-- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** The registry is fully closed on branch
-  `chore/close-tech-debt` (2026-08-03) — TD-9 (cheap-path acknowledge beat, gated by a new Settings flag
-  `auto_accept_under_threshold`, default True = auto-accept) + TD-17 (failure-aware progress bar) implemented;
-  TD-7 (non-TTY UI) + TD-20 (PDF polish) closed WONTFIX. **Closed:** TD-1..21. Only forward item is T8 (offline
-  LLM-judge eval, P3 enhancement, not debt).
+- **Blockers:** none. v2.1.0 shipped; the essence block is unreleased on `main`.
+- **Open debts** → [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md): **NONE.** Registry fully closed 2026-08-03 —
+  TD-9 (acknowledge beat, Settings flag `auto_accept_under_threshold`, default True) + TD-17 (failure-aware
+  progress bar) implemented; TD-7 (non-TTY UI) + TD-20 (PDF polish) WONTFIX. **Closed: TD-1..21.**
 - **SoT:** plan `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared); build spec (locked)
   [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates — operator-approved reversal); original
   SOW [`ТЗ_аудио_резюме_приложение.md`](./archive/ТЗ_аудио_резюме_приложение.md).

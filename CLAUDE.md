@@ -41,8 +41,9 @@ operator approval.
   each phase is synthesized DIRECTLY into faithful prose — one hop, no map-extracted
   intermediate, no coverage checklist, no grouping. Phases run sequentially and
   forward-only (each sees prior headings + the prior phase's real tail prose as
-  do-not-restate context); a reconcile pass (K>1 only) writes the title/core_idea/
-  main_themes from the phase prose and never re-reads the transcript. Every emitted
+  do-not-restate context); a reconcile pass (ALWAYS, incl. K=1) writes the title, the
+  ESSENCE BLOCK (главная мысль / главный навык / 3 проверочных вопроса + their answers)
+  and main_themes from the phase prose, and never re-reads the transcript. Every emitted
   `[HH:MM:SS]` anchor is validated offline against the real block timecodes (accept / snap
   within 2s / drop) — that, plus the operator's manual re-check against the recording, IS
   the fidelity gate. No LLM-judge, no automated coverage signal. *Operator-approved
