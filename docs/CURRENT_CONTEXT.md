@@ -1,7 +1,7 @@
 # Current Context
 
-**Updated:** 2026-08-05 — two unreleased features on `main`, the ESSENCE BLOCK and the MP3 conversion options.
-Last release **v2.1.0** (model currency + the TD registry closed, TD-1..21). **Authority:**
+**Updated:** 2026-08-05 — **v2.2.0 released**: the ESSENCE BLOCK and the MP3 conversion options, both
+validated on Windows against a real recording before the cut. **Authority:**
 [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here. **Max:** ≈ 60 lines.
 
 ## Pipeline — TD-16 v2 direct synthesis (v2.0.0)
@@ -13,20 +13,19 @@ phase's own timecodes; strips inline `[HH:MM:SS]`) → concatenate decisions/act
 essence block + main_themes + normalized headings — **always**, incl. K=1) → header validation → one doc.
 **Validated 2026-06-27** (Sonnet, 2:58:57 RU lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
 
-## Unreleased on `main` (both ride the v2.2.0 bump)
+## Shipped in v2.2.0 (2026-08-05) — see [CHANGELOG.md](../CHANGELOG.md) for the full entry
 
-**Essence block** (2026-08-04). Opens with «Суть» — `core_idea` ~250-350 words, `main_skill` ~150-200 (empty
-when the material teaches none), 3 `test_questions` — and CLOSES with «Ориентиры для ответов»: answers sit at
-the far end because seeing a question must not hand you its answer. Written by **reconcile** from phase prose
-only (never a second transcript read), passed through `validate_anchors`; prompt word budgets are the knob for
-the 1-2 page cap (~500 words per PDF page). **Cost:** reconcile now runs ALWAYS incl. K=1 — skipping it when
-material is short would make the feature silently absent — so short input is **2 calls, not 1**.
+**Essence block.** Doc OPENS with «Суть» (`core_idea` ~250-350 words, `main_skill` ~150-200 — empty when the
+material teaches none, 3 `test_questions`) and CLOSES with «Ориентиры для ответов»: answers sit at the far end
+because seeing a question must not hand you its answer. Written by **reconcile** from phase prose only (never a
+second transcript read), passed through `validate_anchors`; prompt word budgets are the knob for the 1-2 page
+cap (~500 words per PDF page). **Cost:** reconcile runs ALWAYS incl. K=1, so short input is **2 calls, not 1**.
 
-**MP3 options in menu #1** (written 2026-08-03, unmerged by mistake, landed 2026-08-05). Both reverse TD-12,
-operator-approved, offline: a video Summary/Transcript run now asks `confirm("Also save the converted MP3?",
-default=True)` instead of writing it silently; an mp3 source gains "Re-encode to a smaller MP3" (VBR ~q2,
-same `_convert_to_mp3` path) but its Summary/Transcript run asks nothing — shrinking an mp3 is a deliberate
-action, not a per-run prompt (operator, 2026-08-05).
+**MP3 options in menu #1.** Both reverse TD-12, operator-approved, offline: a video Summary/Transcript run asks
+`confirm("Also save the converted MP3?", default=True)` instead of writing it silently; an mp3 source gains
+"Re-encode to a smaller MP3" (VBR ~q2, same `_convert_to_mp3` path) but its Summary/Transcript run asks
+nothing — shrinking an mp3 is a deliberate action, not a per-run prompt (operator, 2026-08-05). **The asymmetry
+is intentional; do not "fix" it.**
 
 ## Config / behavior notes
 
@@ -47,12 +46,9 @@ action, not a per-run prompt (operator, 2026-08-05).
 
 ## Next
 
-1. **Paid validation run of the essence block** (Windows — WSL has no key). Against the recording: is the
-   навык the one the author actually teaches, are the 3 questions answerable only by someone who followed the
-   material, does the block fit 1-2 pages? Then cut **v2.2.0** — essence block AND the MP3 options.
-2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
+1. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
    real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
-3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+2. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
