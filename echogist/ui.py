@@ -442,11 +442,20 @@ class RichQuestionaryUI:
         self.console.print(message, style="error", markup=False)
 
     def table(self, title: str, rows: Sequence[Choice]) -> None:
+        """Render rows as a two-column table, treating every cell as PLAIN TEXT.
+
+        The ``Text()`` wrap is the same promise ``info``/``warn``/``error`` make with
+        ``markup=False``, and it became load-bearing when the batch failure table started
+        carrying operator filenames and raw ffmpeg stderr. rich reads ``[...]`` in a bare
+        string as console markup, so ``[libmp3lame @ 0x7f] error`` renders as ``error`` —
+        silently eating the one token that says which stage broke — and a stray ``[/]``
+        raises ``MarkupError``, which would take out the whole post-batch report.
+        """
         table = Table(title=title, box=self.glyphs.box, show_header=False, title_style="heading")
         table.add_column("field", style="dim")
         table.add_column("value")
         for key, value in rows:
-            table.add_row(key, value)
+            table.add_row(Text(key), Text(value))
         self.console.print(table)
 
     @contextmanager

@@ -40,6 +40,7 @@ whole menu is unit-testable with no model, no key, no network.
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -98,6 +99,10 @@ _RECOVERABLE = (
     OSError,
 )
 
+# The F1 bad-path message, in ONE place: the transcript prompt, the single-file picker's
+# typed entry, and the batch picker's console fallback all say the same thing.
+_F1_NOT_FOUND = "File not found: {path}. Check the path and try again."
+
 _API_KEY_HELP = (
     "No Anthropic API key found, so the summarization step can't run (F3). Set the "
     "ANTHROPIC_API_KEY environment variable, or put it in config/secrets.toml (copy "
@@ -150,14 +155,14 @@ def _model_dir(model_config: config.ModelConfig, base: Path) -> Path:
 def _resolve_typed_path(deps: Deps, typed: str) -> Path | None:
     """A typed/picked path → an existing file, or None (cancel / F1 bad path).
 
-    Shared by the transcript prompt (source 2) and the file picker's path entry
-    (source 1, TD-10), so the F1 message lives here once."""
+    Shared by the transcript prompt (the 'transcript' flow) and the file picker's path entry
+    (the 'local' flow, TD-10), so the F1 message lives here once."""
     typed = typed.strip()
     if not typed:
         return None
     path = Path(typed).expanduser()
     if not path.is_file():  # F1
-        _ui(deps).error(f"File not found: {path}. Check the path and try again.")
+        _ui(deps).error(_F1_NOT_FOUND.format(path=path))
         return None
     return path
 
@@ -418,13 +423,16 @@ _MP3_ACTION_CHOICES: tuple[Choice, ...] = (
 # ffmpeg reads, so the trailing "All files" entry keeps an odd-extension input from
 # being silently hidden; the in-console fallback ignores this list entirely.
 _AV_FILETYPES: tuple[tuple[str, str], ...] = (
-    ("Audio/Video", "*.mp3 *.m4a *.wav *.flac *.aac *.ogg *.opus *.mp4 *.mkv *.mov *.webm *.ts"),
+    # Derived from the batch whitelist, not hand-listed: the two had already drifted
+    # (.avi/.wmv/.flv converted fine from an expanded directory but were hidden by the
+    # picker in the very same flow), and a hand-kept copy would drift again.
+    ("Audio/Video", " ".join(f"*{suffix}" for suffix in sorted(batch.CONVERTIBLE_SUFFIXES))),
     ("All files", "*.*"),
 )
 
 
 def _flow_local_file(deps: Deps) -> None:
-    """Source 1 — a local audio/video file → {MP3 only · summary · transcript} (§5, TD-12).
+    """Menu 'local' — a local audio/video file → {MP3 only · summary · transcript} (§5, TD-12).
 
     For a video, MP3-only fails loud if extraction fails; on a Summary/Transcript run the MP3
     is a kept-by-default SECONDARY artifact (a per-run confirm, checked by default, lets the
@@ -516,11 +524,13 @@ def _flow_local_file(deps: Deps) -> None:
 def _human_size(total: int) -> str:
     """Bytes as a short human string — the batch's "how long will this take" proxy."""
     size = float(total)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024.0 or unit == "GB":
-            return f"{size:,.1f} {unit}" if unit != "B" else f"{size:,.0f} B"
+    if size < 1024.0:
+        return f"{size:,.0f} B"
+    for unit in ("KB", "MB"):
         size /= 1024.0
-    return f"{size:,.1f} GB"  # unreachable; keeps mypy honest about the return
+        if size < 1024.0:
+            return f"{size:,.1f} {unit}"
+    return f"{size / 1024.0:,.1f} GB"
 
 
 def _selection_bytes(sources: Sequence[Path]) -> int:
@@ -566,7 +576,7 @@ def _report_batch(ui: UI, report: BatchReport, *, cancelled: bool) -> None:
 
 
 def _flow_batch_mp3(deps: Deps) -> None:
-    """Source 2 — multi-select videos, convert them all to MP3 (offline, no cost).
+    """Menu 'batch' — multi-select videos, convert them all to MP3 (offline, no cost).
 
     MP3 is the whole deliverable here: no transcription, no summary, nothing paid. The
     operator multi-selects in the native dialog (Shift/Ctrl/Ctrl+A), the pool converts
@@ -598,10 +608,13 @@ def _flow_batch_mp3(deps: Deps) -> None:
         ui.info("No files selected; returning to the menu.")
         return
 
-    picked = [Path(entry).expanduser() for entry in raw]
+    # ``.strip()`` matches _resolve_typed_path: a typed path with trailing whitespace must
+    # not fail here while working in the single-file flow.
+    picked = [Path(entry.strip()).expanduser() for entry in raw if entry.strip()]
     missing = [path for path in picked if not path.exists()]
-    if missing:  # F1 — a stale path from the console fallback
-        ui.error(f"File not found: {missing[0]}. Check the path and try again.")
+    if not picked or missing:  # F1 — a stale/blank path from the console fallback
+        if missing:
+            ui.error(_F1_NOT_FOUND.format(path=missing[0]))
         return
     sources = batch.expand_selection(picked)
     if not sources:
@@ -657,6 +670,11 @@ def _flow_batch_mp3(deps: Deps) -> None:
                 sources,
                 audio_dir,
                 workers=workers,
+                # Route through the SAME injected seam the single-file flow uses. Letting
+                # convert_many fall back to its own module-level default would quietly fork
+                # the two flows: a test stubbing deps.extract_audio would spawn real ffmpeg
+                # here, and any future extraction option would apply to menu #1 only.
+                extract_fn=deps.extract_audio,
                 on_item=_tick,
                 extra=skipped,
             )
@@ -692,7 +710,7 @@ def _pick_transcript(deps: Deps, directory: Path) -> Path | None:
 
 
 def _flow_saved_transcript(deps: Deps) -> None:
-    """Source 2 — re-summarize a saved transcript (the recovery path, plan §3)."""
+    """Menu 'transcript' — re-summarize a saved transcript (the recovery path, plan §3)."""
     ui = _ui(deps)
     ui.clear()  # TD-11: start this flow on a clean screen
     settings = config.load_settings(deps.settings_path)
@@ -727,7 +745,7 @@ _SETTINGS_FIELDS: tuple[Choice, ...] = (
 
 
 def _flow_settings(deps: Deps) -> None:
-    """Source 3 — edit one setting and persist it (validated on save)."""
+    """Menu 'settings' — edit one setting and persist it (validated on save)."""
     ui = _ui(deps)
     ui.clear()  # TD-11: start on a clean screen so repeated edits don't stack tables
     settings = config.load_settings(deps.settings_path)
@@ -777,8 +795,12 @@ def _flow_settings(deps: Deps) -> None:
             default=settings.auto_accept_under_threshold,
         )
     elif field_choice == "6":
+        # The core count is static help text on the field, not a new prompt or screen: 16
+        # workers on a 2-core box is worse than sequential, and nothing here said so.
+        cores = os.cpu_count() or 1
         raw = ui.text(
-            f"How many files to convert at once (1-{config.MAX_BATCH_WORKERS}; 1 = one at a time):"
+            f"How many files to convert at once (1-{config.MAX_BATCH_WORKERS}; 1 = one at "
+            f"a time; this machine has {cores} core{'s' if cores != 1 else ''}):"
         ).strip()
         try:
             workers = int(raw)

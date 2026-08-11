@@ -721,6 +721,71 @@ def test_batch_converts_every_picked_video(tmp_path: Path) -> None:
     assert ("reveal_dir", str(tmp_path / "output" / "audio")) in stub.messages
 
 
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [
+        (0, "0 B"),
+        (1023, "1,023 B"),
+        (1024, "1.0 KB"),
+        (1024**2, "1.0 MB"),
+        (1024**3, "1.0 GB"),
+        (5 * 1024**4, "5,120.0 GB"),  # past the last named unit, still readable
+    ],
+)
+def test_human_size_units(total: int, expected: str) -> None:
+    assert menu._human_size(total) == expected
+
+
+def test_selection_bytes_ignores_an_unreadable_entry(tmp_path: Path) -> None:
+    # The size line is a courtesy, never a gate: a file that vanished between the picker
+    # and the stat must contribute 0, not abort a batch the operator already committed to.
+    good = tmp_path / "a.mp4"
+    good.write_bytes(b"x" * 10)
+
+    assert menu._selection_bytes([good, tmp_path / "gone.mp4"]) == 10
+
+
+def test_batch_routes_extraction_through_the_injected_seam(tmp_path: Path) -> None:
+    # Without this the batch falls back to batch.convert_many's own module-level default
+    # and silently forks from menu #1: a test stubbing deps.extract_audio would spawn real
+    # ffmpeg, and any future extraction option would apply to one flow only.
+    videos = _videos(tmp_path, "a.mp4")
+    spy = _spy_batch()
+    deps, _, _ = _make_deps(
+        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert spy.seen["extract_fn"] is deps.extract_audio
+
+
+def test_batch_remembers_the_picked_directory(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
+    videos = _videos(tmp_path, "a.mp4", "b.mkv")
+    deps, _, _ = _make_deps(
+        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=_spy_batch()
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert isolate_last_dir == [videos[0].parent]
+
+
+def test_batch_typed_directory_is_remembered_as_itself(
+    tmp_path: Path, isolate_last_dir: list[Path]
+) -> None:
+    # A typed folder IS the working directory; remembering its parent would reopen the
+    # picker one level too high on the next run.
+    _videos(tmp_path, "a.mp4")
+    deps, _, _ = _make_deps(
+        tmp_path, ["batch", str(tmp_path / "inbox"), "exit"], batch_convert=_spy_batch()
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert isolate_last_dir == [tmp_path / "inbox"]
+
+
 def test_batch_uses_the_configured_worker_count(tmp_path: Path) -> None:
     _write_settings(tmp_path, batch_workers=3)
     videos = _videos(tmp_path, "a.mp4")

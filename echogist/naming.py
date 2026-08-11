@@ -9,6 +9,7 @@ suffix. That rule lives here, once, so a fix lands in every stage at the same ti
 
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
 from datetime import date
 from pathlib import Path
 
@@ -79,11 +80,21 @@ def summary_stem(title: str, *, fallback: str) -> str:
     return sanitize_stem(cut, fallback=fallback)
 
 
-def dedup_path(directory: Path, base: str, suffix: str) -> Path:
-    """``base+suffix`` if free, else ``base-2``, ``base-3`` ... (F9)."""
+def dedup_path(
+    directory: Path, base: str, suffix: str, *, taken: AbstractSet[Path] = frozenset()
+) -> Path:
+    """``base+suffix`` if free, else ``base-2``, ``base-3`` ... (F9).
+
+    ``taken`` holds names a caller has already handed out in this run but has not written
+    yet. A batch resolves N names before any file exists, so on-disk existence alone would
+    give two colliding stems the same path; an in-memory claim closes that without creating
+    placeholder files. Note this cannot use the ``.part`` sibling as its marker: ``.part``
+    is deliberately invisible here so a half-written file never occupies the artifact
+    namespace, which is the exact opposite of what a reservation needs.
+    """
     candidate = directory / f"{base}{suffix}"
     counter = 2
-    while candidate.exists():
+    while candidate.exists() or candidate in taken:
         candidate = directory / f"{base}-{counter}{suffix}"
         counter += 1
     return candidate
@@ -96,13 +107,15 @@ def dated_artifact_path(
     *,
     fallback: str,
     today: date | None = None,
+    taken: AbstractSet[Path] = frozenset(),
 ) -> Path:
     """Resolve ``directory/<date>-<sanitized-stem><suffix>``, deduped.
 
     Selects (does not create) the path — the writing stage owns creation, so the
-    name is only reserved against files that already exist (the single-user TOCTOU
-    is accepted, same as T3).
+    name is only reserved against files that already exist, plus any ``taken`` the
+    caller has handed out but not yet written (the single-user TOCTOU is accepted,
+    same as T3).
     """
     stamp = (today or date.today()).isoformat()
     base = f"{stamp}-{sanitize_stem(stem, fallback=fallback)}"
-    return dedup_path(directory, base, suffix)
+    return dedup_path(directory, base, suffix, taken=taken)

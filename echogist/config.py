@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -233,8 +233,10 @@ class Settings:
     # field existed) still loads, and direct ``Settings(...)`` callers stay valid.
     auto_accept_under_threshold: bool = True
     # How many files the batch MP3 flow converts at once. 1 = a genuinely sequential run.
-    # Same story as the field above: defaulted so an older settings.json still loads.
-    batch_workers: int = _DEFAULT_BATCH_WORKERS
+    # Same story as the field above: defaulted so an older settings.json still loads. The
+    # factory (not a flat literal) keeps the core-count cap true on EVERY path — a direct
+    # ``Settings(...)`` used to get a flat 4 while a loaded one got min(4, cpu_count).
+    batch_workers: int = field(default_factory=lambda: default_batch_workers())
 
 
 def default_batch_workers() -> int:

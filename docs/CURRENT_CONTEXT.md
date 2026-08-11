@@ -24,10 +24,13 @@ app** — the one local exception to the global Ctrl-C contract, carried on `Bat
 report. One bad file never kills the batch (broad per-file catch → failure table).
 
 **Load-bearing:** `dated_artifact_path` SELECTS a name without creating it, so colliding stems
-(`лекция.mp4`+`.mkv`) would race and one mp3 would silently overwrite the other. `_reserve_paths` claims every
-name up front, single-threaded, via a 0-byte placeholder, then hands each worker an explicit
-`extract_audio(out_path=...)`. **Do not "simplify" away.** Main-menu keys are now SEMANTIC (`local`/`batch`/…)
-like the submenus (TD-12); the operator still presses digits — `ui._bind_number_keys` is positional.
+(`лекция.mp4`+`.mkv`) would race and one mp3 would silently overwrite the other. `_plan_output_paths` claims
+every name up front, single-threaded, **in memory** (`dedup_path(taken=...)`), then hands each worker an
+explicit `extract_audio(out_path=...)`. It writes nothing — an on-disk claim survived `kill -9` as a fake
+artifact that poisoned dedup forever. `.part` could NOT be the claim marker: dedup deliberately cannot see it.
+**One publish scheme (`.part`→`os.replace`); do not add a second.** Cancel is bounded — SIGTERM, then `kill()`
+after 5s, so a deaf child can't hang the console. Main-menu keys are now SEMANTIC (`local`/`batch`/…) like the
+submenus (TD-12); the operator still presses digits — `ui._bind_number_keys` is positional.
 
 ## Shipped in v2.2.0 (2026-08-05) — full entry in [CHANGELOG.md](../CHANGELOG.md)
 
