@@ -114,6 +114,9 @@ class UI(Protocol):
     def pick_file(
         self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
     ) -> str | None: ...
+    def pick_files(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> tuple[str, ...] | None: ...
     def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None: ...
     def info(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
@@ -312,6 +315,60 @@ class RichQuestionaryUI:
                 filetypes=list(filetypes),
                 initialdir=str(initialdir) if initialdir else "",
             )
+        finally:
+            root.destroy()  # never leak the hidden root
+
+    def pick_files(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> tuple[str, ...] | None:
+        """Several chosen file paths, or None on a soft cancel (return to menu).
+
+        The multi-select sibling of :meth:`pick_file`, with the same split cancel
+        semantics. In the native dialog Shift-click takes a range, Ctrl-click picks
+        individually and Ctrl+A takes everything *visible* — which the ``filetypes``
+        filter has already narrowed to media, so Ctrl+A in a folder of lectures grabs
+        the videos and leaves the .txt and the cover art behind.
+
+        The no-tkinter fallback (WSL, or a Windows box with a broken Tk) can only take one
+        typed path, so it accepts a **directory** there — typing twelve paths by hand is
+        not a workflow. Expanding that directory is the caller's job; this seam stays
+        free of any knowledge about media formats.
+        """
+        try:
+            chosen = self._native_open_many(prompt, filetypes, initialdir)
+        except KeyboardInterrupt as exc:  # rare: Ctrl-C through the Tk modal loop
+            raise EOFError from exc
+        if chosen is None:  # tkinter unavailable → in-console fallback
+            single = self._path_fallback(prompt)
+            return (single,) if single else None
+        return chosen or None  # empty = native Cancel → return to menu
+
+    @staticmethod
+    def _native_open_many(
+        prompt: str, filetypes: Sequence[tuple[str, str]], initialdir: Path | None
+    ) -> tuple[str, ...] | None:
+        """The native multi-select dialog's result (empty on cancel), or None when
+        tkinter is unavailable. Same lazy import and dual ImportError/TclError guard as
+        :meth:`_native_open`; ``askopenfilenames`` returns ``""`` on cancel and a tuple of
+        paths otherwise, so both shapes collapse to an empty tuple here."""
+        try:
+            import tkinter
+            from tkinter import filedialog
+        except ImportError:
+            return None
+        try:
+            root = tkinter.Tk()
+        except tkinter.TclError:  # no usable display
+            return None
+        try:
+            root.withdraw()
+            root.wm_attributes("-topmost", True)
+            chosen = filedialog.askopenfilenames(
+                title=prompt,
+                filetypes=list(filetypes),
+                initialdir=str(initialdir) if initialdir else "",
+            )
+            return tuple(chosen) if chosen else ()
         finally:
             root.destroy()  # never leak the hidden root
 
@@ -561,6 +618,22 @@ class StubUI:
         self.messages.append(("pick_file", prompt))
         answer = self._pop()
         return None if answer is None else str(answer)
+
+    def pick_files(
+        self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
+    ) -> tuple[str, ...] | None:
+        """Pops the next queued answer. A sequence of paths → that tuple; a queued
+        ``None`` (or an empty sequence) → soft cancel; empty queue → ``EOFError``.
+        A bare string is accepted as a one-file selection so a test does not have to
+        wrap the common single-pick case in a list."""
+        self.messages.append(("pick_files", prompt))
+        answer = self._pop()
+        if answer is None:
+            return None
+        if isinstance(answer, str):
+            return (answer,)
+        assert isinstance(answer, Sequence)  # a test queued the wrong shape
+        return tuple(str(item) for item in answer) or None
 
     def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None:
         """Record the reveal once per instance for the highest priority seen (mirrors the

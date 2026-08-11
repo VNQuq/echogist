@@ -386,6 +386,97 @@ def test_pick_file_native_keyboardinterrupt_becomes_eof(monkeypatch: pytest.Monk
         ui_.pick_file("Pick", filetypes=_AV_FILETYPES)
 
 
+# --------------------------------------------------------------------------- #
+# pick_files — the multi-select sibling. Same cancel split as pick_file, plus the
+# tuple/"" shapes askopenfilenames returns.
+# --------------------------------------------------------------------------- #
+def _install_fake_tk_many(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    picked: tuple[str, ...] | str,
+    destroyed: list[bool],
+) -> None:
+    fd = types.SimpleNamespace(askopenfilenames=lambda **_kw: picked)
+    fake = types.SimpleNamespace(
+        TclError=_FakeTclError, Tk=lambda: _FakeRoot(destroyed), filedialog=fd
+    )
+    monkeypatch.setitem(sys.modules, "tkinter", cast(Any, fake))
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", cast(Any, fd))
+
+
+def test_pick_files_native_returns_every_selected_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    destroyed: list[bool] = []
+    _install_fake_tk_many(monkeypatch, picked=("/a.mp4", "/b.mkv", "/c.mov"), destroyed=destroyed)
+    ui_ = _tty_ui()
+
+    got = ui_.pick_files("Pick", filetypes=_AV_FILETYPES, initialdir=Path("/start"))
+
+    assert got == ("/a.mp4", "/b.mkv", "/c.mov")
+    assert destroyed == [True]
+
+
+def test_pick_files_native_cancel_is_a_soft_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    # askopenfilenames returns "" on Cancel (not an empty tuple) — both must read as a
+    # soft cancel, and neither may drop into the in-console fallback.
+    destroyed: list[bool] = []
+    _install_fake_tk_many(monkeypatch, picked="", destroyed=destroyed)
+    ui_ = _tty_ui()
+
+    def _no_fallback(_p: str) -> str | None:
+        pytest.fail("fallback must not run after a native cancel")
+
+    monkeypatch.setattr(ui_, "_path_fallback", _no_fallback)
+    assert ui_.pick_files("Pick", filetypes=_AV_FILETYPES) is None
+
+
+def test_native_open_many_importerror_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "tkinter", cast(Any, None))
+    assert RichQuestionaryUI._native_open_many("Pick", _AV_FILETYPES, None) is None
+
+
+def test_pick_files_falls_back_to_one_typed_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No tkinter (the real WSL state): one typed path, wrapped as a one-item selection.
+    # A directory typed here is expanded by the caller, not by this seam.
+    ui_ = _tty_ui()
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open_many", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(ui_, "_path_fallback", lambda _p: "/clips")
+
+    assert ui_.pick_files("Pick", filetypes=_AV_FILETYPES) == ("/clips",)
+
+
+def test_pick_files_fallback_blank_entry_is_a_soft_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    ui_ = _tty_ui()
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open_many", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(ui_, "_path_fallback", lambda _p: None)
+
+    assert ui_.pick_files("Pick", filetypes=_AV_FILETYPES) is None
+
+
+def test_pick_files_native_keyboardinterrupt_becomes_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    ui_ = _tty_ui()
+
+    def _boom(*_a: object) -> tuple[str, ...] | None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open_many", staticmethod(_boom))
+    with pytest.raises(EOFError):
+        ui_.pick_files("Pick", filetypes=_AV_FILETYPES)
+
+
+def test_stub_pick_files_accepts_a_sequence_a_string_and_none() -> None:
+    stub = StubUI([["/a.mp4", "/b.mkv"], "/solo.mp4", None])
+
+    assert stub.pick_files("Pick", filetypes=_AV_FILETYPES) == ("/a.mp4", "/b.mkv")
+    assert stub.pick_files("Pick", filetypes=_AV_FILETYPES) == ("/solo.mp4",)
+    assert stub.pick_files("Pick", filetypes=_AV_FILETYPES) is None
+    assert ("pick_files", "Pick") in stub.messages
+
+
+def test_stub_pick_files_empty_queue_raises_eof() -> None:
+    with pytest.raises(EOFError):
+        StubUI([]).pick_files("Pick", filetypes=_AV_FILETYPES)
+
+
 class _FakePathQ:
     """Stands in for questionary.path(...). unsafe_ask returns the answer or raises."""
 

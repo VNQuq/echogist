@@ -7,12 +7,14 @@ three input sources:
 * **1. Local file** — audio or video. A video → {MP3 only · summary · transcript}; on a
   summary/transcript run the MP3 is kept by default with a per-run opt-out confirm. An mp3 →
   {summary · transcript only · re-encode to a smaller MP3}.
-* **2. Saved transcript** — pick a saved ``output/transcripts/*.txt`` or type a
+* **2. Batch: videos → MP3** — multi-select N videos, convert them all through a bounded
+  worker pool. Offline and free: MP3 is the entire deliverable, no transcript, no summary.
+* **3. Saved transcript** — pick a saved ``output/transcripts/*.txt`` or type a
   path; re-summarize it. This is the artifact-based recovery path (plan §3): a
   summarize that failed (F2/F4/F5) re-runs from here without re-transcribing.
-* **3. Settings** — edit summary language / output format / model tier / cost
-  threshold; persisted to ``settings.json``.
-* **4. Exit.**
+* **4. Settings** — edit summary language / output format / model tier / cost
+  threshold / batch workers; persisted to ``settings.json``.
+* **5. Exit.**
 
 **The UI seam (v1.1 §3).** Every prompt and every line of output goes through a
 :class:`~echogist.ui.UI` injected on :class:`Deps`. Production is the rich+questionary
@@ -38,11 +40,24 @@ whole menu is unit-testable with no model, no key, no network.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import chunk, config, cost, extract, guard, naming, provision, render, summarize, transcribe
+from . import (
+    batch,
+    chunk,
+    config,
+    cost,
+    extract,
+    guard,
+    naming,
+    provision,
+    render,
+    summarize,
+    transcribe,
+)
+from .batch import BatchCancelled, BatchReport
 from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
 from .model_asset import ProvisionError
@@ -65,6 +80,7 @@ Logger = Callable[[str], object]
 # functions take keyword-only args a bare Callable cannot spell out, and the
 # defaults below pin the production implementations.
 ExtractFn = Callable[..., Path]
+BatchConvertFn = Callable[..., BatchReport]
 TranscribeFn = Callable[..., Transcript]
 SummarizeFn = Callable[..., SummarizeResult]
 RenderFn = Callable[..., Path]
@@ -86,7 +102,8 @@ _API_KEY_HELP = (
     "No Anthropic API key found, so the summarization step can't run (F3). Set the "
     "ANTHROPIC_API_KEY environment variable, or put it in config/secrets.toml (copy "
     "config/secrets.toml.example), then re-launch; MP3 extraction works without a key. "
-    "Your transcript is saved — re-summarize it from menu option 2 once the key is set."
+    "Your transcript is saved — re-summarize it from the 'Saved transcript' menu entry "
+    "once the key is set."
 )
 
 
@@ -104,6 +121,7 @@ class Deps:
     ui: UI | None = None
     # External / heavy stages — stubbed in tests.
     extract_audio: ExtractFn = extract.extract_audio
+    batch_convert: BatchConvertFn = batch.convert_many
     transcribe: TranscribeFn = transcribe.transcribe
     summarize: SummarizeFn = summarize.summarize_auto
     render: RenderFn = render.render
@@ -495,6 +513,165 @@ def _flow_local_file(deps: Deps) -> None:
     _run_summary(deps, settings, model_config, text, source.stem)
 
 
+def _human_size(total: int) -> str:
+    """Bytes as a short human string — the batch's "how long will this take" proxy."""
+    size = float(total)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024.0 or unit == "GB":
+            return f"{size:,.1f} {unit}" if unit != "B" else f"{size:,.0f} B"
+        size /= 1024.0
+    return f"{size:,.1f} GB"  # unreachable; keeps mypy honest about the return
+
+
+def _selection_bytes(sources: Sequence[Path]) -> int:
+    """Total size of the selection; an unreadable entry contributes 0 rather than
+    aborting the run — this figure is a courtesy line, never a gate."""
+    total = 0
+    for path in sources:
+        with contextlib.suppress(OSError):
+            total += path.stat().st_size
+    return total
+
+
+def _report_batch(ui: UI, report: BatchReport, *, cancelled: bool) -> None:
+    """Render the outcome: one headline, then a table of ONLY what did not convert.
+
+    Tabling all thirty rows would bury the four that need the operator's attention, and
+    the converted files are already sitting in the folder that is about to pop open.
+    """
+    headline = f"Converted {report.converted} of {len(report.items)} file(s)"
+    parts = [
+        f"{count} {label}"
+        for count, label in (
+            (report.skipped, "skipped"),
+            (report.failed, "failed"),
+            (report.cancelled, "not started"),
+        )
+        if count
+    ]
+    if parts:
+        headline += f" — {', '.join(parts)}"
+    if cancelled:
+        ui.warn(f"Batch stopped. {headline}.")
+    elif report.failed:
+        ui.warn(f"{headline}.")
+    else:
+        ui.success(f"{headline}.")
+
+    if report.failures:
+        ui.table(
+            "Not converted",
+            [(item.source.name, item.detail) for item in report.failures],
+        )
+
+
+def _flow_batch_mp3(deps: Deps) -> None:
+    """Source 2 — multi-select videos, convert them all to MP3 (offline, no cost).
+
+    MP3 is the whole deliverable here: no transcription, no summary, nothing paid. The
+    operator multi-selects in the native dialog (Shift/Ctrl/Ctrl+A), the pool converts
+    ``settings.batch_workers`` at a time, and every file's outcome lands in one report.
+
+    Three behaviours are deliberate and were operator-chosen:
+
+    * **An already-mp3 source is skipped**, unless the operator answers the one question
+      that appears only when the selection actually contains mp3s. Re-encoding mp3 is
+      lossy-to-lossy, and a Shift-range that swept up a neighbouring mp3 must never
+      quietly degrade it — the same reasoning that made "Re-encode to a smaller MP3" a
+      deliberate menu item rather than an automatism in the single-file flow.
+    * **One bad file does not kill the batch.** Failures are collected and tabled at the
+      end; the other conversions still land.
+    * **Ctrl-C stops the batch, not the app.** A deliberate local exception to the global
+      Ctrl-C-exits contract: abandoning a twenty-minute batch should not also throw away
+      the report of what it already produced. Every other prompt in this flow keeps the
+      normal contract, since ``BatchCancelled`` is raised only by the pool itself.
+    """
+    ui = _ui(deps)
+    ui.clear()  # TD-11: start this flow on a clean screen
+    settings = config.load_settings(deps.settings_path)
+
+    initialdir = config.resolve_initial_dir(config.load_last_dir())
+    raw = ui.pick_files(
+        "Select video files to convert to MP3", filetypes=_AV_FILETYPES, initialdir=initialdir
+    )
+    if not raw:  # dialog Cancel / blank fallback entry → soft cancel
+        ui.info("No files selected; returning to the menu.")
+        return
+
+    picked = [Path(entry).expanduser() for entry in raw]
+    missing = [path for path in picked if not path.exists()]
+    if missing:  # F1 — a stale path from the console fallback
+        ui.error(f"File not found: {missing[0]}. Check the path and try again.")
+        return
+    sources = batch.expand_selection(picked)
+    if not sources:
+        ui.warn("Nothing convertible in that selection; returning to the menu.")
+        return
+    config.save_last_dir(picked[0] if picked[0].is_dir() else picked[0].parent)
+
+    # The one conditional question (operator decision): it appears only when the choice
+    # is real, so a pure-video selection goes straight to converting.
+    already_mp3 = [path for path in sources if extract.is_mp3(path)]
+    skipped: tuple[batch.BatchItem, ...] = ()
+    # Short-circuit: the confirm is only reached when the selection actually holds mp3s,
+    # so a pure-video batch never sees the question.
+    if already_mp3 and not ui.confirm(
+        f"{len(already_mp3)} of the selected files are already MP3. Re-encode those too?",
+        default=False,
+    ):
+        skipped = tuple(
+            batch.BatchItem(path, "skipped", detail="already an MP3") for path in already_mp3
+        )
+        sources = [path for path in sources if not extract.is_mp3(path)]
+    if not sources:
+        ui.warn("Every selected file is already an MP3; nothing to convert.")
+        return
+
+    workers = settings.batch_workers
+    mode = "one at a time" if workers == 1 else f"{workers} at a time"
+    ui.info(
+        f"Converting {len(sources)} file(s), {_human_size(_selection_bytes(sources))} total, "
+        f"{mode}. Ctrl-C stops the batch and keeps what is already converted."
+    )
+
+    audio_dir = deps.base / "output" / "audio"
+    cancelled = False
+    try:
+        with ui.progress("Converting to MP3", total=float(len(sources))) as bar:
+            # One aggregate bar over completed FILES, not one bar per file: with several
+            # conversions in flight there is no single %/ETA that would be true, and N
+            # live bars would need a new multi-task UI seam for no real gain.
+            done = 0
+
+            def _tick(item: batch.BatchItem) -> None:
+                nonlocal done
+                # A cancelled file never ran, so it is not progress. Counting it would
+                # walk the bar to a full 100% during the post-Ctrl-C drain — the exact
+                # false-completion TD-17 exists to prevent — right before it freezes.
+                if item.status == "cancelled":
+                    return
+                done += 1
+                bar.advance_to(float(done))
+
+            report = deps.batch_convert(
+                sources,
+                audio_dir,
+                workers=workers,
+                on_item=_tick,
+                extra=skipped,
+            )
+            bar.done()
+    except BatchCancelled as exc:
+        # The bar was FAILED, not completed, by the progress context manager (TD-17): a
+        # cancelled batch must not flash a false 100% before its own partial report.
+        report = exc.report
+        cancelled = True
+
+    _report_batch(ui, report, cancelled=cancelled)
+    if report.converted:
+        ui.reveal_dir(audio_dir, priority=REVEAL_AUDIO)  # TD-14
+
+
 def _pick_transcript(deps: Deps, directory: Path) -> Path | None:
     """List saved transcripts and let the operator pick one with arrow keys, or type a
     path. Returns the chosen file, or None to cancel / on a bad path (F1)."""
@@ -544,6 +721,7 @@ _SETTINGS_FIELDS: tuple[Choice, ...] = (
     ("3", "Model tier"),
     ("4", "Cost confirm threshold"),
     ("5", "Auto-accept at or below threshold"),
+    ("6", "Batch MP3 workers"),
     ("__back__", "← Back"),
 )
 
@@ -562,6 +740,11 @@ def _flow_settings(deps: Deps) -> None:
             ("Model tier", settings.model_tier),
             ("Confirm threshold", f"${settings.confirm_threshold_usd:,.2f}"),
             ("Auto-accept ≤ threshold", "on" if settings.auto_accept_under_threshold else "off"),
+            (
+                "Batch MP3 workers",
+                f"{settings.batch_workers}"
+                + (" (sequential)" if settings.batch_workers == 1 else ""),
+            ),
         ],
     )
 
@@ -593,6 +776,19 @@ def _flow_settings(deps: Deps) -> None:
             "Auto-accept summaries whose estimate is at or below the threshold?",
             default=settings.auto_accept_under_threshold,
         )
+    elif field_choice == "6":
+        raw = ui.text(
+            f"How many files to convert at once (1-{config.MAX_BATCH_WORKERS}; 1 = one at a time):"
+        ).strip()
+        try:
+            workers = int(raw)
+        except ValueError:
+            ui.warn(f"'{raw}' isn't a whole number; unchanged.")
+            return
+        if not 1 <= workers <= config.MAX_BATCH_WORKERS:
+            ui.warn(f"Enter a number from 1 to {config.MAX_BATCH_WORKERS}; unchanged.")
+            return
+        settings.batch_workers = workers
 
     config.save_settings(settings, deps.settings_path)
     ui.success("Saved.")
@@ -601,11 +797,16 @@ def _flow_settings(deps: Deps) -> None:
 # --------------------------------------------------------------------------- #
 # Main loop
 # --------------------------------------------------------------------------- #
+# Semantic keys, not digits — the same rule the action submenus already follow (TD-12).
+# The operator still picks by pressing 1-9 because that binding is POSITIONAL
+# (``ui._bind_number_keys``), so inserting a row re-numbers the keyboard shortcut without
+# silently re-pointing any key here: adding "Batch" second did exactly that.
 _MAIN_MENU: tuple[Choice, ...] = (
-    ("1", "Local file (audio/video)"),
-    ("2", "Saved transcript"),
-    ("3", "Settings"),
-    ("4", "Exit"),
+    ("local", "Local file (audio/video)"),
+    ("batch", "Batch: videos -> MP3"),
+    ("transcript", "Saved transcript"),
+    ("settings", "Settings"),
+    ("exit", "Exit"),
 )
 
 
@@ -645,9 +846,10 @@ def run_menu(deps: Deps | None = None) -> int:
     ui = _ui(deps)
 
     handlers: dict[str, Callable[[Deps], None]] = {
-        "1": _flow_local_file,
-        "2": _flow_saved_transcript,
-        "3": _flow_settings,
+        "local": _flow_local_file,
+        "batch": _flow_batch_mp3,
+        "transcript": _flow_saved_transcript,
+        "settings": _flow_settings,
     }
     ui.banner("EchoGist", "local transcription + summary")
     while True:
@@ -656,7 +858,7 @@ def run_menu(deps: Deps | None = None) -> int:
         except EOFError:  # cancel / closed-piped stdin → exit cleanly
             return 0
 
-        if choice == "4":
+        if choice == "exit":
             ui.info("Goodbye.")
             return 0
         handler = handlers.get(choice)

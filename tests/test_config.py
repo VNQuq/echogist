@@ -340,6 +340,43 @@ def test_auto_accept_non_bool_errors(tmp_path: Path) -> None:
         load_settings(tmp_path / "settings.json")
 
 
+def test_batch_workers_defaults_to_at_most_four(tmp_path: Path) -> None:
+    # Seeded from the core count so a 2-core box does not thrash, capped at 4 because a
+    # batch waits on the disk past that. Also the backfill for a file written before the
+    # field existed — an old settings.json must keep loading.
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf",'
+        '"model_tier":"balanced","confirm_threshold_usd":0.5}',
+    )
+    loaded = load_settings(tmp_path / "settings.json")
+
+    assert loaded.batch_workers == default_settings().batch_workers
+    assert 1 <= loaded.batch_workers <= 4
+
+
+def test_batch_workers_explicit_value_loads(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf","model_tier":"balanced",'
+        '"confirm_threshold_usd":0.5,"batch_workers":1}',
+    )
+    assert load_settings(tmp_path / "settings.json").batch_workers == 1
+
+
+@pytest.mark.parametrize("bad", ["0", "99", '"4"', "2.5", "true"])
+def test_batch_workers_out_of_range_or_wrong_type_errors(tmp_path: Path, bad: str) -> None:
+    # ``true`` is called out explicitly: bool is an int in Python, so without the isinstance
+    # guard it would sail through as "1 worker" instead of failing loud.
+    _write(
+        tmp_path / "settings.json",
+        '{"summary_language":"ru","output_format":"pdf","model_tier":"balanced",'
+        f'"confirm_threshold_usd":0.5,"batch_workers":{bad}}}',
+    )
+    with pytest.raises(ConfigError, match="batch_workers"):
+        load_settings(tmp_path / "settings.json")
+
+
 def test_corrupt_settings_json_errors(tmp_path: Path) -> None:
     _write(tmp_path / "settings.json", "{not json")
     with pytest.raises(ConfigError, match="Could not read"):

@@ -175,6 +175,7 @@ def extract_audio(
     runner: Runner = _default_runner,
     stream_runner: StreamRunner = _default_stream_runner,
     progress: Progress | None = None,
+    out_path: Path | None = None,
 ) -> Path:
     """Extract/convert ``source`` to ``out_dir/<date>-<stem>.mp3`` (deduped).
 
@@ -189,14 +190,22 @@ def extract_audio(
     ``os.replace``-d into the final name only on success, so an interrupted or
     failed run never leaves a half-written mp3 in ``output/audio/`` for the user to
     mistake for the real artifact (the F12-analog for audio).
+
+    ``out_path`` overrides the computed destination. Only :mod:`echogist.batch` passes
+    it: :func:`naming.dated_artifact_path` *selects* a free name but does not create it,
+    so two concurrent conversions whose stems collide (``лекция.mp4`` + ``лекция.mkv``)
+    would both resolve to the same file and one would silently overwrite the other. The
+    batch runner resolves and claims every name up front, single-threaded, then hands each
+    worker its own reserved path. Callers that omit it keep the original behaviour exactly.
     """
     if not source.is_file():
         raise ExtractError(f"Input file not found: {source}.")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = naming.dated_artifact_path(
-        out_dir, source.stem, ".mp3", fallback="audio", today=today
-    )
+    if out_path is None:
+        out_path = naming.dated_artifact_path(
+            out_dir, source.stem, ".mp3", fallback="audio", today=today
+        )
     tmp_path = out_path.with_name(out_path.name + ".part")
     exe = ffmpeg_exe or _default_ffmpeg_exe()
     log(f"Extracting audio -> {out_path.name}")

@@ -26,6 +26,12 @@ from typing import Any
 VALID_LANGUAGES: tuple[str, ...] = ("ru", "en")
 VALID_FORMATS: tuple[str, ...] = ("pdf", "md")
 
+# Batch MP3 concurrency. The seeded value is capped at the machine's core count by
+# ``default_batch_workers``; the ceiling is a guard on a hand-edited settings.json, since
+# past a handful of concurrent ffmpegs the disk, not the CPU, is what the batch waits on.
+_DEFAULT_BATCH_WORKERS = 4
+MAX_BATCH_WORKERS = 16
+
 _ENV_API_KEY = "ANTHROPIC_API_KEY"
 
 _ENV_CONFIG_DIR = "ECHOGIST_CONFIG_DIR"
@@ -226,6 +232,19 @@ class Settings:
     # regardless of this flag. Has a default so an older settings.json (written before the
     # field existed) still loads, and direct ``Settings(...)`` callers stay valid.
     auto_accept_under_threshold: bool = True
+    # How many files the batch MP3 flow converts at once. 1 = a genuinely sequential run.
+    # Same story as the field above: defaulted so an older settings.json still loads.
+    batch_workers: int = _DEFAULT_BATCH_WORKERS
+
+
+def default_batch_workers() -> int:
+    """The seeded worker count: four, or fewer on a small machine.
+
+    ffmpeg extracting an audio track is more I/O than CPU, so a handful of concurrent
+    conversions is where the wall-clock win lands; past that they queue on the disk
+    instead. Capped at the core count so a 2-core box does not thrash.
+    """
+    return max(1, min(_DEFAULT_BATCH_WORKERS, os.cpu_count() or 1))
 
 
 def default_settings() -> Settings:
@@ -243,6 +262,7 @@ def default_settings() -> Settings:
         model_tier="economy",
         confirm_threshold_usd=0.50,
         auto_accept_under_threshold=True,
+        batch_workers=default_batch_workers(),
     )
 
 
@@ -526,12 +546,21 @@ def _validate_settings(data: dict[str, Any], source: str) -> Settings:
     if not isinstance(auto_accept, bool):
         raise ConfigError(f"{source}: auto_accept_under_threshold must be true or false.")
 
+    # Optional, same backfill story. A bool is rejected explicitly because ``True`` is an
+    # int in Python and would otherwise sail through as "1 worker".
+    workers = data.get("batch_workers", default_batch_workers())
+    if isinstance(workers, bool) or not isinstance(workers, int):
+        raise ConfigError(f"{source}: batch_workers must be a whole number.")
+    if not 1 <= workers <= MAX_BATCH_WORKERS:
+        raise ConfigError(f"{source}: batch_workers must be between 1 and {MAX_BATCH_WORKERS}.")
+
     return Settings(
         summary_language=language,
         output_format=output_format,
         model_tier=model_tier,
         confirm_threshold_usd=float(threshold),
         auto_accept_under_threshold=auto_accept,
+        batch_workers=workers,
     )
 
 

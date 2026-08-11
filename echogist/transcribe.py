@@ -144,8 +144,8 @@ def save_transcript(
 ) -> Path:
     """Write the rendered transcript to ``out_dir/<date>-<stem>.txt`` (deduped).
 
-    The saved file is the recovery checkpoint: option 2 of the menu re-summarizes
-    it without re-transcribing. ``block_seconds`` sets the timecode granularity (see
+    The saved file is the recovery checkpoint: the menu's 'Saved transcript' entry
+    re-summarizes it without re-transcribing. ``block_seconds`` sets the timecode granularity (see
     :func:`render_transcript`). Returns the path written. Naming (illegal-char strip +
     ``-2``/``-3`` dedup, F9) is the shared :mod:`echogist.naming` rule.
     """

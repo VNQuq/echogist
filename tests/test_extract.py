@@ -30,6 +30,31 @@ def _recorder() -> tuple[list[list[str]], extract.Runner]:
     return calls, runner
 
 
+def test_explicit_out_path_overrides_the_computed_name(tmp_path: Path) -> None:
+    # The batch runner reserves every name up front (so two colliding stems cannot race
+    # for one file) and hands each worker its own path. Omitting it must keep the
+    # original dated/deduped behaviour, which every other test here already covers.
+    source = tmp_path / "lecture.mp4"
+    source.write_bytes(b"fake video")
+    out_dir = tmp_path / "audio"
+    out_dir.mkdir()
+    reserved = out_dir / "reserved-name.mp3"
+    _calls, runner = _recorder()
+
+    path = extract.extract_audio(
+        source,
+        out_dir,
+        today=date(2026, 8, 11),
+        log=lambda _m: None,
+        ffmpeg_exe="/fake/ffmpeg",
+        runner=runner,
+        out_path=reserved,
+    )
+
+    assert path == reserved
+    assert not (out_dir / "2026-08-11-lecture.mp3").exists()
+
+
 # --------------------------------------------------------------------------- #
 # is_mp3
 # --------------------------------------------------------------------------- #
