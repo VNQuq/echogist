@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-08-11 — **batch video→MP3 landed on `main`, unreleased and not yet run on Windows.**
+**Updated:** 2026-08-12 — **v2.3.0 released: batch video→MP3, verified on Windows by the operator.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -13,7 +13,7 @@ own timecodes) → concatenate decisions/actions → reconcile (title + essence 
 headings — **always**, incl. K=1) → header validation → one doc. **Validated 2026-06-27** (Sonnet, 2:58:57 RU
 lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
 
-## Unreleased on `main` — batch video → MP3 (`echogist/batch.py`, 2026-08-11)
+## Shipped in v2.3.0 (2026-08-12) — batch video → MP3 (`echogist/batch.py`)
 
 Menu entry #2, offline and free — MP3 is the whole deliverable, no transcript/summary/wire. `pick_files`
 (native `askopenfilenames`, Shift/Ctrl/Ctrl+A) → `expand_selection` → `convert_many` over a `ThreadPoolExecutor`
@@ -57,11 +57,9 @@ keeping the MP3 but an mp3 source is never asked per-run. **That asymmetry is in
 
 ## Next
 
-1. **Run the batch on Windows** — the only untested surface is the one WSL cannot reach: native
-   `askopenfilenames` multi-select + real ffmpeg under a worker pool. Everything else is gate-covered.
-2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
+1. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
    real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
-3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+2. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
