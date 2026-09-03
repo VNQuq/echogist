@@ -11,9 +11,23 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-**None.** The registry is fully closed — TD-9 and TD-17 were implemented, TD-7 and TD-20 closed as WONTFIX
-(2026-08-03, branch `chore/close-tech-debt`); see the compact closed list below. The only open forward item is
-T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement, not debt.
+- **TD-22 — A summary has no back-link to its source file** · MEDIUM · created 2026-09-04
+  (`/plan-eng-review` of `docs/designs/bulk-v3.md`; operator chose "defer to debt" over "fix now").
+  `summarize.save_raw_result:311` names the artifact from the LLM-generated **title**
+  (`naming.summary_stem(summary.title, ...)`), and the `Summary` dataclass carries no field naming
+  the media/transcript file it came from. There is therefore no way to ask "does this source
+  already have a summary on disk". Two consequences, both in the bulk work: the scanner cannot
+  show a "already summarized" column (deliberately dropped from increment 1 for this reason), and
+  a second bulk run over the same folder cannot skip work that was already paid for — it quotes
+  and re-pays full price. Fix: add `source_path: str` to `Summary`, write it in the JSON, and
+  index on it; older JSON files without the field stay readable (treat as unknown).
+  **Trigger for closure:** the first line of increment 2 (full bulk), because paying twice for the
+  same folder is not acceptable there. Not a blocker for increment 0 or 1.
+
+The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
+branch `chore/close-tech-debt`); TD-22 is the first entry since. The other open forward item is
+T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
+not debt.
 
 ---
 
