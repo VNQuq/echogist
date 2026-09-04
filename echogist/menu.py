@@ -40,7 +40,9 @@ whole menu is unit-testable with no model, no key, no network.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -52,7 +54,6 @@ from . import (
     cost,
     extract,
     guard,
-    naming,
     provision,
     render,
     summarize,
@@ -184,6 +185,47 @@ def _oversize_phase_message(p: chunk.Phase, est: int, budget: int, tier: config.
     )
 
 
+# A resume-file stem written by _resume_key: blake2s(digest_size=8) is 16 hex chars.
+_RESUME_KEY_RE = re.compile(r"[0-9a-f]{16}")
+
+
+def _resume_key(source_path: Path) -> str:
+    """Identity of the source being summarized, as the stem of its resume partial.
+
+    Keyed on the resolved PATH, not the stem. Two different recordings can share a stem
+    (``lecture.mp4`` in two folders, the same talk saved twice); under a stem key the second
+    one would load the first's partial, and ``_load_resume`` cannot tell them apart — it only
+    checks the phase count. The result is a silently wrong PAID summary carrying the other
+    recording's prose and timecodes, which the anchor validator accepts because those
+    timecodes are real, just from the wrong file.
+
+    ``casefold`` because :meth:`Path.resolve` does not reliably normalize case on Windows:
+    the same file picked twice with different casing must not produce two keys and silently
+    lose the resume.
+    """
+    return hashlib.blake2s(
+        str(source_path.resolve()).casefold().encode(), digest_size=8
+    ).hexdigest()
+
+
+def _sweep_stale_resumes(resume_dir: Path, ui: UI) -> None:
+    """Delete partials left by the pre-hash stem key, which nothing can reach (best-effort).
+
+    Swept by SHAPE, not by date: a stem that is not 16 hex chars predates :func:`_resume_key`
+    and will never be looked up again. These are within-run partials, not durable artifacts,
+    so dropping one costs at most a re-synthesis of phases that were never going to be
+    reloaded anyway.
+    """
+    # glob yields nothing for a missing or unreadable dir rather than raising, so the
+    # first run (no .resume/ yet) needs no special case.
+    stale = [p for p in resume_dir.glob("*.json") if not _RESUME_KEY_RE.fullmatch(p.stem)]
+    for path in stale:
+        with contextlib.suppress(OSError):
+            path.unlink()
+    if stale:
+        ui.info(f"Removed {len(stale)} resume file(s) left by an older version.")
+
+
 def _load_resume(resume_path: Path, k: int, ui: UI) -> summarize.Summary | None:
     """Load a within-run phase partial, if one is a valid PREFIX of this K-phase plan.
 
@@ -221,6 +263,7 @@ def _run_summary(
     settings: Settings,
     model_config: config.ModelConfig,
     transcript_text: str,
+    source_path: Path,
     source_stem: str,
 ) -> None:
     """GUARD → cost/threshold → the one paid SUMMARIZE call → persist .json → RENDER.
@@ -305,8 +348,9 @@ def _run_summary(
     # under raw/.resume/; a re-run reloads it and skips the phases already on disk (no job
     # engine — just "phase N on disk -> skip"). The transcript is the checkpoint; this is a
     # within-run partial that is deleted once the durable .json exists.
-    resume_stem = naming.summary_stem(source_stem, fallback="transcript")
-    resume_path = summaries_dir / "raw" / ".resume" / f"{resume_stem}.json"
+    resume_dir = summaries_dir / "raw" / ".resume"
+    _sweep_stale_resumes(resume_dir, ui)
+    resume_path = resume_dir / f"{_resume_key(source_path)}.json"
     resume_from = _load_resume(resume_path, k, ui)
 
     def _persist(partial: summarize.Summary) -> None:
@@ -518,7 +562,7 @@ def _flow_local_file(deps: Deps) -> None:
         # the original TD-14 bug where a Summary popped transcripts).
         ui.reveal_dir(deps.base / "output" / "transcripts", priority=REVEAL_TRANSCRIPT)
         return
-    _run_summary(deps, settings, model_config, text, source.stem)
+    _run_summary(deps, settings, model_config, text, source, source.stem)
 
 
 def _human_size(total: int) -> str:
@@ -727,7 +771,7 @@ def _flow_saved_transcript(deps: Deps) -> None:
     if not text.strip():
         ui.warn(f"{chosen.name} is empty; nothing to summarize.")
         return
-    _run_summary(deps, settings, model_config, text, chosen.stem)
+    _run_summary(deps, settings, model_config, text, chosen, chosen.stem)
 
 
 # --------------------------------------------------------------------------- #

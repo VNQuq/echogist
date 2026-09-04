@@ -19,7 +19,7 @@ lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
   `batch._plan_output_paths` claims every mp3 name up front, single-threaded, **in memory** — an on-disk claim
   survived `kill -9` as a fake artifact that poisoned dedup forever, and `.part` cannot be the marker because
   dedup deliberately cannot see it. **One publish scheme (`.part`→`os.replace`); do not add a second.**
-  *Transcripts, summary json and the resume file do NOT yet do this — see bulk v3 increment 0.*
+  *The resume file now keys on the resolved source path; transcripts and summary json do NOT yet claim.*
 - **Ctrl-C stops the batch, not the app** — the one local exception to the global Ctrl-C contract, carried on
   `BatchCancelled` with the partial report. Cancel is bounded: SIGTERM, then `kill()` after 5s.
 - **Menu keys are SEMANTIC** (`local`/`batch`/…) but number keys are POSITIONAL (`ui._bind_number_keys`), so
@@ -50,12 +50,11 @@ Point EchoGist at a folder, walk it recursively, run the full core. Approved 202
 (3 rounds of spec review: 7, 6, 7) and /plan-eng-review (6 findings, 0 critical gaps, CLEAR). **Split into
 three increments; the design doc carries the executable spec, the 8 tasks and 4 accepted risks.**
 
-- **Increment 0 (do first — a LIVE bug).** `.resume/<stem>.json` is keyed on the bare source stem with no
-  date and no dedup (`menu.py:308`), and `_load_resume:187` never checks which transcript made the partial.
-  If file A dies mid-summary, a later same-stem file B resumes A's phases and **B's PAID summary carries A's
-  prose and A's timecodes** — the anchor validator passes it, because the timecodes are real, just from the
-  wrong recording. Fix: `_run_summary` gains `source_path: Path` (both call sites, `menu.py:521`/`:730`),
-  key = `blake2s(str(resolved).casefold())`, sweep `.resume/*.json` not matching `^[0-9a-f]{16}$`.
+- **Increment 0 — the live cross-source resume bug.** ✓ DONE 2026-09-04. `_run_summary` takes
+  `source_path: Path`; the resume file keys on `blake2s(resolved path, casefold)`, and partials left by the
+  old stem key are swept by shape (`^[0-9a-f]{16}$`). Regression test drives two same-stem sources through
+  the real flow and asserts the second run starts fresh — it fails against the old key, carrying source A's
+  prose into source B's PAID summary.
 - **Increment 1 — `scan.py`, read-only, offline, free.** Recursive walk (prunes `output/`, junction-safe
   `seen`), one `ffmpeg -i` per file behind a `(path,size,mtime_ns)` sidecar cache, per-folder rows, upper-bound
   cost projection, duplicate-stem report, unreadable + cloud-placeholder rows. Ships as its own menu entry.
@@ -67,16 +66,15 @@ gains a **timeout** (today a file on a dead share hangs any multi-file flow fore
 `.part`→`os.replace`; **one tree walker** — `batch.expand_selection` delegates at `recursive=False`, its five
 existing tests are the regression harness; `menu._human_size`→`ui.human_size` (menu imports scan, so scan
 cannot import menu back); transcript detection is a one-pass index, not `O(files × transcripts)`.
-**Two CRITICAL regression tests are mandatory:** cross-source summary prose, and the cost estimate biased low.
+**Two CRITICAL regression tests are mandatory:** cross-source summary prose ✓ (increment 0), and the cost estimate biased low.
 
 ## Next
 
-1. **Increment 0** (T1): resume key + regression test. ~20 min, independent, fixes the live bug.
-2. **Increment 1** (T2-T7 + T8 tests): the scanner. Then run it on the real lecture folder — its file count
+1. **Increment 1** (T2-T7 + T8 tests): the scanner. Then run it on the real lecture folder — its file count
    and collision report decide whether increment 2 is worth building at all.
-3. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
+2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
    real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
-4. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
+3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 

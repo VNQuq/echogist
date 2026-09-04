@@ -74,8 +74,10 @@ not debt.
   re-checked offline); fidelity spot-check clean (12/12 sampled claims grounded, faithful negative stance, no
   fabrication). "the author-named point" absent because Whisper garbled the surname upstream (the concept — V1 / decision
   speed — IS covered); not a synthesis miss. T8 offline LLM-judge eval remains a P3 follow-on. Parallel synthesis
-  OUT OF SCOPE (operator). Known limit (accepted): artifact-resume is keyed by `source_stem` — delete
-  `raw/.resume/` before re-summarizing an edited transcript.
+  OUT OF SCOPE (operator). Known limit (accepted, NARROWED by bulk v3 increment 0): artifact-resume is now
+  keyed on a hash of the resolved source PATH, so two different files can no longer share a partial. Editing a
+  transcript IN PLACE still reuses the same key — delete `raw/.resume/` before re-summarizing an edited
+  transcript whose previous run died mid-way.
 - **TD-18 — Phase headings had no document meta-frame** ✓ CLOSED 2026-06-27 (was MEDIUM). `emit_reconcile` returns
   a `phase_headings` array; `_apply_normalized_headings` swaps the forward-only headings into one coherent outline,
   fail-soft on count/empty mismatch; K=1 keeps its heading; `validate_anchors` strips inline timecodes from

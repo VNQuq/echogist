@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from echogist import batch, config, menu, naming, summarize
+from echogist import batch, config, menu, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
@@ -1204,8 +1204,8 @@ def test_resume_partial_loaded_passed_to_seam_then_cleared(tmp_path: Path) -> No
     _write_settings(tmp_path, model_tier="economy")
     big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # K>1
     src = _seed_transcript(tmp_path, text=big)
-    stem = naming.summary_stem(src.stem, fallback="transcript")
-    resume_path = tmp_path / "output" / "summaries" / "raw" / ".resume" / f"{stem}.json"
+    key = menu._resume_key(src)  # keyed on the resolved source path, not its stem
+    resume_path = tmp_path / "output" / "summaries" / "raw" / ".resume" / f"{key}.json"
     partial = summarize._running_summary(
         [SynthesisSection("Done phase", "prior prose", ("[00:00:00]",))], [], [], "ru"
     )
@@ -1235,6 +1235,91 @@ def test_resume_partial_loaded_passed_to_seam_then_cleared(tmp_path: Path) -> No
     rf = captured["resume_from"]
     assert rf is not None and len(rf.synthesis) == 1  # the prefix partial was loaded
     assert not resume_path.exists()  # cleared once the durable .json exists
+
+
+def test_resume_partial_is_keyed_per_source_not_per_stem(tmp_path: Path) -> None:
+    # The live bug (dec-b3a3181c). Two different recordings can share a stem — the same talk
+    # saved twice, or "lecture.txt" in two folders. Under the old stem key, source A dying
+    # mid-summary left a partial that source B then RESUMED, so B's PAID summary carried A's
+    # prose and A's timecodes. The anchor validator accepted it, because those timecodes are
+    # real, just from the wrong recording: silently wrong output, paid for.
+    _write_settings(tmp_path, model_tier="economy")
+
+    def _lecture(folder: str, word: str) -> Path:
+        d = tmp_path / folder
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "lecture.txt"  # SAME stem, different source
+        body = "\n".join(f"[00:{m:02d}:00] " + f"{word} " * 400 for m in range(50))  # K>1
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    src_a, src_b = _lecture("A", "альфа"), _lecture("B", "бета")
+    seen_resume: list[Any] = []
+
+    def summarize_fn(
+        text: str,
+        tier: Any,
+        cfg: Any,
+        *,
+        on_phase: Any = None,
+        resume_from: Any = None,
+        **_kw: Any,
+    ) -> SummarizeResult:
+        seen_resume.append(resume_from)
+        on_phase(  # phase 1 lands on disk under this source's key
+            summarize._running_summary(
+                [SynthesisSection("A phase", "PROSE FROM A", ("[00:00:00]",))], [], [], "ru"
+            )
+        )
+        if len(seen_resume) == 1:  # ...and then A's run dies, so its partial survives
+            raise SummarizeError("died mid-summary")
+        return SummarizeResult(summary=_summary(), input_tokens=1, output_tokens=1)
+
+    def render_fn(summary: Any, out_dir: Path, fmt: str, *, base: str, **_kw: Any) -> Path:
+        return Path(out_dir) / f"{base}.{fmt}"
+
+    deps = menu.Deps(
+        ui=StubUI(["transcript", str(src_a), "transcript", str(src_b), "exit"]),
+        summarize=summarize_fn,
+        render=render_fn,
+        get_api_key=lambda: "sk-test",
+        base=tmp_path,
+        settings_path=tmp_path / "settings.json",
+    )
+    assert menu.run_menu(deps) == 0
+
+    assert seen_resume == [None, None]  # B started FRESH — it never saw A's phases
+    resume_dir = tmp_path / "output" / "summaries" / "raw" / ".resume"
+    assert (resume_dir / f"{menu._resume_key(src_a)}.json").is_file()  # A's partial kept
+    assert not (resume_dir / f"{menu._resume_key(src_b)}.json").exists()  # B's was cleared
+    assert menu._resume_key(src_a) != menu._resume_key(src_b)  # the keys actually differ
+
+
+def test_resume_key_is_case_insensitive(tmp_path: Path) -> None:
+    # Path.resolve() does not normalize case on Windows, so the same file picked once as
+    # "Lecture.txt" and once as "lecture.txt" would key to two partials and silently lose
+    # the resume. casefold() is what makes the two spellings one identity.
+    path = tmp_path / "Lecture.txt"
+    path.write_text("x", encoding="utf-8")
+    assert menu._resume_key(path) == menu._resume_key(tmp_path / "lecture.txt")
+
+
+def test_stale_stem_keyed_resume_files_are_swept(tmp_path: Path) -> None:
+    # Partials written by the pre-hash stem key are unreachable now. Swept by SHAPE (a stem
+    # that is not 16 hex chars), so the sweep needs no date and no migration table.
+    _seed_transcript(tmp_path)
+    resume_dir = tmp_path / "output" / "summaries" / "raw" / ".resume"
+    resume_dir.mkdir(parents=True)
+    stale = resume_dir / "2026-06-16-clip.json"  # old stem key
+    keep = resume_dir / "a1b2c3d4e5f60718.json"  # already hash-keyed: left alone
+    for f in (stale, keep):
+        f.write_text("{}", encoding="utf-8")
+
+    deps, stub, _calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    assert menu.run_menu(deps) == 0
+    assert not stale.exists()
+    assert keep.is_file()
+    assert "left by an older version" in stub.log_text
 
 
 def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F13
