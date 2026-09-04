@@ -29,6 +29,14 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   puts the projection ~1.6x high — inside the band this entry predicted, but not a measurement.
   **The folder run does not depend on these constants**: it gates on the real transcripts
   (`bulk.folder_estimate`), so only the pre-transcription scan quote is still affected.
+  **MEASURED 2026-09-04** against the first real transcript (lecture 4, 3h22m57s, 198 blocks):
+  153,365 speech characters, 24,698 words = **122 wpm, 6.21 chars/word** — almost exactly the
+  110-130 / ~6 band this entry predicted. The shipped 150 x 7 = 1050 chars/min against an actual
+  756 is a **1.39x** high bias, which independently corroborates the folder run's own numbers
+  (scan $2.20 vs the real-transcript gate $1.5244 = 1.44x). **Deliberately NOT reseeded yet:**
+  this is n=1, the variance across the other six lectures is unmeasured, and the error direction
+  that matters (under-quoting) is the one that spends unagreed money. Reseed to ~135 wpm /
+  ~6.5 chars/word once a second and third transcript agree; until then the margin stays.
 
 - **TD-24 — the scan quote is labelled an UPPER BOUND that the arithmetic does not guarantee** ·
   LOW · created 2026-09-04 (found by the increment-1 review army). `scan.project_file` prices
@@ -44,6 +52,18 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   and say what it is biased on. **Not urgent:** this figure is display-only. The actual spend gate
   (`cost.confirm_proceed`, `menu.py`) recomputes from the real transcript text, so a scan quote
   can mislead the folder-level preview but cannot let money out the door unseen.
+  **2026-09-04, the first real run made this concrete and widened it.** `output_tokens_estimate`
+  (4,600) is applied FLAT per call, independent of phase size, and both halves of that are now
+  measurably wrong: (a) on the `economy` tier a ~22k-token phase produced MORE than the 8,192 cap
+  and was truncated, so the projection ran UNDER the bill — the exact direction the "upper bound"
+  label forbids; (b) because the model is flat, halving the phase size looks like it multiplies
+  total output (K+1 calls x 4,600) when the real prose over the same material is roughly constant,
+  so the quote now over-penalizes the very split that makes the run safe (this file: $0.2204 at
+  K=4 vs $0.3062 at K=7, a delta that mostly is not real). The honest fix is to make the output
+  projection PROPORTIONAL to each phase's input tokens with a per-tier ratio (Haiku >=0.39
+  measured as a truncated lower bound, Sonnet ~0.18 from the 2026-06-27 run) instead of a flat
+  constant. **Trigger for closure:** the first folder run that completes end to end on real
+  material — its `Actually spent` total against the gate quote gives the per-tier ratio directly.
 
 - **TD-25 — `output/` pruning is by NAME, so a junction under another name leaks** · LOW ·
   created 2026-09-04 (increment-1 review army). `scan._keep_dir` prunes a directory when
@@ -61,9 +81,27 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   EchoGist artifacts counted — so it is a live risk only if the run is pointed at a folder
   containing a junction to `output/`.
 
+- **TD-26 — Whisper hallucinates filler over non-speech, and it is summarized as content** ·
+  MEDIUM · created 2026-09-04 (found while calibrating TD-23 on the first real transcript).
+  The real lecture-4 transcript opens with SIX consecutive minute-blocks of
+  `Субтитры создавал SubsAuthor` / `Добро пожаловать на наш канал!` — a well-known Whisper
+  failure mode where the decoder emits training-set subtitle boilerplate over silence, music, or
+  an intro screen. Twelve of the file's 198 blocks (~6%) carry it. This is not cosmetic: the
+  synthesis prompt says the transcript is ground truth and instructs the model to cover every
+  point and NOT to drop material, so the phase covering 00:00-00:06 will faithfully summarize a
+  YouTube greeting that the author never said. That collides head-on with fidelity properties
+  (1) grounded and (2) no fabrication — the fabrication enters via the transcript, upstream of
+  the LLM, where none of the current gates look. The anchor validator does not catch it either:
+  the timecodes are real, only the words are invented. **Fix candidates:** drop leading/trailing
+  blocks whose body is a repeated known-boilerplate phrase; or a general run-length filter on
+  identical consecutive block bodies (the top repeats here are 4x identical lines), which is
+  content-agnostic and catches the whole class. **Trigger for closure:** before the next paid
+  folder run — every one of the seven lectures is likely to carry the same intro artifact.
+  **Not yet measured on the other six transcripts.**
+
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since, of which TD-22 is
-now closed and TD-23/24/25 remain open. The other open forward item is
+now closed and TD-23/24/25/26 remain open. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 

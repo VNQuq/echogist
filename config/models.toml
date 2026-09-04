@@ -79,13 +79,20 @@ output_tokens_estimate = 4600
 # max_output_tokens is the API's hard max_tokens cap. Kept SEPARATE from and larger
 # than [guard].output_tokens_estimate (the cost projection): a flush cap would
 # truncate a long multi-section RU summary into invalid tool-use JSON and waste the
-# paid call, so it carries real headroom for Cyrillic tokenization. The summary
-# contract is no-upper-limit (all concepts, per-section bullets), so dense 2-3h RU
-# material needs room — 8192 is the floor for that. No beta header is required at
-# this size: Haiku 4.5 / Sonnet 4.6 cap at 64K output and Opus 4.8 at 128K. If a
-# real long transcript still trips the loud max_tokens guard, raise this to 16384;
-# above ~16000 the summarize call should switch to streaming to dodge SDK timeouts.
-max_output_tokens = 8192
+# paid call, so it carries real headroom for Cyrillic tokenization. No beta header is
+# required at this size: Haiku 4.5 / Sonnet 4.6 cap at 64K output and Opus 4.8 at 128K.
+#
+# RAISED 8192 -> 12288 after the first real folder run (2026-09-04). A 2h52m RU lecture
+# on `economy` (Haiku) split at the OLD phase_target_tokens=24000 into K=3, i.e. ~57min
+# of speech per call, and phase 1 hit the cap and was cut off — the loud max_tokens guard
+# fired and failed the file. The real fix is the smaller phase below; this cap is the
+# INSURANCE, and it is free: you are billed per token GENERATED, never for the ceiling.
+# The truncation means Haiku's true output/input ratio is only known as a LOWER bound
+# (>8192 out on ~22k in, i.e. >=0.39 — Sonnet ran ~0.18 on the same prompt), so the cap
+# is sized to absorb a ratio up to ~0.93 at the new phase size. Kept UNDER the ~16000
+# line where the summarize call would have to switch to streaming to dodge SDK timeouts;
+# going above that is a code change, not a config edit.
+max_output_tokens = 12288
 
 # Synthesis step (TD-16 v2 direct synthesis): synthesize ONE phase (a contiguous time
 # span) of the transcript into faithful, readable prose. The transcript is ground truth,
@@ -185,9 +192,26 @@ contradiction in core_idea rather than silently choosing one.
 
 [chunk]
 # TD-16 v2 direct synthesis: target tokens per CONTIGUOUS phase (no overlap). K is
-# computed = ceil(total_tokens / this), so it scales with length (NOT a 3-4 cap); ~2x
-# the map target lands the validated ~84k-token 3h lecture at ~4 phases.
-phase_target_tokens = 24000
+# computed = ceil(total_tokens / this), so it scales with length (NOT a 3-4 cap).
+#
+# LOWERED 24000 -> 12000 after the first real folder run (2026-09-04). 24000 was fitted
+# to the validated 3h lecture landing at ~4 phases on `balanced` (Sonnet). It was never
+# exercised on `economy` (Haiku), which is the DEFAULT tier — and Haiku writes far more
+# prose per unit of input under the "cover the ENTIRE span, when in doubt include" phase
+# contract. At 24000 a 2h52m lecture became K=3 (~57min of speech in one call) and the
+# reply blew straight through max_output_tokens. Sizing rule: keep a phase's span short
+# enough that faithful prose over it fits the cap with room to spare.
+#
+# Measured on the real 3h22m57s RU transcript (198 blocks, ~83k body tokens):
+#   target   K   max phase in-tok   max span   quoted $/file (economy)
+#    24000   4         22005          54 min      0.2204   <- overflowed the cap
+#    12000   7         13203          32 min      0.3062
+#    10000   9         10335          26 min      0.3634
+# The quoted delta OVERSTATES the real one: estimate_cost_synthesis prices every call at
+# a FLAT [guard].output_tokens_estimate, so splitting looks like it multiplies output
+# while the actual prose over the same material is roughly constant. Input barely moves
+# (phases do not overlap; only per-call prompt overhead is added). See TD-24.
+phase_target_tokens = 12000
 
 [scan]
 # The folder scanner prices summaries BEFORE anything is transcribed, so it turns each

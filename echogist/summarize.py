@@ -25,9 +25,10 @@ paid call instead of parsing free text. The prompt TEXT is config data
 cannot drift (operator decision 2026-06-15: "prompt = data, schema = code").
 
 **Cap vs projection.** The request's ``max_tokens`` is :attr:`max_output_tokens`
-(8192 — real headroom for a dense, no-upper-limit RU summary with per-section
-bullets) — separate from the :attr:`GuardConfig.output_tokens_estimate` cost
-projection. A reply that still hits the cap (``stop_reason == "max_tokens"``) yields
+(real headroom for a dense, no-upper-limit RU summary with per-section bullets; the
+value itself lives in models.toml, which carries the sizing rationale) — separate
+from the :attr:`GuardConfig.output_tokens_estimate` cost projection. A reply that
+still hits the cap (``stop_reason == "max_tokens"``) yields
 truncated, invalid tool JSON, so it is caught and surfaced (the operator raises the
 cap in models.toml) rather than parsed into a half-summary.
 

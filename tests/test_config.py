@@ -168,7 +168,7 @@ def test_missing_summarize_errors(tmp_path: Path) -> None:
 
 def test_shipped_summarize_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
-    assert cfg.summarize.max_output_tokens == 8192
+    assert cfg.summarize.max_output_tokens == 12_288
     assert "{language}" in cfg.summarize.synthesis_system_prompt
 
 
@@ -177,7 +177,7 @@ def test_shipped_summarize_config_loads() -> None:
 # --------------------------------------------------------------------------- #
 def test_shipped_chunk_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
-    assert cfg.chunk.phase_target_tokens == 24_000  # TD-16 v2 phase-split target
+    assert cfg.chunk.phase_target_tokens == 12_000  # TD-16 v2 phase-split target
     # TD-16 v2 synthesis/reconcile prompts present, with their substitution tokens.
     assert "{language}" in cfg.summarize.synthesis_system_prompt
     assert "{interpretation}" in cfg.summarize.synthesis_system_prompt
