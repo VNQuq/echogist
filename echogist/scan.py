@@ -453,29 +453,46 @@ def transcript_index(transcripts_dir: Path) -> Counter[str]:
     stem share one bucket. Disambiguating them is exactly what the collision report is
     for, which is why the column is labelled "candidate".
     """
-    index: Counter[str] = Counter()
+    return Counter({stem: len(paths) for stem, paths in transcript_files(transcripts_dir).items()})
+
+
+def transcript_files(transcripts_dir: Path) -> dict[str, tuple[Path, ...]]:
+    """The saved transcripts on disk, grouped by the sanitized source stem they were
+    named from — the path-carrying form of :func:`transcript_index`.
+
+    A bulk run needs the PATH to reuse a transcript instead of re-transcribing hours of
+    audio, and both callers must agree on which filenames count as a transcript, so the
+    name-parsing rule lives here once and the counting form is derived from this one.
+    Values are sorted for a stable pick, and a stem with more than one file is
+    deliberately left ambiguous for the caller to refuse: nothing on disk says which
+    recording a second ``-2`` transcript belongs to.
+    """
+    groups: dict[str, list[Path]] = {}
     if not transcripts_dir.is_dir():
-        return index
+        return {}
     # No try/except: Path.glob yields nothing for a missing or unreadable directory
     # rather than raising, so a handler here would be dead code (verified, and the
     # is_dir guard above already covers the missing case).
-    for path in transcripts_dir.glob("*.txt"):
+    for path in sorted(transcripts_dir.glob("*.txt")):
         match = _TRANSCRIPT_NAME.match(path.stem)
         if match:
-            index[match["stem"]] += 1
-    return index
+            groups.setdefault(match["stem"], []).append(path)
+    return {stem: tuple(paths) for stem, paths in groups.items()}
 
 
-def _stem_key(path: Path) -> str:
+def stem_key(path: Path) -> str:
     """The sanitized stem an artifact for ``path`` would be named from. ``fallback`` is a
     REQUIRED keyword-only argument on ``sanitize_stem``; ``transcript`` matches what
-    ``transcribe.save_transcript`` passes, so the index keys line up."""
+    ``transcribe.save_transcript`` passes, so the index keys line up.
+
+    Public because a bulk run has to key its plan the SAME way the transcript index and
+    the collision report key theirs — three callers agreeing on one name rule."""
     return naming.sanitize_stem(path.stem, fallback="transcript")
 
 
 def candidate_transcripts(files: Iterable[MediaFile], index: Counter[str]) -> int:
     """How many of ``files`` have at least one transcript candidate on disk."""
-    return sum(1 for f in files if index.get(_stem_key(f.path), 0) > 0)
+    return sum(1 for f in files if index.get(stem_key(f.path), 0) > 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -494,7 +511,7 @@ def collisions(files: Sequence[MediaFile]) -> list[tuple[str, tuple[Path, ...]]]
         # ``rel``, not ``path``: an absolute path per member wraps over three lines in the
         # report and buries the one part that tells the two files apart — which folder
         # each is in. The operator picked the root seconds ago.
-        groups.setdefault(_stem_key(f.path), []).append(f.rel)
+        groups.setdefault(stem_key(f.path), []).append(f.rel)
     return sorted((stem, tuple(sorted(paths))) for stem, paths in groups.items() if len(paths) > 1)
 
 
