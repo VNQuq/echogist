@@ -1,20 +1,39 @@
 """T9 — the interactive console menu (plan §3 / §5). Orchestration, not a stage.
 
 The main menu loops until the operator explicitly exits. It wires the pure stages
-(extract, transcribe, guard, summarize, render) and the cost flow (T8) around the
-three input sources:
+(extract, transcribe, guard, summarize, render) and the cost flow (T8) around TWO
+modules that differ only in the SCALE of their input (operator, 2026-09-04). Both ask
+the same question about the output, off the same ``_ACTION_CHOICES``, so neither can
+drift into offering something the other cannot produce:
 
-* **1. Local file** — audio or video. A video → {MP3 only · summary · transcript}; on a
-  summary/transcript run the MP3 is kept by default with a per-run opt-out confirm. An mp3 →
-  {summary · transcript only · re-encode to a smaller MP3}.
-* **2. Batch: videos → MP3** — multi-select N videos, convert them all through a bounded
-  worker pool. Offline and free: MP3 is the entire deliverable, no transcript, no summary.
-* **3. Saved transcript** — pick a saved ``output/transcripts/*.txt`` or type a
-  path; re-summarize it. This is the artifact-based recovery path (plan §3): a
-  summarize that failed (F2/F4/F5) re-runs from here without re-transcribing.
-* **4. Settings** — edit summary language / output format / model tier / cost
+* **1. Single file** — one recording, or one transcript already on disk.
+
+  * *Audio or video file* → {MP3 only · summary · transcript}. On a summary/transcript
+    run the MP3 is kept by default with a per-run opt-out confirm. An mp3 source gets
+    {summary · transcript only · re-encode to a smaller MP3} instead.
+  * *Saved transcript* → pick a saved ``output/transcripts/*.txt`` or type a path and
+    re-summarize it. This is the artifact-based recovery path (plan §3): a summarize
+    that failed (F2/F4/F5) re-runs from here without re-transcribing.
+
+* **2. Folder** — every file under one folder, picked ONCE and handed to the action, so
+  a preview and the run that follows it cannot end up on different trees.
+
+  * *Preview only* — the read-only walk: what is in the folder and what it would cost.
+    Free, offline, the only row here that cannot spend anything.
+  * *MP3 only* — the bounded conversion pool over the folder's contents.
+  * *Transcript* — the folder run stopped after its free local phase; no gate, no wire.
+  * *Summary* — the two-phase folder run: transcribe everything, then ONE exact quote
+    over the real transcripts and ONE answer for the whole run.
+
+* **3. Settings** — edit summary language / output format / model tier / cost
   threshold / batch workers; persisted to ``settings.json``.
-* **5. Exit.**
+* **4. Exit.**
+
+The five functional rows this replaced (Local file · Batch: videos → MP3 · Saved
+transcript · Scan a folder · Summarize a folder) are all still reachable one level
+down. The one capability that lost its menu row is hand-picking a SUBSET of files to
+convert: :func:`_flow_batch_mp3` still takes a file list and is still covered, the
+folder module simply hands it the folder instead.
 
 **The UI seam (v1.1 §3).** Every prompt and every line of output goes through a
 :class:`~echogist.ui.UI` injected on :class:`Deps`. Production is the rich+questionary
@@ -546,6 +565,26 @@ _AV_FILETYPES: tuple[tuple[str, str], ...] = (
 )
 
 
+def _pick_folder(ui: UI, prompt: str) -> Path | None:
+    """Pick + validate a folder, or None on cancel / a bad path (message already shown).
+
+    One implementation for every folder-shaped flow: the module picks once and hands the
+    root down, so a preview and the run that follows it can never end up on different
+    folders. TD-10: a native dialog where there is one, a Tab-completing prompt otherwise.
+    """
+    initialdir = config.resolve_initial_dir(config.load_last_dir())
+    raw = ui.pick_dir(prompt, initialdir=initialdir)
+    if not raw or not raw.strip():  # dialog Cancel / blank fallback entry → soft cancel
+        ui.info("No folder selected; returning to the menu.")
+        return None
+    root = Path(raw.strip()).expanduser()
+    if not root.is_dir():
+        ui.error(f"Not a folder: {root}. Check the path and try again.")
+        return None
+    config.save_last_dir(root)
+    return root
+
+
 def _flow_local_file(deps: Deps) -> None:
     """Menu 'local' — a local audio/video file → {MP3 only · summary · transcript} (§5, TD-12).
 
@@ -678,7 +717,7 @@ def _report_batch(ui: UI, report: BatchReport, *, cancelled: bool) -> None:
         )
 
 
-def _flow_batch_mp3(deps: Deps) -> None:
+def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
     """Menu 'batch' — multi-select videos, convert them all to MP3 (offline, no cost).
 
     MP3 is the whole deliverable here: no transcription, no summary, nothing paid. The
@@ -703,17 +742,19 @@ def _flow_batch_mp3(deps: Deps) -> None:
     ui.clear()  # TD-11: start this flow on a clean screen
     settings = config.load_settings(deps.settings_path)
 
-    initialdir = config.resolve_initial_dir(config.load_last_dir())
-    raw = ui.pick_files(
-        "Select video files to convert to MP3", filetypes=_AV_FILETYPES, initialdir=initialdir
-    )
-    if not raw:  # dialog Cancel / blank fallback entry → soft cancel
-        ui.info("No files selected; returning to the menu.")
-        return
+    own_pick = picked is None
+    if picked is None:
+        initialdir = config.resolve_initial_dir(config.load_last_dir())
+        raw = ui.pick_files(
+            "Select video files to convert to MP3", filetypes=_AV_FILETYPES, initialdir=initialdir
+        )
+        if not raw:  # dialog Cancel / blank fallback entry → soft cancel
+            ui.info("No files selected; returning to the menu.")
+            return
 
-    # ``.strip()`` matches _resolve_typed_path: a typed path with trailing whitespace must
-    # not fail here while working in the single-file flow.
-    picked = [Path(entry.strip()).expanduser() for entry in raw if entry.strip()]
+        # ``.strip()`` matches _resolve_typed_path: a typed path with trailing whitespace must
+        # not fail here while working in the single-file flow.
+        picked = [Path(entry.strip()).expanduser() for entry in raw if entry.strip()]
     missing = [path for path in picked if not path.exists()]
     if not picked or missing:  # F1 — a stale/blank path from the console fallback
         if missing:
@@ -723,7 +764,8 @@ def _flow_batch_mp3(deps: Deps) -> None:
     if not sources:
         ui.warn("Nothing convertible in that selection; returning to the menu.")
         return
-    config.save_last_dir(picked[0] if picked[0].is_dir() else picked[0].parent)
+    if own_pick:  # the folder module already remembered the folder it handed down
+        config.save_last_dir(picked[0] if picked[0].is_dir() else picked[0].parent)
 
     # The one conditional question (operator decision): it appears only when the choice
     # is real, so a pure-video selection goes straight to converting.
@@ -881,7 +923,7 @@ def _report_scan(
         ui.table("Cloud placeholders (not downloaded, not probed)", scan.placeholder_rows(result))
 
 
-def _flow_scan(deps: Deps) -> None:
+def _flow_scan(deps: Deps, root: Path | None = None) -> None:
     """Menu 'scan' — walk a folder and report what is in it. Read-only, offline, free.
 
     Nothing here converts, transcribes or summarizes, and no network call is possible on
@@ -904,16 +946,11 @@ def _flow_scan(deps: Deps) -> None:
     # corrupt ffmpeg must fail loud one time, not mark all 500 files unreadable.
     exe = extract.default_ffmpeg_exe()
 
-    initialdir = config.resolve_initial_dir(config.load_last_dir())
-    raw = ui.pick_dir("Select a folder to scan", initialdir=initialdir)
-    if not raw or not raw.strip():  # dialog Cancel / blank fallback entry → soft cancel
-        ui.info("No folder selected; returning to the menu.")
-        return
-    root = Path(raw.strip()).expanduser()
-    if not root.is_dir():
-        ui.error(f"Not a folder: {root}. Check the path and try again.")
-        return
-    config.save_last_dir(root)
+    if root is None:
+        picked = _pick_folder(ui, "Select a folder to scan")
+        if picked is None:
+            return
+        root = picked
 
     cache_path = deps.base / "output" / scan.CACHE_FILENAME
     cancelled = False
@@ -933,6 +970,9 @@ def _flow_scan(deps: Deps) -> None:
 # --------------------------------------------------------------------------- #
 # Folder run (bulk v3 increment 2)
 # --------------------------------------------------------------------------- #
+# Two hints, because the two modes make DIFFERENT promises. The summary run's hint talks
+# about a price and about not re-paying; printing that in front of a free transcript run
+# would promise a gate that never comes and a skip that deliberately does not apply.
 _BULK_HINT = (
     "Summarizes a whole folder without you sitting through it. Transcribes every file "
     "first (local, free, slow), then shows ONE exact price for the summaries and asks "
@@ -940,12 +980,21 @@ _BULK_HINT = (
     "file in flight; everything finished is on disk, so running it again picks up there."
 )
 
-# The folder run does NOT extract MP3s. TD-12 makes the MP3 a kept baseline on the
-# SINGLE-file flow, where it costs one short ffmpeg pass on a file the operator is
-# already watching. Here it would add a second full pass over every file in a run whose
-# whole point is to finish unattended, for an artifact this flow was not asked for and
-# that the 'Batch: videos -> MP3' row already produces on demand. Transcription reads
-# the source directly, so nothing downstream needs it.
+_BULK_TRANSCRIBE_HINT = (
+    "Transcribes every file in a folder and stops there. Local, free and slow, with no "
+    "cloud call on this path at all. Files that already have a transcript are skipped; "
+    "a summary bought earlier does NOT skip a file here, because you are asking for the "
+    "transcript. Ctrl-C stops after the file in flight; everything finished is on disk."
+)
+
+# The folder run DOES extract MP3s, asked once for the whole run (operator, 2026-09-04,
+# reversing the earlier rule here). The old reasoning was that a second full pass over
+# every file buys an artifact the flow was not asked for, and that the separate
+# 'Batch: videos -> MP3' row already produced it on demand. Both halves stopped holding
+# when the menu became two symmetric modules: that row is gone, and the folder module
+# offers the SAME labels as the single-file one — a label reading 'MP3 + transcript' has
+# to produce an MP3. Cost stays visible and refusable: one confirm, defaulted to yes,
+# skipped entirely when the folder holds nothing to extract from.
 
 
 class _StageFailed(Exception):
@@ -962,6 +1011,8 @@ def _bulk_transcript_texts(
     ui: UI,
     plan: bulk.Plan,
     model_config: config.ModelConfig,
+    *,
+    keep_mp3: bool = False,
 ) -> tuple[dict[Path, str], BulkReport]:
     """Phase 1 — every source that needs one gets a saved transcript. Local, free.
 
@@ -979,7 +1030,19 @@ def _bulk_transcript_texts(
     if plan.ready:
         ui.info(f"Reusing {len(texts)} saved transcript(s).")
 
+    audio_dir = deps.base / "output" / "audio"
+
     def _step(source: Path) -> Path:
+        # TD-12 symmetry: the MP3 is a SECONDARY artifact here exactly as it is on the
+        # single-file flow, so it DEGRADES — a failed ffmpeg warns and the transcript still
+        # lands. Letting it raise would hand the file to run_phase as failed and throw away
+        # the free local work that already succeeded. An mp3 source has nothing to extract.
+        if keep_mp3 and not extract.is_mp3(source):
+            try:
+                mp3 = deps.extract_audio(source, audio_dir, log=ui.info)
+                ui.info(f"Saved MP3: {mp3.name}")
+            except (ExtractError, OSError) as exc:
+                ui.warn(f"Couldn't save the MP3 for {source.name} ({exc}); continuing.")
         path, text = _transcribe_to_checkpoint(deps, source, model_config)
         texts[source] = text
         return path
@@ -996,7 +1059,7 @@ def _bulk_transcript_texts(
     return texts, report
 
 
-def _flow_bulk(deps: Deps) -> None:
+def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = True) -> None:
     """Menu 'bulk' — summarize every file in a folder, one gate for the whole run.
 
     Two phases on purpose (see :mod:`echogist.bulk`): TRANSCRIBE the folder first so the
@@ -1008,7 +1071,7 @@ def _flow_bulk(deps: Deps) -> None:
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start this flow on a clean screen
-    ui.info(_BULK_HINT)
+    ui.info(_BULK_HINT if summarize_after else _BULK_TRANSCRIBE_HINT)
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
     tier = model_config.tier(settings.model_tier)
@@ -1017,16 +1080,11 @@ def _flow_bulk(deps: Deps) -> None:
     # corrupt ffmpeg must fail loud one time, not mark every file unreadable.
     exe = extract.default_ffmpeg_exe()
 
-    initialdir = config.resolve_initial_dir(config.load_last_dir())
-    raw = ui.pick_dir("Select a folder to summarize", initialdir=initialdir)
-    if not raw or not raw.strip():  # dialog Cancel / blank fallback entry → soft cancel
-        ui.info("No folder selected; returning to the menu.")
-        return
-    root = Path(raw.strip()).expanduser()
-    if not root.is_dir():
-        ui.error(f"Not a folder: {root}. Check the path and try again.")
-        return
-    config.save_last_dir(root)
+    if root is None:
+        picked = _pick_folder(ui, "Select a folder to summarize")
+        if picked is None:
+            return
+        root = picked
 
     cache_path = deps.base / "output" / scan.CACHE_FILENAME
     try:
@@ -1041,9 +1099,14 @@ def _flow_bulk(deps: Deps) -> None:
 
     summaries_dir = deps.base / "output" / "summaries"
     transcripts_dir = deps.base / "output" / "transcripts"
+    # A transcript-only run must NOT skip on "already summarized": the operator is asking
+    # for transcripts, and a file whose summary was bought last week may well have had its
+    # transcript deleted since. Feeding an empty index leaves plan_run's OTHER skip — a
+    # saved transcript already on disk — as the only one, which is exactly the right one
+    # here. On a summary run both skips apply, as before (TD-22).
     plan = bulk.plan_run(
         [f.path for f in result.files],
-        summarized=summarize.summary_index(summaries_dir / "raw"),
+        summarized=summarize.summary_index(summaries_dir / "raw") if summarize_after else set(),
         transcripts=scan.transcript_files(transcripts_dir),
     )
     if plan.summarized:
@@ -1052,15 +1115,40 @@ def _flow_bulk(deps: Deps) -> None:
     if not pending:
         ui.success("Every file in this folder already has a summary. Nothing to do.")
         return
+    if not summarize_after and not plan.to_transcribe:
+        ui.success(
+            f"Every file in this folder already has a transcript "
+            f"({len(plan.ready)} on disk). Nothing to do."
+        )
+        return
+
+    # Same question the single-file flow asks, asked ONCE for the folder: the MP3 is a
+    # kept-by-default secondary artifact, and the action label promises it. Skipped when
+    # there is nothing to extract from (an all-mp3 folder), so the choice is never fake.
+    keep_mp3 = any(not extract.is_mp3(src) for src in plan.to_transcribe) and ui.confirm(
+        "Also save the converted MP3 for each file?", default=True
+    )
 
     # Phase 1 — local, free, the long one.
     try:
-        with_text, transcribed = _bulk_transcript_texts(deps, ui, plan, model_config)
+        with_text, transcribed = _bulk_transcript_texts(
+            deps, ui, plan, model_config, keep_mp3=keep_mp3
+        )
     except BulkCancelled as exc:
         _report_bulk(ui, exc.report, stage="Transcribed", cancelled=True)
         return
-    if transcribed.failed:
+    # On a summary run this table is shown ONLY when something failed — the successes speak
+    # for themselves in the quote that follows. A transcript-only run always reports below,
+    # because there the transcripts ARE the deliverable and there is no quote to follow.
+    if transcribed.failed and summarize_after:
         _report_bulk(ui, transcribed, stage="Transcribed", cancelled=False)
+
+    if not summarize_after:
+        # Transcript-only: phase 1 IS the deliverable. Stop before the gate — nothing on
+        # this path can reach the wire, which is the whole point of offering it.
+        _report_bulk(ui, transcribed, stage="Transcribed", cancelled=False)
+        ui.reveal_dir(transcripts_dir, priority=REVEAL_TRANSCRIPT)
+        return
 
     ordered = sorted(src for src in plan.sources if src in with_text)  # plan order is sorted
     if not ordered:
@@ -1175,6 +1263,82 @@ _SETTINGS_FIELDS: tuple[Choice, ...] = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# The two modules (single / folder) — one question shape, two input scales
+# --------------------------------------------------------------------------- #
+# The main menu used to carry five functional rows: three of them (Batch, Scan a folder,
+# Summarize a folder) were the SAME module at different settings, and the folder side could
+# not produce what the single-file side produced — Batch made an MP3 and nothing else,
+# Summarize a folder made a summary and never an MP3. Operator call 2026-09-04: two modules,
+# symmetric. What differs between them is only the SCALE of the input; the question they ask
+# about the output is the same one, off the same _ACTION_CHOICES.
+_SINGLE_SOURCE_CHOICES: tuple[Choice, ...] = (
+    ("file", "Audio or video file"),
+    ("transcript", "Saved transcript"),
+    ("__back__", "← Back"),
+)
+
+# The folder module's actions ARE _ACTION_CHOICES plus a free preview, which is what the
+# old "Scan a folder" row was: read-only, offline, and the only way to see the price of a
+# folder before committing. It leads because looking is what you do before spending.
+_FOLDER_ACTION_CHOICES: tuple[Choice, ...] = (
+    ("scan", "Preview only (free — what is in it, and what it would cost)"),
+    *_ACTION_CHOICES,
+)
+
+
+def _flow_single(deps: Deps) -> None:
+    """The single-file module: one recording, or one transcript already on disk.
+
+    A router, deliberately thin — the two flows underneath are unchanged and still own
+    their own pickers, because a saved transcript is picked from a list of transcripts
+    while a recording is picked from the filesystem, and merging those would help nobody.
+    """
+    ui = _ui(deps)
+    choice = ui.select("What are you starting from?", _SINGLE_SOURCE_CHOICES)
+    if choice == "__back__":
+        return
+    if choice == "file":
+        _flow_local_file(deps)
+    elif choice == "transcript":
+        _flow_saved_transcript(deps)
+
+
+def _flow_folder(deps: Deps) -> None:
+    """The folder module: every file under one folder, same outputs as a single file.
+
+    The folder is picked ONCE, here, and handed to whichever action runs — so a preview and
+    the run that follows it are guaranteed to be looking at the same tree, which they were
+    not when they were two separate menu rows each with their own picker.
+
+    The actions map onto work that already existed: ``scan`` is the read-only walk,
+    ``summary`` is the two-phase folder run, ``transcript`` is that same run stopped after
+    its free local phase, and ``mp3`` is the conversion pool pointed at a folder instead of
+    a hand-picked list (``batch.expand_selection`` has always accepted directories).
+    """
+    ui = _ui(deps)
+    ui.clear()  # TD-11: start the module on a clean screen
+    # Fail-fast probe, BEFORE the picker: every action in this module shells out to ffmpeg,
+    # so a missing or corrupt binary must surface as one loud error rather than after the
+    # operator has already chosen a folder (and, deeper in, rather than as 500 "unreadable"
+    # files). The flows below resolve it again for their own use; this call only fails.
+    extract.default_ffmpeg_exe()
+    root = _pick_folder(ui, "Select a folder")
+    if root is None:
+        return
+    action = ui.select(f"What should EchoGist produce for '{root.name}'?", _FOLDER_ACTION_CHOICES)
+    if action == "__back__":  # TD-13: back out to the main menu, do nothing
+        return
+    if action == "scan":
+        _flow_scan(deps, root)
+    elif action == "mp3":
+        _flow_batch_mp3(deps, [root])
+    elif action == "transcript":
+        _flow_bulk(deps, root, summarize_after=False)
+    elif action == "summary":
+        _flow_bulk(deps, root)
+
+
 def _flow_settings(deps: Deps) -> None:
     """Menu 'settings' — edit one setting and persist it (validated on save)."""
     ui = _ui(deps)
@@ -1254,12 +1418,13 @@ def _flow_settings(deps: Deps) -> None:
 # The operator still picks by pressing 1-9 because that binding is POSITIONAL
 # (``ui._bind_number_keys``), so inserting a row re-numbers the keyboard shortcut without
 # silently re-pointing any key here: adding "Batch" second did exactly that.
+# Two modules, then Settings, then Exit. The five functional rows this replaces are all
+# still reachable, one level down, from the module that owns them (see _flow_single /
+# _flow_folder). Keys are POSITIONAL under the operator's fingers: Settings moved from 6 to
+# 3 and Exit from 7 to 4.
 _MAIN_MENU: tuple[Choice, ...] = (
-    ("local", "Local file (audio/video)"),
-    ("batch", "Batch: videos -> MP3"),
-    ("transcript", "Saved transcript"),
-    ("scan", "Scan a folder"),
-    ("bulk", "Summarize a folder"),
+    ("single", "Single file"),
+    ("folder", "Folder"),
     ("settings", "Settings"),
     ("exit", "Exit"),
 )
@@ -1301,11 +1466,8 @@ def run_menu(deps: Deps | None = None) -> int:
     ui = _ui(deps)
 
     handlers: dict[str, Callable[[Deps], None]] = {
-        "local": _flow_local_file,
-        "batch": _flow_batch_mp3,
-        "transcript": _flow_saved_transcript,
-        "scan": _flow_scan,
-        "bulk": _flow_bulk,
+        "single": _flow_single,
+        "folder": _flow_folder,
         "settings": _flow_settings,
     }
     ui.banner("EchoGist", "local transcription + summary")

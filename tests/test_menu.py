@@ -179,7 +179,7 @@ def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
     # on top of transcribe → summarize → render.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "summary", True, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "summary", True, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert calls["summarize"] == 1
@@ -194,7 +194,7 @@ def test_local_file_summary_runs_full_pipeline(tmp_path: Path) -> None:
 def test_local_file_mp3_only_skips_transcribe(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "mp3", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 0
@@ -207,7 +207,9 @@ def test_local_file_transcript_keeps_mp3_and_skips_summarize(tmp_path: Path) -> 
     # saves the checkpoint, and STOPS before the paid summary (the new gap-closing path).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "transcript", True, "exit"])
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "file", str(src), "transcript", True, "exit"]
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # keep-MP3 confirmed (default), so the MP3 is saved
     assert calls["transcribe"] == 1
@@ -225,7 +227,7 @@ def test_mp3_source_summary(tmp_path: Path) -> None:
     # runs the full transcribe → summarize pipeline without ever producing an mp3.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "summary", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "summary", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0  # already an mp3 — nothing to extract
     assert calls["transcribe"] == 1
@@ -240,7 +242,7 @@ def test_mp3_source_transcript_only(tmp_path: Path) -> None:
     # extract, no network summarize call.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["local", str(src), "transcript", "exit"])
+    deps, _, calls = _make_deps(tmp_path, ["single", "file", str(src), "transcript", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0
     assert calls["transcribe"] == 1
@@ -254,7 +256,7 @@ def test_mp3_source_reencode(tmp_path: Path) -> None:
     # pops the audio folder. The progress label distinguishes a re-encode from a conversion.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "mp3", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # the mp3 is re-encoded
     assert calls["transcribe"] == 0
@@ -269,7 +271,9 @@ def test_mp3_source_reencode_failure_is_fatal(tmp_path: Path) -> None:
     # (like a video MP3-only), never silently degrades.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"], extract_error=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "file", str(src), "mp3", "exit"], extract_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 0
@@ -280,7 +284,7 @@ def test_local_file_action_back_returns_to_menu(tmp_path: Path) -> None:
     # TD-13: "← Back" from the action menu does nothing and returns to the main menu.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["local", str(src), "__back__", "exit"])
+    deps, _, calls = _make_deps(tmp_path, ["single", "file", str(src), "__back__", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0
     assert calls["transcribe"] == 0
@@ -293,7 +297,7 @@ def test_video_summary_extract_failure_degrades(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
     deps, stub, calls = _make_deps(
-        tmp_path, ["local", str(src), "summary", True, "exit"], extract_error=True
+        tmp_path, ["single", "file", str(src), "summary", True, "exit"], extract_error=True
     )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # attempted
@@ -311,7 +315,7 @@ def test_video_summary_extract_oserror_degrades(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
     deps, stub, calls = _make_deps(
-        tmp_path, ["local", str(src), "summary", True, "exit"], extract_oserror=True
+        tmp_path, ["single", "file", str(src), "summary", True, "exit"], extract_oserror=True
     )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1  # attempted
@@ -327,7 +331,7 @@ def test_video_transcript_extract_failure_degrades(tmp_path: Path) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
     deps, stub, calls = _make_deps(
-        tmp_path, ["local", str(src), "transcript", True, "exit"], extract_error=True
+        tmp_path, ["single", "file", str(src), "transcript", True, "exit"], extract_error=True
     )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
@@ -343,7 +347,9 @@ def test_video_mp3_only_extract_failure_is_fatal(tmp_path: Path) -> None:
     # aborts to the menu (nothing else to produce), never silently degrades.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"], extract_error=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "file", str(src), "mp3", "exit"], extract_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 1
     assert calls["transcribe"] == 0  # nothing else ran
@@ -356,7 +362,7 @@ def test_video_summary_keep_mp3_declined_skips_extract(tmp_path: Path) -> None:
     # the primary summary pipeline still runs.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "summary", False, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "summary", False, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0  # opted out of keeping the MP3
     assert calls["transcribe"] == 1
@@ -370,7 +376,7 @@ def test_video_transcript_keep_mp3_declined_skips_extract(tmp_path: Path) -> Non
     # produced.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["local", str(src), "transcript", False, "exit"])
+    deps, _, calls = _make_deps(tmp_path, ["single", "file", str(src), "transcript", False, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0
     assert calls["transcribe"] == 1
@@ -383,7 +389,7 @@ def test_mp3_source_summary_never_asks_keep_mp3(tmp_path: Path) -> None:
     # be a meaningless prompt). The trimmed flow goes straight to transcribe → summarize.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(src), "summary", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(src), "summary", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["extract"] == 0
     assert calls["summarize"] == 1
@@ -394,7 +400,7 @@ def test_flow_clears_screen_on_entry(tmp_path: Path) -> None:
     # TD-11: each flow clears the console on entry so prior menu chrome doesn't pile up.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "summary", True, "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(src), "summary", True, "exit"])
     assert menu.run_menu(deps) == 0
     assert ("clear", "") in stub.messages
 
@@ -407,7 +413,20 @@ def test_summary_reveals_summaries_folder_once(tmp_path: Path) -> None:
     b = tmp_path / "b.wav"
     b.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(a), "summary", True, "local", str(b), "summary", True, "exit"]
+        tmp_path,
+        [
+            "single",
+            "file",
+            str(a),
+            "summary",
+            True,
+            "single",
+            "file",
+            str(b),
+            "summary",
+            True,
+            "exit",
+        ],
     )
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
@@ -420,7 +439,7 @@ def test_saved_transcript_resummarize_reveals_summaries(tmp_path: Path) -> None:
     # TD-14 (reopened): re-summarizing an existing transcript produces a summary, so the
     # SUMMARIES folder pops (the deliverable) — the transcripts folder never does.
     _seed_transcript(tmp_path)
-    deps, stub, _ = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
@@ -432,7 +451,7 @@ def test_transcript_only_reveals_transcripts(tmp_path: Path) -> None:
     # folder — the transcript is the deliverable here, so it is the reveal target.
     src = tmp_path / "clip.mp3"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "transcript", "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(src), "transcript", "exit"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
@@ -443,7 +462,7 @@ def test_mp3_conversion_drives_progress_bar(tmp_path: Path) -> None:
     # Bug #1: the video→MP3 conversion runs behind a %/ETA bar (was a frozen log line).
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(src), "mp3", "exit"])
     assert menu.run_menu(deps) == 0
     assert ("progress", "Converting to MP3") in stub.messages
 
@@ -452,7 +471,7 @@ def test_successful_stage_completes_progress_bar(tmp_path: Path) -> None:
     # TD-17 baseline: a clean run completes its bar and never records a failure.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(src), "mp3", "exit"])
     assert menu.run_menu(deps) == 0
     assert "fail" not in stub.progress_events
     assert "done" in stub.progress_events
@@ -464,7 +483,9 @@ def test_failed_stage_fails_progress_bar_not_completes_it(tmp_path: Path) -> Non
     # fatal, so exactly one bar runs and it fails.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"], extract_error=True)
+    deps, stub, _ = _make_deps(
+        tmp_path, ["single", "file", str(src), "mp3", "exit"], extract_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert stub.progress_events == ["fail"]  # failed, never "done"
     assert "Returning to the main menu" in stub.log_text  # still aborted to the menu
@@ -477,7 +498,7 @@ def test_degraded_stage_fails_its_bar_then_next_bar_completes(tmp_path: Path) ->
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
     deps, stub, calls = _make_deps(
-        tmp_path, ["local", str(src), "summary", "exit"], extract_error=True
+        tmp_path, ["single", "file", str(src), "summary", "exit"], extract_error=True
     )
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1  # degraded + continued
@@ -491,7 +512,7 @@ def test_mp3_only_reveals_audio_folder(tmp_path: Path) -> None:
     # transcripts folder, and only once per launch.
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, stub, _ = _make_deps(tmp_path, ["local", str(src), "mp3", "exit"])
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(src), "mp3", "exit"])
     assert menu.run_menu(deps) == 0
     reveals = [m for m in stub.messages if m[0] == "reveal_dir"]
     assert len(reveals) == 1
@@ -506,7 +527,7 @@ def test_summary_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
     wav = tmp_path / "b.wav"
     wav.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(wav), "mp3", "local", str(mp3), "summary", "exit"]
+        tmp_path, ["single", "file", str(wav), "mp3", "single", "file", str(mp3), "summary", "exit"]
     )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -523,7 +544,8 @@ def test_summary_reveal_supersedes_earlier_transcript(tmp_path: Path) -> None:
     b = tmp_path / "b.mp3"
     b.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(a), "transcript", "local", str(b), "summary", "exit"]
+        tmp_path,
+        ["single", "file", str(a), "transcript", "single", "file", str(b), "summary", "exit"],
     )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -540,7 +562,8 @@ def test_transcript_reveal_supersedes_earlier_audio(tmp_path: Path) -> None:
     mp3 = tmp_path / "b.mp3"
     mp3.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(wav), "mp3", "local", str(mp3), "transcript", "exit"]
+        tmp_path,
+        ["single", "file", str(wav), "mp3", "single", "file", str(mp3), "transcript", "exit"],
     )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -557,7 +580,19 @@ def test_audio_not_revealed_after_summary(tmp_path: Path) -> None:
     wav_b = tmp_path / "b.wav"
     wav_b.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(wav_a), "summary", True, "local", str(wav_b), "mp3", "exit"]
+        tmp_path,
+        [
+            "single",
+            "file",
+            str(wav_a),
+            "summary",
+            True,
+            "single",
+            "file",
+            str(wav_b),
+            "mp3",
+            "exit",
+        ],
     )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -572,7 +607,18 @@ def test_transcript_not_revealed_after_summary(tmp_path: Path) -> None:
     wav.write_bytes(b"x")
     mp3 = tmp_path / "b.mp3"
     mp3.write_bytes(b"x")
-    answers = ["local", str(wav), "summary", True, "local", str(mp3), "transcript", "exit"]
+    answers = [
+        "single",
+        "file",
+        str(wav),
+        "summary",
+        True,
+        "single",
+        "file",
+        str(mp3),
+        "transcript",
+        "exit",
+    ]
     deps, stub, _ = _make_deps(tmp_path, answers)
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -588,7 +634,8 @@ def test_audio_not_revealed_after_transcript(tmp_path: Path) -> None:
     wav = tmp_path / "b.wav"
     wav.write_bytes(b"x")
     deps, stub, _ = _make_deps(
-        tmp_path, ["local", str(mp3), "transcript", "local", str(wav), "mp3", "exit"]
+        tmp_path,
+        ["single", "file", str(mp3), "transcript", "single", "file", str(wav), "mp3", "exit"],
     )
     assert menu.run_menu(deps) == 0
     reveals = [m[1] for m in stub.messages if m[0] == "reveal_dir"]
@@ -636,7 +683,7 @@ def test_production_reveal_dir_guard_is_monotone_by_priority(
 
 
 def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
-    deps, stub, calls = _make_deps(tmp_path, ["local", str(tmp_path / "nope.wav"), "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", str(tmp_path / "nope.wav"), "exit"])
     assert menu.run_menu(deps) == 0
     assert "File not found" in stub.log_text
     assert calls["transcribe"] == 0
@@ -645,7 +692,7 @@ def test_local_file_bad_path_returns_to_menu(tmp_path: Path, isolate_last_dir: l
 
 def test_local_file_cancel_returns_to_menu(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
     # A soft cancel from the picker is a queued None (dialog Cancel / blank entry).
-    deps, stub, calls = _make_deps(tmp_path, ["local", None, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "file", None, "exit"])
     assert menu.run_menu(deps) == 0
     assert "No file selected" in stub.log_text
     assert calls["transcribe"] == 0
@@ -657,7 +704,7 @@ def test_local_file_picker_remembers_directory(
 ) -> None:
     src = tmp_path / "clip.wav"
     src.write_bytes(b"x")
-    deps, _, calls = _make_deps(tmp_path, ["local", str(src), "summary", True, "exit"])
+    deps, _, calls = _make_deps(tmp_path, ["single", "file", str(src), "summary", True, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 1
     assert isolate_last_dir == [src.parent]  # the picked file's parent is saved
@@ -710,7 +757,7 @@ def test_batch_converts_every_picked_video(tmp_path: Path) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv", "c.mov")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -735,10 +782,10 @@ def test_batch_routes_extraction_through_the_injected_seam(tmp_path: Path) -> No
     # Without this the batch falls back to batch.convert_many's own module-level default
     # and silently forks from menu #1: a test stubbing deps.extract_audio would spawn real
     # ffmpeg, and any future extraction option would apply to one flow only.
-    videos = _videos(tmp_path, "a.mp4")
+    _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, _, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -749,7 +796,7 @@ def test_batch_routes_extraction_through_the_injected_seam(tmp_path: Path) -> No
 def test_batch_remembers_the_picked_directory(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv")
     deps, _, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=_spy_batch()
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=_spy_batch()
     )
 
     assert menu.run_menu(deps) == 0
@@ -764,7 +811,7 @@ def test_batch_typed_directory_is_remembered_as_itself(
     # picker one level too high on the next run.
     _videos(tmp_path, "a.mp4")
     deps, _, _ = _make_deps(
-        tmp_path, ["batch", str(tmp_path / "inbox"), "exit"], batch_convert=_spy_batch()
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=_spy_batch()
     )
 
     assert menu.run_menu(deps) == 0
@@ -774,10 +821,10 @@ def test_batch_typed_directory_is_remembered_as_itself(
 
 def test_batch_uses_the_configured_worker_count(tmp_path: Path) -> None:
     _write_settings(tmp_path, batch_workers=3)
-    videos = _videos(tmp_path, "a.mp4")
+    _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -788,10 +835,10 @@ def test_batch_uses_the_configured_worker_count(tmp_path: Path) -> None:
 
 def test_batch_worker_count_of_one_is_announced_as_sequential(tmp_path: Path) -> None:
     _write_settings(tmp_path, batch_workers=1)
-    videos = _videos(tmp_path, "a.mp4")
+    _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -802,21 +849,21 @@ def test_batch_worker_count_of_one_is_announced_as_sequential(tmp_path: Path) ->
 
 def test_batch_cancel_at_the_picker_returns_to_the_menu(tmp_path: Path) -> None:
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, ["batch", None, "exit"], batch_convert=spy)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", None, "exit"], batch_convert=spy)
 
     assert menu.run_menu(deps) == 0
 
     assert spy.seen == {}, "a soft cancel must never reach the converter"
-    assert "No files selected" in stub.log_text
+    assert "No folder selected" in stub.log_text
 
 
 def test_batch_asks_once_before_re_encoding_mp3s_and_defaults_to_skipping(tmp_path: Path) -> None:
     # The operator's rule: a Shift-range that swept up an mp3 must not quietly re-encode
     # it (lossy -> lossy). Declining moves them to the report as skipped, untouched.
-    videos = _videos(tmp_path, "a.mp4", "old.mp3", "b.mkv")
+    _videos(tmp_path, "a.mp4", "old.mp3", "b.mkv")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], False, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -828,10 +875,10 @@ def test_batch_asks_once_before_re_encoding_mp3s_and_defaults_to_skipping(tmp_pa
 
 
 def test_batch_re_encodes_mp3s_when_the_operator_says_yes(tmp_path: Path) -> None:
-    videos = _videos(tmp_path, "a.mp4", "old.mp3")
+    _videos(tmp_path, "a.mp4", "old.mp3")
     spy = _spy_batch()
     deps, _, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], True, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", True, "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -843,10 +890,10 @@ def test_batch_re_encodes_mp3s_when_the_operator_says_yes(tmp_path: Path) -> Non
 def test_batch_never_asks_about_mp3s_when_the_selection_has_none(tmp_path: Path) -> None:
     # The question exists only when the choice is real; a pure-video batch must not stop
     # for it. The answer queue holds no bool, so a stray confirm would EOF the run.
-    videos = _videos(tmp_path, "a.mp4", "b.mkv")
+    _videos(tmp_path, "a.mp4", "b.mkv")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -855,10 +902,10 @@ def test_batch_never_asks_about_mp3s_when_the_selection_has_none(tmp_path: Path)
 
 
 def test_batch_all_mp3_and_declined_converts_nothing(tmp_path: Path) -> None:
-    videos = _videos(tmp_path, "one.mp3", "two.mp3")
+    _videos(tmp_path, "one.mp3", "two.mp3")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], False, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -878,7 +925,7 @@ def test_batch_reports_failures_in_a_table_and_still_reveals(tmp_path: Path) -> 
     )
     spy = _spy_batch(report)
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -905,7 +952,7 @@ def test_batch_ctrl_c_shows_the_partial_report_and_stays_in_the_app(tmp_path: Pa
     )
     spy = _spy_batch(raises=batch.BatchCancelled(partial))
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0  # did NOT exit through the interrupt
@@ -935,7 +982,7 @@ def test_batch_cancelled_files_do_not_advance_the_bar(tmp_path: Path) -> None:
         raise batch.BatchCancelled(partial)
 
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=convert
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=convert
     )
 
     assert menu.run_menu(deps) == 0
@@ -949,13 +996,15 @@ def test_batch_bad_typed_path_returns_to_menu(tmp_path: Path) -> None:
     # convert an empty selection.
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["batch", str(tmp_path / "nope.mp4"), "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "nope.mp4"), "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
 
     assert spy.seen == {}
-    assert "File not found" in stub.log_text
+    # The folder module validates the path before any action runs, so a stale entry is
+    # refused once, at the picker, rather than reaching a converter with nothing to convert.
+    assert "Not a folder" in stub.log_text
 
 
 def test_batch_expands_a_typed_directory(tmp_path: Path) -> None:
@@ -964,7 +1013,9 @@ def test_batch_expands_a_typed_directory(tmp_path: Path) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv")
     (tmp_path / "inbox" / "notes.txt").write_text("not media", encoding="utf-8")
     spy = _spy_batch()
-    deps, _, _ = _make_deps(tmp_path, ["batch", str(tmp_path / "inbox"), "exit"], batch_convert=spy)
+    deps, _, _ = _make_deps(
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+    )
 
     assert menu.run_menu(deps) == 0
 
@@ -975,7 +1026,7 @@ def test_batch_empty_directory_returns_to_menu(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, ["batch", str(empty), "exit"], batch_convert=spy)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(empty), "mp3", "exit"], batch_convert=spy)
 
     assert menu.run_menu(deps) == 0
 
@@ -986,10 +1037,10 @@ def test_batch_empty_directory_returns_to_menu(tmp_path: Path) -> None:
 def test_batch_never_transcribes_or_summarizes(tmp_path: Path) -> None:
     # Scope guard: this flow is offline and free. A regression that wired it into the
     # paid pipeline would be caught here, not on the operator's bill.
-    videos = _videos(tmp_path, "a.mp4")
+    _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, _, calls = _make_deps(
-        tmp_path, ["batch", [str(v) for v in videos], "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -1013,7 +1064,7 @@ def _seed_transcript(tmp_path: Path, text: str = "hello world") -> Path:
 def test_saved_transcript_pick_by_arrow(tmp_path: Path) -> None:
     _seed_transcript(tmp_path)
     # The first saved transcript is select value "0" (the list index).
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["transcribe"] == 0  # re-summarize, never re-transcribe
     assert calls["summarize"] == 1
@@ -1022,14 +1073,14 @@ def test_saved_transcript_pick_by_arrow(tmp_path: Path) -> None:
 
 def test_saved_transcript_cancel_returns_to_menu(tmp_path: Path) -> None:
     _seed_transcript(tmp_path)
-    deps, _, calls = _make_deps(tmp_path, ["transcript", "__cancel__", "exit"])
+    deps, _, calls = _make_deps(tmp_path, ["single", "transcript", "__cancel__", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 0
 
 
 def test_saved_transcript_empty_file(tmp_path: Path) -> None:
     _seed_transcript(tmp_path, text="   ")
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert "nothing to summarize" in stub.log_text
     assert calls["summarize"] == 0
@@ -1041,7 +1092,7 @@ def test_saved_transcript_empty_file(tmp_path: Path) -> None:
 def test_over_threshold_decline_skips_call(tmp_path: Path) -> None:
     _write_settings(tmp_path, confirm_threshold_usd=0.0)  # any cost needs explicit confirm
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", False, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", False, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 0
     assert "cancelled" in stub.log_text.lower()
@@ -1050,7 +1101,7 @@ def test_over_threshold_decline_skips_call(tmp_path: Path) -> None:
 def test_over_threshold_yes_makes_call(tmp_path: Path) -> None:
     _write_settings(tmp_path, confirm_threshold_usd=0.0)
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", True, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", True, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
     assert "Estimated cost" in stub.log_text
@@ -1063,7 +1114,7 @@ def test_below_threshold_proceeds_without_confirm(tmp_path: Path) -> None:
     # shows no "press Enter" beat: the queue has no confirm bool AND no text beat before exit.
     _write_settings(tmp_path, confirm_threshold_usd=100.0)  # everything is "cheap"
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
     assert not [m for m in stub.messages if m[0] == "text" and "Press Enter" in m[1]]
@@ -1075,7 +1126,7 @@ def test_below_threshold_shows_beat_when_auto_accept_off(tmp_path: Path) -> None
     # that Enter; the beat is non-blocking, so the call still runs.
     _write_settings(tmp_path, confirm_threshold_usd=100.0, auto_accept_under_threshold=False)
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
     beats = [m for m in stub.messages if m[0] == "text" and "Press Enter to summarize" in m[1]]
@@ -1087,7 +1138,7 @@ def test_above_threshold_confirms_even_with_auto_accept_on(tmp_path: Path) -> No
     # ALWAYS applies (and no beat), even with auto-accept on (the default).
     _write_settings(tmp_path, confirm_threshold_usd=0.0, auto_accept_under_threshold=True)
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", True, "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", True, "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
     assert any(m[0] == "confirm" for m in stub.messages)  # explicit gate fired
@@ -1112,7 +1163,7 @@ def test_unverified_prices_warns_but_does_not_block(
         return replace(cfg, tiers={**cfg.tiers, "economy": flagged})
 
     monkeypatch.setattr(config, "load_model_config", patched)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1  # not blocked
     notices = [m for m in stub.messages if m[0] == "warn" and "prices unconfirmed" in m[1]]
@@ -1123,7 +1174,7 @@ def test_no_unverified_notice_when_prices_confirmed(tmp_path: Path) -> None:
     # The default economy tier is not flagged, so the notice must stay silent.
     _write_settings(tmp_path, confirm_threshold_usd=100.0)
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1
     assert not [m for m in stub.messages if m[0] == "warn" and "prices unconfirmed" in m[1]]
@@ -1134,7 +1185,7 @@ def test_no_unverified_notice_when_prices_confirmed(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 def test_missing_api_key_guides_and_skips_call(tmp_path: Path) -> None:  # F3
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"], api_key=None)
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"], api_key=None)
     assert menu.run_menu(deps) == 0
     assert "No Anthropic API key found" in stub.log_text
     assert "config/secrets.toml" in stub.log_text  # F3 guides to both key sources
@@ -1148,7 +1199,7 @@ def test_long_transcript_synthesizes_in_phases(tmp_path: Path) -> None:  # TD-16
     _write_settings(tmp_path, model_tier="economy")
     big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # ~70K tok, timecoded
     _seed_transcript(tmp_path, text=big)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert "phases (+1 reconcile)" in stub.log_text  # multi-phase synthesis copy
     assert "map-reduce" not in stub.log_text  # the old map-reduce path is gone
@@ -1161,7 +1212,7 @@ def test_short_transcript_still_pays_for_the_reconcile_call(tmp_path: Path) -> N
     # writes the essence block the document opens with. The menu must quote TWO cloud
     # calls, not one, so the operator is never surprised by a second charge.
     _seed_transcript(tmp_path, text="[00:00:00] короткая расшифровка")
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert "in 1 phase (+1 reconcile)" in stub.log_text  # singular, not "1 phases"
     assert "2 cloud calls" in stub.log_text
@@ -1176,7 +1227,7 @@ def test_phase_path_still_guards_an_oversize_phase(tmp_path: Path) -> None:  # T
     _write_settings(tmp_path, model_tier="economy")  # safe_budget = 200000 * 0.8 = 160000
     one_huge_block = "[00:00:00] " + "слово" * 60_000  # ~181K est tokens in ONE block
     _seed_transcript(tmp_path, text=one_huge_block)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert "too large" in stub.log_text  # the F6-style oversize-phase guard fired
     assert "safe budget" in stub.log_text
@@ -1210,7 +1261,7 @@ def test_resume_partial_loaded_passed_to_seam_then_cleared(tmp_path: Path) -> No
         return Path(out_dir) / f"{base}.{fmt}"
 
     deps = menu.Deps(
-        ui=StubUI(["transcript", "0", "exit"]),
+        ui=StubUI(["single", "transcript", "0", "exit"]),
         summarize=summarize_fn,
         render=render_fn,
         get_api_key=lambda: "sk-test",
@@ -1265,7 +1316,7 @@ def test_resume_partial_is_keyed_per_source_not_per_stem(tmp_path: Path) -> None
         return Path(out_dir) / f"{base}.{fmt}"
 
     deps = menu.Deps(
-        ui=StubUI(["transcript", str(src_a), "transcript", str(src_b), "exit"]),
+        ui=StubUI(["single", "transcript", str(src_a), "single", "transcript", str(src_b), "exit"]),
         summarize=summarize_fn,
         render=render_fn,
         get_api_key=lambda: "sk-test",
@@ -1301,7 +1352,7 @@ def test_stale_stem_keyed_resume_files_are_swept(tmp_path: Path) -> None:
     for f in (stale, keep):
         f.write_text("{}", encoding="utf-8")
 
-    deps, stub, _calls = _make_deps(tmp_path, ["transcript", "0", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
     assert menu.run_menu(deps) == 0
     assert not stale.exists()
     assert keep.is_file()
@@ -1310,7 +1361,9 @@ def test_stale_stem_keyed_resume_files_are_swept(tmp_path: Path) -> None:
 
 def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F13
     _seed_transcript(tmp_path)
-    deps, stub, calls = _make_deps(tmp_path, ["transcript", "0", "exit"], render_error=True)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "transcript", "0", "exit"], render_error=True
+    )
     assert menu.run_menu(deps) == 0
     assert calls["summarize"] == 1  # the call was paid
     assert "re-render it later" in stub.log_text
@@ -1321,7 +1374,7 @@ def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F
 def test_summarize_error_returns_to_menu(tmp_path: Path) -> None:  # F2/F4/F5
     _seed_transcript(tmp_path)
     deps, stub, calls = _make_deps(
-        tmp_path, ["transcript", "0", "exit"], summarize_error="no internet"
+        tmp_path, ["single", "transcript", "0", "exit"], summarize_error="no internet"
     )
     assert menu.run_menu(deps) == 0
     assert "no internet" in stub.log_text
@@ -1439,7 +1492,7 @@ def test_scan_flow_reports_folders_totals_and_costs_nothing(
     library = tmp_path / "library"
     _lecture(library / "Course-1", "one.mp4")
     _lecture(library / "Course-1", "two.mp4")
-    deps, stub, calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1462,7 +1515,7 @@ def test_scan_flow_surfaces_duplicate_names(
     library = tmp_path / "library"
     _lecture(library / "A", "lecture.mp4")
     _lecture(library / "B", "lecture.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
 
     menu.run_menu(deps)
 
@@ -1479,7 +1532,7 @@ def test_scan_flow_never_counts_echogists_own_output(
     _offline_scan(monkeypatch)
     _lecture(tmp_path / "output" / "audio", "2026-01-01-lecture.mp3")
     _lecture(tmp_path, "lecture.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(tmp_path), "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path), "scan", "exit"])
 
     menu.run_menu(deps)
 
@@ -1496,7 +1549,7 @@ def test_scan_flow_cancelled_still_reports_what_it_read(
     library = tmp_path / "library"
     _lecture(library, "a.mp4")
     _lecture(library, "b.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
 
     assert menu.run_menu(deps) == 0  # back to the menu, then a normal exit
 
@@ -1508,7 +1561,7 @@ def test_scan_flow_returns_to_the_menu_on_a_bad_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _offline_scan(monkeypatch)
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(tmp_path / "ghost"), "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path / "ghost"), "scan", "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1519,7 +1572,7 @@ def test_scan_flow_soft_cancels_when_no_folder_is_picked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _offline_scan(monkeypatch)
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", None, "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", None, "scan", "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1536,12 +1589,12 @@ def test_a_missing_ffmpeg_fails_once_not_five_hundred_times(
 
     monkeypatch.setattr(extract, "default_ffmpeg_exe", boom)
     _lecture(tmp_path / "library", "a.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", "exit"])
 
     assert menu.run_menu(deps) == 0
 
     assert "missing or corrupt" in stub.log_text
-    assert ("pick_dir", "Select a folder to scan") not in stub.messages
+    assert not [m for m in stub.messages if m[0] == "pick_dir"]
 
 
 def test_an_empty_folder_says_so_instead_of_drawing_an_empty_table(
@@ -1551,7 +1604,7 @@ def test_an_empty_folder_says_so_instead_of_drawing_an_empty_table(
     _offline_scan(monkeypatch)
     empty = tmp_path / "empty"
     empty.mkdir()
-    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(empty), "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(empty), "scan", "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1583,20 +1636,31 @@ def test_the_sweep_shape_check_tracks_the_digest_size() -> None:
     assert menu._RESUME_KEY_RE.fullmatch(key)
 
 
-def test_scan_is_offered_before_settings_in_the_main_menu() -> None:
-    # Number keys are POSITIONAL, so where the row lands changes the operator's fingers.
-    keys = [key for key, _label in menu._MAIN_MENU]
+def test_main_menu_is_two_modules_then_settings_and_exit() -> None:
+    # Number keys are POSITIONAL, so where a row lands changes the operator's fingers.
+    # The work rows come first, in input order (one file, then many), and the two
+    # housekeeping rows close the list.
+    assert [key for key, _label in menu._MAIN_MENU] == ["single", "folder", "settings", "exit"]
 
-    assert keys.index("scan") < keys.index("settings")
+
+def test_every_single_file_output_is_offered_for_a_folder_too() -> None:
+    """The point of the two-module menu: the folder module is not a reduced one. Whatever
+    EchoGist can produce from one recording it can produce from a folder of them, off the
+    SAME choice list — so the two can never drift into offering different things."""
+    single = {key for key, _label in menu._ACTION_CHOICES} - {"__back__"}
+    folder = {key for key, _label in menu._FOLDER_ACTION_CHOICES} - {"__back__"}
+
+    assert single <= folder
+    # ...plus the free preview, which only makes sense at folder scale.
+    assert folder - single == {"scan"}
 
 
-def test_scan_sits_immediately_before_the_folder_run() -> None:
-    """Preview then run: the scan prices a folder, the folder run spends it. They are
-    the same gesture a minute apart, so they must not be separated by an unrelated row."""
-    keys = [key for key, _label in menu._MAIN_MENU]
+def test_preview_leads_the_folder_actions() -> None:
+    """Looking is what you do before spending, and it is the only free row here."""
+    keys = [key for key, _label in menu._FOLDER_ACTION_CHOICES]
 
-    assert keys.index("bulk") == keys.index("scan") + 1
-    assert keys.index("bulk") < keys.index("settings")
+    assert keys[0] == "scan"
+    assert keys[-1] == "__back__"
 
 
 # --------------------------------------------------------------------------- #
@@ -1616,7 +1680,9 @@ def test_bulk_flow_transcribes_everything_then_asks_once(
     library = tmp_path / "library"
     for name in ("one.mp4", "two.mp4", "three.mp4"):
         _lecture(library, name)
-    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, True, "exit"]
+    )
 
     assert menu.run_menu(deps) == 0
 
@@ -1634,7 +1700,9 @@ def test_bulk_flow_declined_gate_spends_nothing_but_keeps_the_transcripts(
     _offline_scan(monkeypatch)
     library = tmp_path / "library"
     _lecture(library, "one.mp4")
-    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), False, "exit"])
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, False, "exit"]
+    )
 
     assert menu.run_menu(deps) == 0
 
@@ -1654,7 +1722,9 @@ def test_bulk_flow_skips_a_file_that_already_has_a_summary(
     summarize.save_raw_result(
         _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
     )
-    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, True, "exit"]
+    )
 
     assert menu.run_menu(deps) == 0
 
@@ -1672,7 +1742,7 @@ def test_bulk_flow_with_nothing_left_to_do_never_reaches_the_gate(
     summarize.save_raw_result(
         _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
     )
-    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "summary", False, "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1688,7 +1758,9 @@ def test_bulk_flow_one_broken_file_does_not_abandon_the_rest(
     library = tmp_path / "library"
     for name in ("a.mp4", "b.mp4", "c.mp4"):
         _lecture(library, name)
-    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, True, "exit"]
+    )
     real = deps.transcribe
 
     def flaky(source: Path, *a: Any, **kw: Any) -> Any:
@@ -1705,14 +1777,143 @@ def test_bulk_flow_one_broken_file_does_not_abandon_the_rest(
     assert "2 file(s) ready to summarize" in stub.log_text
 
 
-def test_bulk_flow_does_not_extract_mp3s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """TD-12's kept-MP3 baseline is a SINGLE-file rule. Doing it here would add a second
-    full pass over every file for an artifact this flow was not asked for."""
+def test_folder_run_keeps_the_mp3_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reverses the old 'the folder run never extracts MP3s' rule (operator, 2026-09-04:
+    the two modules must produce the same artifacts). The action label promises an MP3, so
+    the run has to make one."""
     _offline_scan(monkeypatch)
     library = tmp_path / "library"
     _lecture(library, "one.mp4")
-    deps, _stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+    _lecture(library, "two.mp4")
+    deps, _stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", True, True, "exit"]
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["extract"] == 2, "one MP3 per file, like the single-file flow"
+
+
+def test_folder_run_skips_the_mp3_when_declined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second full pass over every file is the operator's call, asked ONCE per run."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, _stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, True, "exit"]
+    )
 
     assert menu.run_menu(deps) == 0
 
     assert calls["extract"] == 0
+    assert calls["summarize"] == 1, "declining the MP3 must not touch the primary deliverable"
+
+
+def test_folder_run_mp3_failure_degrades_and_keeps_the_transcript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MP3 is SECONDARY here exactly as on the single-file flow: a broken ffmpeg warns
+    and the free local work still lands, rather than failing the file outright."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, stub, calls = _make_deps(
+        tmp_path,
+        ["folder", str(library), "transcript", True, "exit"],
+        extract_error=True,
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["transcribe"] == 1, "the transcript is the deliverable and must survive"
+    assert "Couldn't save the MP3" in stub.log_text
+    assert "Transcribed" in stub.log_text
+
+
+# --------------------------------------------------------------------------- #
+# The two modules — symmetry, and the folder actions that are new to it
+# --------------------------------------------------------------------------- #
+def test_folder_transcript_run_never_reaches_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Transcript-only is the free half of the folder run, and it must stay free.
+
+    The threshold is pinned to 0 so ANY paid step would have to stop and ask. Nothing is
+    queued to answer with, so a gate here would EOF the session instead of returning 0 —
+    which is what makes this able to fail rather than pass by luck.
+    """
+    _write_settings(tmp_path, confirm_threshold_usd=0.0)
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("one.mp4", "two.mp4"):
+        _lecture(library, name)
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "transcript", False, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["transcribe"] == 2
+    assert calls["summarize"] == 0, "the free half of the folder run must not reach the wire"
+    assert calls["render"] == 0
+    assert stub.answers == []  # "exit" was reached: no gate ate it
+    assert "ready to summarize" not in stub.log_text
+    # The transcripts ARE the deliverable here, so that is the folder that pops (TD-14).
+    assert ("reveal_dir", str(tmp_path / "output" / "transcripts")) in stub.messages
+
+
+def test_folder_transcript_run_does_not_skip_an_already_summarized_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TD-22's summary skip protects money; it must not withhold a FREE transcript.
+
+    A lecture summarized last week may have had its transcript deleted since. Asking for
+    transcripts must transcribe it, not report it as already done.
+    """
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    done = _lecture(library, "done.mp4")
+    _lecture(library, "todo.mp4")
+    summarize.save_raw_result(
+        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+    )
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "transcript", False, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["transcribe"] == 2, "the summarized file still needs its transcript"
+    assert "Skipping" not in stub.log_text, "the money-skip must not withhold free work"
+
+
+def test_folder_mp3_run_converts_the_whole_folder(tmp_path: Path) -> None:
+    """The folder module hands the FOLDER to the converter; expand_selection walks it."""
+    videos = _videos(tmp_path, "a.mp4", "b.mkv")
+    spy = _spy_batch()
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert spy.seen["sources"] == videos
+    assert calls["summarize"] == 0  # MP3 is offline and free, on every path
+    assert ("reveal_dir", str(tmp_path / "output" / "audio")) in stub.messages
+
+
+def test_a_hand_picked_file_list_still_converts(tmp_path: Path) -> None:
+    """The multi-select path outlived the menu row that used to reach it.
+
+    `_flow_batch_mp3` still takes a hand-picked list, and the folder module simply passes a
+    one-element list holding the folder. Kept covered so the capability does not rot while
+    it is unreachable from the menu — restoring it is a menu row, not a rewrite.
+    """
+    videos = _videos(tmp_path, "a.mp4", "b.mkv", "c.mov")
+    spy = _spy_batch()
+    deps, stub, _ = _make_deps(tmp_path, [], batch_convert=spy)
+
+    menu._flow_batch_mp3(deps, [videos[0], videos[2]])
+
+    assert spy.seen["sources"] == [videos[0], videos[2]], "a subset must stay a subset"
+    assert "Converted" in stub.log_text
