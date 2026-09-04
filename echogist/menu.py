@@ -969,7 +969,9 @@ def _flow_scan(deps: Deps, root: Path | None = None) -> None:
     cancelled = False
     try:
         with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
-            result = scan.scan_tree(root, cache_path=cache_path, exe=exe)
+            result = scan.scan_tree(
+                root, cache_path=cache_path, exe=exe, exclude=deps.base / "output"
+            )
             spin.done(message=f"Scanned {len(result.files)} file(s).")
     except ScanCancelled as exc:
         result = exc.result
@@ -1102,7 +1104,9 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
     cache_path = deps.base / "output" / scan.CACHE_FILENAME
     try:
         with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
-            result = scan.scan_tree(root, cache_path=cache_path, exe=exe)
+            result = scan.scan_tree(
+                root, cache_path=cache_path, exe=exe, exclude=deps.base / "output"
+            )
             spin.done(message=f"Found {len(result.files)} file(s).")
     except ScanCancelled:
         # A partial scan would run a partial folder and quote a partial price, which is

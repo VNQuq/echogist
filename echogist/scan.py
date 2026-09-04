@@ -162,6 +162,7 @@ def walk(
     *,
     recursive: bool = True,
     on_error: Callable[[OSError], None] | None = None,
+    exclude: Path | None = None,
 ) -> list[Path]:
     """Media files under ``root``, sorted, deduped by resolved path.
 
@@ -179,8 +180,14 @@ def walk(
     Two directories are pruned in place, during the walk rather than filtered after it,
     so their subtrees are never even listed:
 
-    * any directory named ``output`` — EchoGist's own artifacts must never be counted as
-      sources, or a bulk run would re-process what it just produced;
+    * any directory named ``output``, or — when ``exclude`` is given — any directory whose
+      RESOLVED path IS that directory. EchoGist's own artifacts must never be counted as
+      sources, or a bulk run would re-process what it just produced. The name rule alone
+      is not enough (TD-25): an NTFS junction called anything else but pointing AT the
+      real ``output`` tree walks straight through it, and cloud-sync clients create such
+      junctions routinely. Callers that know where the artifacts live pass ``exclude``
+      and get the authoritative check; the name rule stays as the floor for callers that
+      do not (``batch.expand_selection``);
     * any directory whose RESOLVED path has already been visited. ``os.walk`` does not
       follow symlinks by default, but that says nothing about NTFS directory junctions,
       which cloud-sync clients create routinely in a media library and which would
@@ -189,12 +196,13 @@ def walk(
     found: list[Path] = []
     seen_files: set[Path] = set()
     seen_dirs: set[Path] = set()
+    excluded = _norm(_resolve(exclude)) if exclude is not None else None
     for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):
         here = Path(dirpath)
         if not recursive:
             dirnames[:] = []
         else:
-            dirnames[:] = [name for name in dirnames if _keep_dir(here / name, seen_dirs)]
+            dirnames[:] = [name for name in dirnames if _keep_dir(here / name, seen_dirs, excluded)]
         for name in sorted(filenames):
             path = here / name
             if path.suffix.lower() not in CONVERTIBLE_SUFFIXES:
@@ -207,15 +215,29 @@ def walk(
     return found
 
 
-def _keep_dir(path: Path, seen: set[Path]) -> bool:
+def _keep_dir(path: Path, seen: set[Path], excluded: str | None = None) -> bool:
     """Whether to descend into ``path``, recording it as visited when we do."""
     if path.name.lower() == _OUTPUT_DIR_NAME:
         return False
     resolved = _resolve(path)
+    if excluded is not None and _norm(resolved) == excluded:  # TD-25: a junction to output/
+        return False
     if resolved in seen:  # a junction pointing back at an ancestor
         return False
     seen.add(resolved)
     return True
+
+
+def _norm(path: Path) -> str:
+    """The comparison key for "is this the same directory".
+
+    ``os.path.normcase`` is a no-op on POSIX and lowercases plus normalizes separators on
+    Windows, which is exactly what the ``output/`` self-exclusion needs there: ``resolve``
+    does not normalize case on Windows, so a junction and the real tree can come back
+    spelled differently and compare unequal. Used only for the directory identity check —
+    the FILE dedup key deliberately does not fold case (see :func:`_resolve`).
+    """
+    return os.path.normcase(str(path))
 
 
 def _resolve(path: Path) -> Path:
@@ -297,6 +319,7 @@ def scan_tree(
     cache_path: Path,
     exe: str,
     runner: Runner = _default_probe_runner,
+    exclude: Path | None = None,
 ) -> ScanResult:
     """Walk ``root``, probe every media file, and return what is there.
 
@@ -312,6 +335,9 @@ def scan_tree(
 
     A cached negative (``duration: null``) is honoured, not re-probed: the file was
     already asked and answered, and the cache key changes the moment the file does.
+
+    ``exclude`` is EchoGist's own ``output`` directory; see :func:`walk` for why the name
+    it happens to be reachable under is not enough to keep the artifacts out (TD-25).
 
     Ctrl-C raises :class:`ScanCancelled` carrying the partial result, and the cache is
     flushed first either way, so an interrupted cold scan keeps the spawns it paid for.
@@ -338,7 +364,7 @@ def scan_tree(
         unreadable.append((where, f"cannot list this folder: {exc.strerror or exc}"))
 
     try:
-        for path in walk(root, on_error=note_unlistable):
+        for path in walk(root, on_error=note_unlistable, exclude=exclude):
             try:
                 st = path.stat()
             except OSError as exc:

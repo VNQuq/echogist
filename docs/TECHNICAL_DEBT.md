@@ -65,22 +65,6 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   constant. **Trigger for closure:** the first folder run that completes end to end on real
   material — its `Actually spent` total against the gate quote gives the per-tier ratio directly.
 
-- **TD-25 — `output/` pruning is by NAME, so a junction under another name leaks** · LOW ·
-  created 2026-09-04 (increment-1 review army). `scan._keep_dir` prunes a directory when
-  `path.name.lower() == "output"`. On Windows an NTFS junction named anything else but pointing AT
-  the real `output/` tree is walked through, and EchoGist's own artifacts are counted as sources —
-  which is exactly what the prune exists to prevent, and what would make increment 2 re-process
-  its own output. Not reachable on the Linux dev box (`os.walk` does not follow symlinks by
-  default); reproduced by the reviewer only by forcing `followlinks=True` to simulate junction
-  transparency. Fix: prune on the RESOLVED path against the known `output/` directory rather than
-  on the name, which means `walk` has to learn where that is. **Trigger for closure:** the first
-  real scan on Windows, or the start of increment 2 — whichever comes first, since increment 2 is
-  where re-processing own output actually costs money. **Both triggers have now fired** (the
-  real Windows scan ran 2026-09-04; the folder run shipped the same day) and it is still open.
-  The scan found no evidence it bites on the real tree — exactly seven lecture files, no
-  EchoGist artifacts counted — so it is a live risk only if the run is pointed at a folder
-  containing a junction to `output/`.
-
 - **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
   **HIGH** · created 2026-09-04 (operator call, mid-session). The tree is fixed and flat:
   `output/{audio,transcripts,summaries}`, with `summaries/raw/` and `summaries/raw/.resume`
@@ -105,8 +89,9 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   3. **26 hardcoded path expressions.** `deps.base / "output" / "<sub>"` is written inline
      across `menu.py` (12 sites), plus `provision.OUTPUT_SUBDIRS` and `scan._OUTPUT_DIR_NAME`.
      There is no path module. Any layout change is a 26-site edit today, and `scan._keep_dir`
-     prunes on the literal name `output` (see TD-25), so the layout and the self-exclusion
-     rule are already coupled by a string.
+     still prunes on the literal name `output` as its floor (TD-25 added the authoritative
+     resolved-path check on top, but did not remove the string), so the layout and the
+     self-exclusion rule are still coupled by a name a `paths` module should own.
 
   **The actual question to answer** (this is a design decision, not a refactor): what is the
   unit of release — a RUN (dated), a SOURCE COURSE (named after the input folder), or the
@@ -124,7 +109,8 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since, of which TD-22 is
-now closed and TD-23/24/25/27 remain open (TD-26 closed the same day it was opened). The other open forward item is
+now closed and TD-23/24/27 remain open (TD-25 and TD-26 both closed the same day, TD-26 the
+day it was opened). The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
@@ -132,6 +118,7 @@ not debt.
 
 ## Closed debts (compact — verbose history in git)
 
+- TD-25 — `output/` pruning was by NAME, so a junction under another name leaked · closed 2026-09-04 · `scan.walk`/`scan_tree` take an `exclude` directory and prune any subtree whose RESOLVED path is it (compared through `os.path.normcase`, since Windows `resolve` does not fold case); `menu` passes `deps.base / "output"` at both scan sites. The literal-name rule stays as the floor for callers that do not know the layout (`batch.expand_selection`). The regression test does not need a junction: any artifact tree not literally named `output` reproduces it.
 - TD-26 — Whisper boilerplate reached the summary · closed 2026-09-04 · `chunk.drop_degenerate_blocks` trims the synthesis INPUT only (the saved transcript stays verbatim ground truth); two measured, content-agnostic rules — a unique-word-ratio floor for the repetition loop, plus adjacency for the short credit line touching it. Drops 10 of 198 blocks on the real lecture with no false positives, and is reported to the operator rather than skipped silently.
 
 - **TD-22 — A summary has no back-link to its source file** · CLOSED 2026-09-04 (bulk v3

@@ -20,7 +20,33 @@ if errorlevel 1 (
   echo            Install Python 3.11 from https://www.python.org/downloads/ and re-run run.bat.
   goto :fail
 )
+REM `where` finding `python` does NOT mean an interpreter is there. Windows ships an
+REM App Execution Alias stub in WindowsApps that resolves on PATH, exits non-zero and
+REM prints "Python was not found; run without arguments to install from the Microsoft
+REM Store". Tokenizing THAT with tokens=2 yields the word `was`, which the old check
+REM reported as the detected version: it turns "no interpreter" into "wrong version"
+REM (issue #1). So: honour the exit code, then require the token to look like a version
+REM before believing it. Neither check alone is enough; a stub that changes its wording
+REM still fails the format check, and a real interpreter that prints something odd on
+REM stderr still passes it.
+python --version >nul 2>&1
+if errorlevel 1 (
+  echo [EchoGist] `python` is on PATH but is not a working interpreter.
+  echo            This is almost always the Microsoft Store stub in WindowsApps.
+  echo            Install Python 3.11 from https://www.python.org/downloads/ ^(tick
+  echo            "Add python.exe to PATH"^), or turn the stub off in
+  echo            Settings ^> Apps ^> Advanced app settings ^> App execution aliases.
+  goto :fail
+)
+set "PYVER="
 for /f "tokens=2" %%v in ('python --version 2^>^&1') do set "PYVER=%%v"
+echo !PYVER!| findstr /r /b "[0-9][0-9]*\.[0-9][0-9]*\." >nul
+if errorlevel 1 (
+  echo [EchoGist] Could not read a version number from `python --version`.
+  echo            It said: !PYVER!
+  echo            Install Python 3.11 from https://www.python.org/downloads/ and re-run.
+  goto :fail
+)
 echo [EchoGist] Found Python !PYVER!
 echo !PYVER! | findstr /b /c:"3.11." >nul
 if errorlevel 1 (

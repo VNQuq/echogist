@@ -73,6 +73,22 @@ def test_walk_skips_echogists_own_output_tree(tmp_path: Path) -> None:
     assert [p.name for p in scan.walk(tmp_path)] == ["lecture.mp4"]
 
 
+def test_walk_excludes_the_artifact_tree_by_path_not_by_name(tmp_path: Path) -> None:
+    # TD-25: pruning on the literal name ``output`` misses the artifact tree the moment it
+    # is reachable under any other name — an NTFS junction a cloud-sync client made, or
+    # simply a base directory the operator renamed. The reachable path is what identifies
+    # it, so that is what the walk is told.
+    _media(tmp_path / "Course", "lecture.mp4")
+    artifacts = tmp_path / "Archive"  # the real artifact tree, NOT named "output"
+    _media(artifacts / "audio", "2026-01-01-lecture.mp3")
+
+    assert sorted(p.name for p in scan.walk(tmp_path)) == [
+        "2026-01-01-lecture.mp3",
+        "lecture.mp4",
+    ], "the name rule alone lets EchoGist's own artifacts back into the scan"
+    assert [p.name for p in scan.walk(tmp_path, exclude=artifacts)] == ["lecture.mp4"]
+
+
 def test_walk_terminates_on_a_directory_loop(tmp_path: Path) -> None:
     # A symlink here stands in for an NTFS junction, which is what a cloud-sync client
     # actually creates in a media library. followlinks=False does not cover junctions, so

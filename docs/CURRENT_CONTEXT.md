@@ -87,7 +87,9 @@ the spec; only what the code cannot tell you lives here.
    against `len(transcript_text)` and reseed `words_per_minute`/`chars_per_word` in
    `config/models.toml`. Two numbers, no code change.
 3. **Decide TD-24** (soften the "UPPER BOUND" label, or price the scan's output at a real
-   ceiling) and **TD-25** (`output/` pruned by name, so a junction leaks). Both triggers fired.
+   ceiling). Its trigger has fired; it is blocked on the real `Actually spent` total from a
+   folder run, which gives the per-tier output/input ratio directly. TD-25 is CLOSED
+   (2026-09-04): the walk now prunes on the resolved artifact path, not the name.
 4. **Review the increment 1b draft** at `docs/designs/mp3-reencode-1b.md` — NOT approved, NOT
    implemented, two open questions plus a MiB/MB unit discrepancy.
 5. **First live run of `scripts/check-models.py`** on a box with a key. Open from before.
