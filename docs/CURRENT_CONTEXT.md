@@ -79,10 +79,12 @@ the spec; only what the code cannot tell you lives here.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) — **TD-22, TD-23 open** (a summary has no
+- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) — **TD-22..TD-25 open** (a summary has no
   back-link to its source; `save_raw_result:311` names it from the LLM title, so bulk cannot skip already-paid
-  work — closes at the start of increment 2; **TD-23** the scan projection constants are unmeasured, calibrated by the
-  first real scan). TD-1..21 shut 2026-08-03 (TD-7, TD-20 WONTFIX).
+  work — closes at the start of increment 2; **TD-23** projection constants unmeasured; **TD-24** the quote is labelled
+  an upper bound the output side does not formally guarantee — display-only, the real spend gate recomputes;
+  **TD-25** `output/` pruning is by name, so a Windows junction under another name leaks).
+  TD-1..21 shut 2026-08-03 (TD-7, TD-20 WONTFIX).
 - **Language rule (2026-09-04):** English is the language of the application — console, code, comments,
   commits. Russian only for `README.md`, `docs/USAGE.md`, `CHANGELOG.md` and the generated summaries.
 - **SoT:** locked build spec [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates,

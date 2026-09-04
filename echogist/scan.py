@@ -373,8 +373,8 @@ def scan_tree(
                 }
             fresh[key] = entry
 
-            duration = entry.get("duration")
-            if not isinstance(duration, (int, float)):  # cached or fresh negative
+            duration = _valid_duration(entry.get("duration"))
+            if duration is None:  # cached or fresh negative, or a corrupt cache value
                 unreadable.append((path, "ffmpeg reported no duration for this file"))
                 continue
             files.append(
@@ -382,8 +382,8 @@ def scan_tree(
                     path=path,
                     rel=_relative(path, root),
                     size=st.st_size,
-                    duration=float(duration),
-                    audio_kbps=_as_float(entry.get("audio_kbps")),
+                    duration=duration,
+                    audio_kbps=_valid_kbps(entry.get("audio_kbps")),
                     has_video=bool(entry.get("has_video")),
                 )
             )
@@ -403,8 +403,40 @@ def scan_tree(
     return result()
 
 
-def _as_float(value: object) -> float | None:
-    return float(value) if isinstance(value, (int, float)) else None
+def _valid_duration(value: object) -> float | None:
+    """A usable duration in seconds, or None for anything the cache should not be trusted on.
+
+    The cache is plaintext JSON that a later run READS BACK and turns into the dollar
+    figure the operator decides on, so its numbers are input, not internal state. A
+    type check alone is not enough: a negative duration quietly SHORTENS the total and
+    UNDER-prices the folder, which is the one direction CLAUDE.md forbids, and it looks
+    entirely plausible on screen. NaN and infinity are worse in a different way — they
+    reach ``math.ceil`` in the projection and abort the report half-rendered.
+
+    ``ffmpeg``'s ``Duration:`` line cannot parse to a negative number, so a live probe
+    never produces one; this guards the cache file, which anything with write access to
+    ``output/`` can edit. Bad values are reported as unreadable, exactly like a file with
+    no ``Duration:`` line at all.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None  # bool is an int subclass; True would otherwise read as 1 second
+    seconds = float(value)
+    if not math.isfinite(seconds) or seconds < 0.0 or seconds > _MAX_PLAUSIBLE_DURATION_S:
+        return None
+    return seconds
+
+
+def _valid_kbps(value: object) -> float | None:
+    """A usable audio bitrate, on the same terms as :func:`_valid_duration`.
+
+    Nothing in this increment reads it, but the mp3 re-encode rule will, and a negative
+    or infinite bitrate there decides whether a file is re-encoded. None already means
+    "never re-encode", so a bad value degrades to the safe answer.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    kbps = float(value)
+    return kbps if math.isfinite(kbps) and kbps >= 0.0 else None
 
 
 def _relative(path: Path, root: Path) -> Path:
@@ -485,6 +517,13 @@ def collisions(files: Sequence[MediaFile]) -> list[tuple[str, tuple[Path, ...]]]
 # for a 3h lecture (~95M character tests across a 500-file library, on the order of ten
 # seconds) for a number that is a multiplication.
 _RATE_SAMPLE_CHARS = 1000
+
+# A duration past which the value is not a recording but a corrupt cache entry. 1000 hours
+# is ~41 days of continuous audio; the longest thing this tool has ever seen is a 3-hour
+# lecture. The bound exists because the projection turns duration into a PHASE COUNT and
+# then a list of that length, so an absurd number is an absurd allocation, not a big
+# number: a cached 1e300 raises OverflowError mid-report rather than pricing anything.
+_MAX_PLAUSIBLE_DURATION_S = 1000 * 3600.0
 
 
 @lru_cache(maxsize=1)

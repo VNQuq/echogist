@@ -289,6 +289,62 @@ def test_a_cached_negative_is_not_reprobed(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("bad", "why"),
+    [
+        (-120.0, "a negative duration SHORTENS the total and UNDER-prices the folder"),
+        (1e300, "an absurd duration becomes an absurd phase-list allocation"),
+        ("3600", "a string is not a duration"),
+        (True, "bool is an int subclass and would otherwise read as 1 second"),
+        (None, "an explicit null"),
+        ({"x": 1}, "a nested object"),
+    ],
+)
+def test_a_corrupt_cached_duration_is_unreadable_not_a_cheap_quote(
+    tmp_path: Path, bad: object, why: str
+) -> None:
+    """The cache is plaintext JSON a later run READS BACK and turns into the dollar figure
+    the operator decides on, so its numbers are input, not internal state. A negative
+    duration is the dangerous one: it looks entirely plausible on screen and quietly
+    quotes LESS than the truth, which is the one direction CLAUDE.md forbids."""
+    _media(tmp_path, "a.mp4")
+    _media(tmp_path, "b.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+    scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+
+    raw = json.loads(cache_path.read_text())
+    key = next(k for k in raw["entries"] if "a.mp4" in k)
+    raw["entries"][key]["duration"] = bad
+    cache_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+    model_config = _model_config()
+    priced = scan.project_cost(result.files, model_config, model_config.tier("economy"))
+    honest = scan.project_file(3600.0, model_config, model_config.tier("economy"))
+
+    assert [f.path.name for f in result.files] == ["b.mp4"], why
+    assert [p.name for p, _r in result.unreadable] == ["a.mp4"]
+    # The surviving file is priced at full freight; nothing was discounted.
+    assert priced.total_usd == pytest.approx(honest.total_usd)
+
+
+def test_a_plausible_cached_duration_is_still_trusted(tmp_path: Path) -> None:
+    # The guard must not be so eager that it rejects real recordings.
+    _media(tmp_path, "a.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+    scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+
+    raw = json.loads(cache_path.read_text())
+    key = next(iter(raw["entries"]))
+    raw["entries"][key]["duration"] = 10800.0  # a real 3h lecture
+    cache_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+
+    assert result.unreadable == ()
+    assert result.total_seconds == pytest.approx(10800.0)
+
+
+@pytest.mark.parametrize(
     "content",
     [
         "{not json at all",  # truncated by a Ctrl-C on an older, non-atomic write

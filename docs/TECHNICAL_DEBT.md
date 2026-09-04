@@ -40,8 +40,35 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   both values from the ratio. Cheap, offline, and it needs no code change, only the two numbers in
   `models.toml`.
 
+- **TD-24 — the scan quote is labelled an UPPER BOUND that the arithmetic does not guarantee** ·
+  LOW · created 2026-09-04 (found by the increment-1 review army). `scan.project_file` prices
+  output at `guard.output_tokens_estimate`, whose own docstring in `cost.py` calls it "a REALISTIC
+  per-call output projection... NOT the API max_tokens cap", sized ~25% above the observed mean
+  (TD-21). The INPUT side is biased high several ways over (all-Cyrillic token rate, 150 wpm, 7
+  chars/word — see TD-23), so in practice the total almost certainly overshoots. But "upper bound"
+  is a guarantee, and formally the output half does not make it: a run whose phases come back
+  unusually verbose can exceed the quote. The console says UPPER BOUND in two places
+  (`scan.totals_rows`, `menu._report_scan`). Two honest fixes, and the choice is the operator's:
+  price the scan's output side at a real ceiling (diverges from the reviewed design, which
+  specified `per_call_output_tokens=output_tokens_estimate`), or soften the label to "projected"
+  and say what it is biased on. **Not urgent:** this figure is display-only. The actual spend gate
+  (`cost.confirm_proceed`, `menu.py`) recomputes from the real transcript text, so a scan quote
+  can mislead the folder-level preview but cannot let money out the door unseen.
+
+- **TD-25 — `output/` pruning is by NAME, so a junction under another name leaks** · LOW ·
+  created 2026-09-04 (increment-1 review army). `scan._keep_dir` prunes a directory when
+  `path.name.lower() == "output"`. On Windows an NTFS junction named anything else but pointing AT
+  the real `output/` tree is walked through, and EchoGist's own artifacts are counted as sources —
+  which is exactly what the prune exists to prevent, and what would make increment 2 re-process
+  its own output. Not reachable on the Linux dev box (`os.walk` does not follow symlinks by
+  default); reproduced by the reviewer only by forcing `followlinks=True` to simulate junction
+  transparency. Fix: prune on the RESOLVED path against the known `output/` directory rather than
+  on the name, which means `walk` has to learn where that is. **Trigger for closure:** the first
+  real scan on Windows, or the start of increment 2 — whichever comes first, since increment 2 is
+  where re-processing own output actually costs money.
+
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 and TD-23 are the entries since. The other open forward item is
+branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
