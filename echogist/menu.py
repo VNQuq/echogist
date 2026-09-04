@@ -49,6 +49,7 @@ from pathlib import Path
 
 from . import (
     batch,
+    bulk,
     chunk,
     config,
     cost,
@@ -61,6 +62,7 @@ from . import (
     transcribe,
 )
 from .batch import BatchCancelled, BatchReport
+from .bulk import BulkCancelled, BulkReport
 from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
 from .model_asset import ProvisionError
@@ -272,13 +274,30 @@ def _run_summary(
     transcript_text: str,
     source_path: Path,
     source_stem: str,
-) -> None:
+    *,
+    gate: bool = True,
+    on_cost: Callable[[cost.CostEstimate], None] | None = None,
+) -> Path | None:
     """GUARD → cost/threshold → the one paid SUMMARIZE call → persist .json → RENDER.
 
     Pure-stage ordering of plan §3: the local overflow guard (F6) and the cost
     estimate run BEFORE any network touch (killswitch); the raw result is saved to
     ``.json`` BEFORE render so a render failure never costs a re-pay (F13). Every
     early return lands back in the menu loop with the transcript already saved.
+
+    Returns the rendered document's path, or ``None`` if any step declined or failed —
+    the single-file flow ignores it (the message is already on screen); the folder run
+    reads it to build its report.
+
+    ``gate=False`` skips ONLY the per-file estimate and threshold confirm, because the
+    folder run already showed one exact quote over every transcript and took one answer
+    for the whole run (asking again per file is the babysitting the flow exists to
+    remove). Everything else that protects a paid call still runs per file: the overflow
+    guard, the API-key check, and the unverified-price notice.
+
+    ``on_cost`` receives the AUDITED cost of the call that just landed, so a folder run
+    can total real spend against the one quote it showed. Mirrors the ``on_phase`` seam:
+    the caller decides what to do with it, this function only reports.
     """
     ui = _ui(deps)
     tier = model_config.tier(settings.model_tier)  # ConfigError (F5) → loop backstop
@@ -298,7 +317,7 @@ def _run_summary(
     if oversized is not None:
         p, est = oversized
         ui.warn(_oversize_phase_message(p, est, budget, tier))
-        return
+        return None
     estimate = cost.estimate_cost_synthesis(
         phase_inputs, tier, per_call_output_tokens=model_config.guard.output_tokens_estimate
     )
@@ -306,7 +325,7 @@ def _run_summary(
     api_key = deps.get_api_key()
     if api_key is None:  # F3 — never reach the wire without a key
         ui.warn(_API_KEY_HELP)
-        return
+        return None
 
     k = len(plan)
     # K phase calls + 1 reconcile, always (matches the cost estimate): the reconcile writes
@@ -316,13 +335,18 @@ def _run_summary(
         f"Synthesizing the transcript in {k} phase{'s' if k > 1 else ''} (+1 reconcile) so it "
         f"reads as one faithful document — {calls} cloud calls."
     )
-    ui.info(cost.estimate_message(estimate, tier))
+    if gate:
+        # Under a folder run this line is the SEVENTH restatement of a price the operator
+        # already approved once, for a fraction they never agreed to separately. The
+        # per-file ACTUAL below still prints: that is real spend, and it accumulates into
+        # the folder total.
+        ui.info(cost.estimate_message(estimate, tier))
 
     # Unverified-price notice: scripts/check-models.py flags a tier whose model had a
     # generation bump but whose prices a human has not re-confirmed yet. The estimate
     # above uses those carried-over prices, so it may under-state the bill. One-time,
     # non-blocking (fires once per run) — it does NOT move the gate or the threshold.
-    if tier.prices_unverified:
+    if gate and tier.prices_unverified:
         ui.warn(
             f"Model generation changed for the '{tier.name}' tier — prices unconfirmed, so "
             f"the estimate above may under-state the real bill and clear the "
@@ -336,14 +360,16 @@ def _run_summary(
     # proceeds); TD-9 makes that path operator-controlled via settings.auto_accept_under_threshold.
     # Default (True) → proceed immediately, the shown estimate is the acknowledgment. False → a
     # non-decision "press Enter" acknowledge beat first, so the operator can Ctrl-C out.
-    if cost.requires_explicit_confirmation(estimate, settings.confirm_threshold_usd):
+    if not gate:
+        pass  # folder run: one quote, one answer, already given for every file
+    elif cost.requires_explicit_confirmation(estimate, settings.confirm_threshold_usd):
 
         def _confirm(prompt: str, default: bool) -> bool:  # adapt ui.confirm's kw-only default
             return ui.confirm(prompt, default=default)
 
         if not cost.confirm_proceed(estimate, settings.confirm_threshold_usd, confirm=_confirm):
             ui.info("Summarization cancelled; your transcript is saved.")
-            return
+            return None
     elif not settings.auto_accept_under_threshold:
         # Auto-accept off: the operator wants a non-decision acknowledge beat on the cheap
         # path — a chance to Ctrl-C out before spending. Default is auto-accept ON, where the
@@ -382,10 +408,13 @@ def _run_summary(
         except SummarizeError as exc:  # F2 / F4 / F5 — message carried by the stage
             sp.done(ok=False, message="Summarization failed")
             ui.error(str(exc))
-            return
+            return None
         sp.done(ok=True, message="Summary received")
 
-    ui.info(cost.actual_message(cost.actual_cost(result, tier)))
+    actual = cost.actual_cost(result, tier)
+    ui.info(cost.actual_message(actual))
+    if on_cost is not None:
+        on_cost(actual)
 
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
@@ -406,17 +435,23 @@ def _run_summary(
             f"{exc}\nThe summary is saved as {json_path.name}; re-render it later "
             "without paying for the call again."
         )
-        return
+        return None
 
     ui.success(f"Done — summary written to {out_path}")
     # TD-14: pop the summaries folder (Windows, once/launch). REVEAL_SUMMARY outranks an
     # earlier audio reveal, so a video Summary run (which also kept the MP3 baseline, TD-12)
     # still ends on the summaries folder, not audio.
     ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
+    return out_path
 
 
-def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.ModelConfig) -> str:
-    """Run TRANSCRIBE behind a %/ETA progress bar, save the checkpoint, return its text.
+def _transcribe_to_checkpoint(
+    deps: Deps, source: Path, model_config: config.ModelConfig
+) -> tuple[Path, str]:
+    """Run TRANSCRIBE behind a %/ETA progress bar, save the checkpoint, return it.
+
+    Returns ``(saved path, its text)``: the folder run needs the path for its report and
+    its resume, the single-file flow needs only the text.
 
     The bar advances on the stage's progress fraction (plan §5). For zero-duration /
     unprobeable audio no fraction is knowable, so an honest segment-count line is shown
@@ -441,7 +476,7 @@ def _transcribe_to_checkpoint(deps: Deps, source: Path, model_config: config.Mod
     # Summarize the saved checkpoint VERBATIM (not transcript.text) so the fresh-run
     # and recovery (re-summarize saved .txt) paths feed byte-identical, timecoded text
     # to GUARD + SUMMARIZE — the model can cite real section_timecodes on both.
-    return tpath.read_text(encoding="utf-8")
+    return tpath, tpath.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -564,7 +599,7 @@ def _flow_local_file(deps: Deps) -> None:
         except (ExtractError, OSError) as exc:
             ui.warn(f"Couldn't save the MP3 ({exc}); continuing without the audio artifact.")
 
-    text = _transcribe_to_checkpoint(deps, source, model_config)
+    _, text = _transcribe_to_checkpoint(deps, source, model_config)
     if action == "transcript":  # transcript only — the checkpoint is the deliverable
         # TD-12 (Issue 2): reveal the transcripts folder here, in the transcript branch ONLY
         # — never in _transcribe_to_checkpoint, which also runs on the Summary path (that was
@@ -869,6 +904,230 @@ def _flow_scan(deps: Deps) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Folder run (bulk v3 increment 2)
+# --------------------------------------------------------------------------- #
+_BULK_HINT = (
+    "Summarizes a whole folder without you sitting through it. Transcribes every file "
+    "first (local, free, slow), then shows ONE exact price for the summaries and asks "
+    "once. Files already summarized are skipped, not re-paid for. Ctrl-C stops after the "
+    "file in flight; everything finished is on disk, so running it again picks up there."
+)
+
+# The folder run does NOT extract MP3s. TD-12 makes the MP3 a kept baseline on the
+# SINGLE-file flow, where it costs one short ffmpeg pass on a file the operator is
+# already watching. Here it would add a second full pass over every file in a run whose
+# whole point is to finish unattended, for an artifact this flow was not asked for and
+# that the 'Batch: videos -> MP3' row already produces on demand. Transcription reads
+# the source directly, so nothing downstream needs it.
+
+
+class _StageFailed(Exception):
+    """One file's stage failed inside a folder run; the message is already on screen.
+
+    Exists so :func:`echogist.bulk.run_phase` can record the file and carry on with the
+    rest of the folder. The stage itself already reported the reason inline, right under
+    the file name the progress line announced.
+    """
+
+
+def _bulk_transcript_texts(
+    deps: Deps,
+    ui: UI,
+    plan: bulk.Plan,
+    model_config: config.ModelConfig,
+) -> tuple[dict[Path, str], BulkReport]:
+    """Phase 1 — every source that needs one gets a saved transcript. Local, free.
+
+    Returns the transcript text per source (reused sources included, read back from the
+    saved file) and the report for the transcribe phase. Raises
+    :class:`echogist.bulk.BulkCancelled` on Ctrl-C, with the partial report.
+    """
+    texts: dict[Path, str] = {}
+    for source, saved in plan.ready:
+        try:
+            texts[source] = saved.read_text(encoding="utf-8")
+        except OSError as exc:  # readable a moment ago at plan time; re-transcribe instead
+            ui.warn(f"Couldn't read {saved.name} ({exc}); transcribing {source.name} again.")
+            plan = replace(plan, to_transcribe=plan.to_transcribe + (source,))
+    if plan.ready:
+        ui.info(f"Reusing {len(texts)} saved transcript(s).")
+
+    def _step(source: Path) -> Path:
+        path, text = _transcribe_to_checkpoint(deps, source, model_config)
+        texts[source] = text
+        return path
+
+    def _announce(index: int, total: int, source: Path) -> None:
+        ui.info(f"[{index}/{total}] {source.name}")
+
+    report = bulk.run_phase(
+        plan.to_transcribe,
+        _step,
+        on_start=_announce,
+        recoverable=(TranscribeError, ExtractError, OSError),
+    )
+    return texts, report
+
+
+def _flow_bulk(deps: Deps) -> None:
+    """Menu 'bulk' — summarize every file in a folder, one gate for the whole run.
+
+    Two phases on purpose (see :mod:`echogist.bulk`): TRANSCRIBE the folder first so the
+    cost gate is reached with the real transcript of every file, then one exact quote and
+    one answer, then the paid calls. No per-file confirm, which is the babysitting this
+    flow exists to remove.
+
+    Every early return lands back in the menu with the local work already saved.
+    """
+    ui = _ui(deps)
+    ui.clear()  # TD-11: start this flow on a clean screen
+    ui.info(_BULK_HINT)
+    settings = config.load_settings(deps.settings_path)
+    model_config = config.load_model_config()
+    tier = model_config.tier(settings.model_tier)
+
+    # Resolved ONCE, before the walk, for the same reason the scan does it: a missing or
+    # corrupt ffmpeg must fail loud one time, not mark every file unreadable.
+    exe = extract.default_ffmpeg_exe()
+
+    initialdir = config.resolve_initial_dir(config.load_last_dir())
+    raw = ui.pick_dir("Select a folder to summarize", initialdir=initialdir)
+    if not raw or not raw.strip():  # dialog Cancel / blank fallback entry → soft cancel
+        ui.info("No folder selected; returning to the menu.")
+        return
+    root = Path(raw.strip()).expanduser()
+    if not root.is_dir():
+        ui.error(f"Not a folder: {root}. Check the path and try again.")
+        return
+    config.save_last_dir(root)
+
+    cache_path = deps.base / "output" / scan.CACHE_FILENAME
+    try:
+        with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
+            result = scan.scan_tree(root, cache_path=cache_path, exe=exe)
+            spin.done(message=f"Found {len(result.files)} file(s).")
+    except ScanCancelled:
+        # A partial scan would run a partial folder and quote a partial price, which is
+        # exactly the kind of silent half-job this flow must not do.
+        ui.warn("Scan cancelled; nothing was transcribed or summarized.")
+        return
+
+    summaries_dir = deps.base / "output" / "summaries"
+    transcripts_dir = deps.base / "output" / "transcripts"
+    plan = bulk.plan_run(
+        [f.path for f in result.files],
+        summarized=summarize.summary_index(summaries_dir / "raw"),
+        transcripts=scan.transcript_files(transcripts_dir),
+    )
+    if plan.summarized:
+        ui.info(f"Skipping {len(plan.summarized)} file(s) already summarized (not re-paid for).")
+    pending = len(plan.ready) + len(plan.to_transcribe)
+    if not pending:
+        ui.success("Every file in this folder already has a summary. Nothing to do.")
+        return
+
+    # Phase 1 — local, free, the long one.
+    try:
+        with_text, transcribed = _bulk_transcript_texts(deps, ui, plan, model_config)
+    except BulkCancelled as exc:
+        _report_bulk(ui, exc.report, stage="Transcribed", cancelled=True)
+        return
+    if transcribed.failed:
+        _report_bulk(ui, transcribed, stage="Transcribed", cancelled=False)
+
+    ordered = sorted(src for src in plan.sources if src in with_text)  # plan order is sorted
+    if not ordered:
+        ui.error("No transcript survived; nothing to summarize.")
+        return
+
+    # The gate — one exact quote over the real transcripts, one answer for the whole run.
+    per_file = [
+        [
+            guard.estimate_input_tokens(phase.text)
+            for phase in chunk.plan_phases(with_text[src], model_config.chunk)
+        ]
+        for src in ordered
+    ]
+    estimate = bulk.folder_estimate(
+        per_file, tier, per_call_output_tokens=model_config.guard.output_tokens_estimate
+    )
+    calls = sum(len(phases) + 1 for phases in per_file)
+    ui.info(f"{len(ordered)} file(s) ready to summarize — {calls} cloud calls in total.")
+    ui.info(cost.estimate_message(estimate, tier))
+    if tier.prices_unverified:
+        ui.warn(
+            f"Model generation changed for the '{tier.name}' tier — prices unconfirmed, so "
+            "the estimate above may under-state the real bill."
+        )
+    if not ui.confirm(f"Summarize {len(ordered)} file(s)?", default=False):
+        ui.info("Nothing was summarized; your transcripts are saved.")
+        return
+
+    # Phase 2 — the paid half. Gated once, above.
+    spent: list[cost.CostEstimate] = []
+
+    def _summarize_step(source: Path) -> Path:
+        out = _run_summary(
+            deps,
+            settings,
+            model_config,
+            with_text[source],
+            source,
+            source.stem,
+            gate=False,
+            on_cost=spent.append,
+        )
+        if out is None:
+            raise _StageFailed(f"{source.name} produced no summary (see the message above)")
+        return out
+
+    def _announce(index: int, total: int, source: Path) -> None:
+        ui.info(f"[{index}/{total}] {source.name}")
+
+    try:
+        summarized = bulk.run_phase(
+            ordered, _summarize_step, on_start=_announce, recoverable=(_StageFailed,)
+        )
+    except BulkCancelled as exc:
+        _report_bulk(ui, exc.report, stage="Summarized", cancelled=True, spent=spent)
+        return
+    _report_bulk(ui, summarized, stage="Summarized", cancelled=False, spent=spent)
+    if summarized.done:
+        ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
+
+
+def _report_bulk(
+    ui: UI,
+    report: BulkReport,
+    *,
+    stage: str,
+    cancelled: bool,
+    spent: Sequence[cost.CostEstimate] = (),
+) -> None:
+    """Headline counts, then a row per failure — never a row per success.
+
+    Mirrors the batch report: the operator already watched the successes scroll past, and
+    burying the one file that broke under six that did not is how a failure goes unseen.
+
+    ``spent`` is the audited cost of every call the run actually made. Its total is the
+    close of the transaction the gate opened: the operator agreed to one quote, and this
+    is the bill. It is also the only place the quote's real bias is visible.
+    """
+    rows = [(stage, str(report.done)), ("Failed", str(report.failed))]
+    if spent:
+        total = sum(item.total_usd for item in spent)
+        rows.append(("Actually spent", f"${total:,.4f}"))
+    ui.table(f"{stage} — result", rows)
+    for item in report.failures:
+        ui.error(f"{item.source.name}: {item.detail}")
+    if cancelled:
+        ui.warn(
+            f"Cancelled. {report.done} file(s) finished and are saved; "
+            "run the folder again to pick up where this stopped."
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Settings
 # --------------------------------------------------------------------------- #
 _SETTINGS_FIELDS: tuple[Choice, ...] = (
@@ -966,6 +1225,7 @@ _MAIN_MENU: tuple[Choice, ...] = (
     ("batch", "Batch: videos -> MP3"),
     ("transcript", "Saved transcript"),
     ("scan", "Scan a folder"),
+    ("bulk", "Summarize a folder"),
     ("settings", "Settings"),
     ("exit", "Exit"),
 )
@@ -1011,6 +1271,7 @@ def run_menu(deps: Deps | None = None) -> int:
         "batch": _flow_batch_mp3,
         "transcript": _flow_saved_transcript,
         "scan": _flow_scan,
+        "bulk": _flow_bulk,
         "settings": _flow_settings,
     }
     ui.banner("EchoGist", "local transcription + summary")

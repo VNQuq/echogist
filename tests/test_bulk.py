@@ -104,6 +104,19 @@ def test_every_source_lands_in_exactly_one_bucket(tmp_path: Path) -> None:
     assert sorted(plan.sources) == sorted([done, ready, fresh])
 
 
+def test_the_plan_is_sorted_not_in_walk_order(tmp_path: Path) -> None:
+    """os.walk order is filesystem-dependent, so an unsorted plan plays a seven-lecture
+    course back as 4, 2, 1, 7 and cannot be reproduced between runs."""
+    names = ["4.mp4", "2.mp4", "1.mp4", "3.mp4"]
+    sources = []
+    for n in names:
+        p = tmp_path / n
+        p.write_bytes(b"x")
+        sources.append(p)
+    plan = bulk.plan_run(sources, summarized=set(), transcripts={})
+    assert [p.name for p in plan.to_transcribe] == ["1.mp4", "2.mp4", "3.mp4", "4.mp4"]
+
+
 # --------------------------------------------------------------------------- #
 # folder_estimate — the exact gate, and the under-quote trap it exists to avoid
 # --------------------------------------------------------------------------- #

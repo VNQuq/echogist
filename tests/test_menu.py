@@ -19,6 +19,7 @@ when the queue empties.
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ from echogist import batch, config, extract, menu, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
-from echogist.transcribe import Segment, Transcript
+from echogist.transcribe import Segment, TranscribeError, Transcript
 from echogist.ui import (
     REVEAL_AUDIO,
     REVEAL_SUMMARY,
@@ -1586,4 +1587,132 @@ def test_scan_is_offered_before_settings_in_the_main_menu() -> None:
     # Number keys are POSITIONAL, so where the row lands changes the operator's fingers.
     keys = [key for key, _label in menu._MAIN_MENU]
 
-    assert keys.index("scan") == keys.index("settings") - 1
+    assert keys.index("scan") < keys.index("settings")
+
+
+def test_scan_sits_immediately_before_the_folder_run() -> None:
+    """Preview then run: the scan prices a folder, the folder run spends it. They are
+    the same gesture a minute apart, so they must not be separated by an unrelated row."""
+    keys = [key for key, _label in menu._MAIN_MENU]
+
+    assert keys.index("bulk") == keys.index("scan") + 1
+    assert keys.index("bulk") < keys.index("settings")
+
+
+# --------------------------------------------------------------------------- #
+# Folder run (bulk v3 increment 2) — two phases, one gate
+# --------------------------------------------------------------------------- #
+def test_bulk_flow_transcribes_everything_then_asks_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point: one confirm for the folder, not one per file.
+
+    The threshold is pinned to 0 so EVERY file would individually trip the single-file
+    gate. That is what makes this test able to fail: with a default threshold the stub
+    transcripts are too cheap to gate, and a per-file gate would sail through unnoticed.
+    """
+    _write_settings(tmp_path, confirm_threshold_usd=0.0)
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("one.mp4", "two.mp4", "three.mp4"):
+        _lecture(library, name)
+    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["transcribe"] == 3
+    assert calls["summarize"] == 3
+    # Exactly one confirm was consumed for the whole folder: "exit" is still queued and
+    # was reached. A per-file gate would have eaten it and ended the session early.
+    assert stub.answers == []
+    assert "3 file(s) ready to summarize" in stub.log_text
+
+
+def test_bulk_flow_declined_gate_spends_nothing_but_keeps_the_transcripts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), False, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["transcribe"] == 1
+    assert calls["summarize"] == 0  # killswitch: declining reaches no wire
+    assert "your transcripts are saved" in stub.log_text
+
+
+def test_bulk_flow_skips_a_file_that_already_has_a_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TD-22 paying off: a second run over the folder does not re-pay for file one."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    done = _lecture(library, "done.mp4")
+    _lecture(library, "todo.mp4")
+    summarize.save_raw_result(
+        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+    )
+    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "Skipping 1 file(s) already summarized" in stub.log_text
+    assert calls["transcribe"] == 1  # only todo.mp4
+    assert calls["summarize"] == 1
+
+
+def test_bulk_flow_with_nothing_left_to_do_never_reaches_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    done = _lecture(library, "done.mp4")
+    summarize.save_raw_result(
+        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+    )
+    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "already has a summary" in stub.log_text
+    assert calls == {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
+
+
+def test_bulk_flow_one_broken_file_does_not_abandon_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Six good lectures must not be lost to one bad one — especially after paying."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        _lecture(library, name)
+    deps, stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+    real = deps.transcribe
+
+    def flaky(source: Path, *a: Any, **kw: Any) -> Any:
+        if source.name == "b.mp4":
+            raise TranscribeError("model choked")
+        return real(source, *a, **kw)
+
+    deps = replace(deps, transcribe=flaky)
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["summarize"] == 2  # a and c still summarized
+    assert "model choked" in stub.log_text
+    assert "2 file(s) ready to summarize" in stub.log_text
+
+
+def test_bulk_flow_does_not_extract_mp3s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """TD-12's kept-MP3 baseline is a SINGLE-file rule. Doing it here would add a second
+    full pass over every file for an artifact this flow was not asked for."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, _stub, calls = _make_deps(tmp_path, ["bulk", str(library), True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["extract"] == 0

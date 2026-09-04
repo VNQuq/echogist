@@ -155,7 +155,14 @@ def plan_run(
             ready.append((source, saved[0]))
         else:
             todo.append(source)
-    return Plan(summarized=tuple(finished), ready=tuple(ready), to_transcribe=tuple(todo))
+    # Sorted, not walk order: os.walk's order is filesystem-dependent, so an unsorted plan
+    # plays a seven-lecture course back as 4, 2, 1, 7 and cannot be reproduced between
+    # runs. Sorting groups each folder and matches the order the scan report showed.
+    return Plan(
+        summarized=tuple(sorted(finished)),
+        ready=tuple(sorted(ready)),
+        to_transcribe=tuple(sorted(todo)),
+    )
 
 
 def folder_estimate(
