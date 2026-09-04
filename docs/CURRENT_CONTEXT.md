@@ -59,6 +59,12 @@ the spec; only what the code cannot tell you lives here.
   holds ONE scan root, so alternating folders re-probes.
 - **Increment 2 (the paid bulk) is NOT started and is GATED** on running the scanner against the real lecture
   folder. Its file count and collision report decide whether the paid bulk is worth building at all.
+- **Increment 1b (mp3 re-encode rule, `dec-c3adfe5b`)** has a DRAFT spec at
+  [docs/designs/mp3-reencode-1b.md](./designs/mp3-reencode-1b.md) — written unattended, NOT reviewed, NOT
+  implemented. Two open questions in it need the operator: whether `target_kbps` is stored or derived from
+  `lame_quality`, and whether the 222 MiB clause still earns its keep next to the bitrate clause. It also
+  records a unit discrepancy: the threshold is specified in MiB but its justifying figure was computed in
+  decimal MB (207 vs 197 kbps at 2.5h).
 - **Both CRITICAL regressions are pinned:** cross-source summary prose (inc 0), cost estimate biased low (inc 1 —
   the prompt overhead must land K times, not once). 554 tests green.
 
