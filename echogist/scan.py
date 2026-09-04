@@ -22,8 +22,9 @@ import math
 import os
 import re
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from . import cost, guard, naming
@@ -32,9 +33,9 @@ from .cost import CostEstimate
 from .extract import ExtractError, Runner, _default_probe_runner, probe_media
 from .ui import Choice, human_size
 
-# Extensions a directory expansion will feed to ffmpeg. Moved here from ``batch``
-# because this module owns the walker; ``batch.CONVERTIBLE_SUFFIXES`` re-exports it, so
-# there is still exactly one list. Deliberately a
+# Extensions a directory expansion will feed to ffmpeg. Moved here from ``batch`` because
+# this module owns the walker; ``batch`` has no copy and no re-export, so there is exactly
+# one list. Deliberately a
 # closed list rather than "everything that is not an mp3": a folder of lectures also holds
 # .txt/.srt/.jpg, and handing those to ffmpeg would fill the failure table with noise the
 # operator cannot act on. Config-shaped data, so an exotic container is a one-line addition.
@@ -156,12 +157,24 @@ class ScanResult:
 # --------------------------------------------------------------------------- #
 # Walk
 # --------------------------------------------------------------------------- #
-def walk(root: Path, *, recursive: bool = True) -> list[Path]:
+def walk(
+    root: Path,
+    *,
+    recursive: bool = True,
+    on_error: Callable[[OSError], None] | None = None,
+) -> list[Path]:
     """Media files under ``root``, sorted, deduped by resolved path.
 
     The project's only tree walker. ``recursive=False`` reproduces the one-level
     expansion :func:`echogist.batch.expand_selection` has always done, so the batch flow
     is unchanged and its existing tests are this function's regression harness.
+
+    ``on_error`` is handed straight to :func:`os.walk` and is called once per directory
+    that cannot be LISTED. It is not optional decoration: ``os.walk``'s default swallows
+    a ``PermissionError`` from ``scandir`` and simply yields nothing for that directory,
+    so without this every media file inside an ACL-locked or cloud-sync-locked folder
+    disappears from the scan with no trace in any bucket. A scanner whose whole job is to
+    show the operator what is there must never lose a folder in silence.
 
     Two directories are pruned in place, during the walk rather than filtered after it,
     so their subtrees are never even listed:
@@ -176,7 +189,7 @@ def walk(root: Path, *, recursive: bool = True) -> list[Path]:
     found: list[Path] = []
     seen_files: set[Path] = set()
     seen_dirs: set[Path] = set()
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):
         here = Path(dirpath)
         if not recursive:
             dirnames[:] = []
@@ -327,8 +340,15 @@ def scan_tree(
             placeholders=tuple(placeholders),
         )
 
+    def note_unlistable(exc: OSError) -> None:
+        """A directory ``os.walk`` could not list. Its CONTENTS are unknowable — that is
+        what "cannot list" means — so the folder itself is what gets reported, and the
+        operator learns that part of the tree was not counted."""
+        where = Path(exc.filename) if exc.filename else root
+        unreadable.append((where, f"cannot list this folder: {exc.strerror or exc}"))
+
     try:
-        for path in walk(root):
+        for path in walk(root, on_error=note_unlistable):
             try:
                 st = path.stat()
             except OSError as exc:
@@ -414,11 +434,13 @@ def transcript_index(transcripts_dir: Path) -> Counter[str]:
     index: Counter[str] = Counter()
     if not transcripts_dir.is_dir():
         return index
-    with contextlib.suppress(OSError):
-        for path in transcripts_dir.glob("*.txt"):
-            match = _TRANSCRIPT_NAME.match(path.stem)
-            if match:
-                index[match["stem"]] += 1
+    # No try/except: Path.glob yields nothing for a missing or unreadable directory
+    # rather than raising, so a handler here would be dead code (verified, and the
+    # is_dir guard above already covers the missing case).
+    for path in transcripts_dir.glob("*.txt"):
+        match = _TRANSCRIPT_NAME.match(path.stem)
+        if match:
+            index[match["stem"]] += 1
     return index
 
 
@@ -465,8 +487,14 @@ def collisions(files: Sequence[MediaFile]) -> list[tuple[str, tuple[Path, ...]]]
 _RATE_SAMPLE_CHARS = 1000
 
 
+@lru_cache(maxsize=1)
 def _cyrillic_tokens_per_char() -> float:
-    """The guard's token rate for Russian text, measured rather than re-typed.
+    """The guard's token rate for Russian text, measured ONCE rather than re-typed.
+
+    Cached because it is a constant: the docstring below says "sampled once", and without
+    the cache ``project_cost`` re-derived it per file — 97% of its runtime on a 500-file
+    folder spent recomputing the same number. Still a function, not a module constant, so
+    it has no import-time side effect and the tests can call it directly.
 
     The sample is Cyrillic on purpose. ``guard`` rates Cyrillic at roughly double its
     default rate, so a Latin sample would HALVE the headline figure — and CLAUDE.md

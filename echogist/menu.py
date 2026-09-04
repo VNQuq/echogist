@@ -188,8 +188,12 @@ def _oversize_phase_message(p: chunk.Phase, est: int, budget: int, tier: config.
     )
 
 
-# A resume-file stem written by _resume_key: blake2s(digest_size=8) is 16 hex chars.
-_RESUME_KEY_RE = re.compile(r"[0-9a-f]{16}")
+# blake2s(digest_size=N) renders as 2N hex chars, so the sweep's shape check is DERIVED
+# from the digest size rather than restated. Getting these two out of step would make
+# _sweep_stale_resumes delete every VALID partial as "stale" -- silently, and only on the
+# re-run that was supposed to save the work.
+_RESUME_KEY_DIGEST_SIZE = 8
+_RESUME_KEY_RE = re.compile(rf"[0-9a-f]{{{_RESUME_KEY_DIGEST_SIZE * 2}}}")
 
 
 def _resume_key(source_path: Path) -> str:
@@ -207,7 +211,7 @@ def _resume_key(source_path: Path) -> str:
     lose the resume.
     """
     return hashlib.blake2s(
-        str(source_path.resolve()).casefold().encode(), digest_size=8
+        str(source_path.resolve()).casefold().encode(), digest_size=_RESUME_KEY_DIGEST_SIZE
     ).hexdigest()
 
 

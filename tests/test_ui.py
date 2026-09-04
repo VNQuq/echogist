@@ -325,7 +325,10 @@ def _install_fake_tk(
             raise _FakeTclError("no display")
         return _FakeRoot(destroyed)
 
-    fd = types.SimpleNamespace(askopenfilename=lambda **_kw: picked)
+    fd = types.SimpleNamespace(
+        askopenfilename=lambda **_kw: picked,
+        askdirectory=lambda **_kw: picked,
+    )
     fake = types.SimpleNamespace(TclError=_FakeTclError, Tk=_tk, filedialog=fd)
     monkeypatch.setitem(sys.modules, "tkinter", cast(Any, fake))
     monkeypatch.setitem(sys.modules, "tkinter.filedialog", cast(Any, fd))
@@ -524,3 +527,62 @@ def test_path_fallback_interrupt_becomes_eof(
 )
 def test_human_size_units(total: int, expected: str) -> None:
     assert human_size(total) == expected
+
+
+# --------------------------------------------------------------------------- #
+# pick_dir — the folder sibling (bulk v3 increment 1). Same cancel split as
+# pick_file; askdirectory takes no filetypes, which is why it is its own seam.
+# --------------------------------------------------------------------------- #
+def test_pick_dir_native_returns_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="/lectures/course-1", destroyed=destroyed)
+    ui_ = _tty_ui()
+    got = ui_.pick_dir("Pick a folder", initialdir=Path("/start"))
+    assert got == "/lectures/course-1"
+    assert destroyed == [True]  # the hidden root was always destroyed
+
+
+def test_pick_dir_native_cancel_returns_none_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Native Cancel returns "" — a soft cancel (→ menu), NOT a drop into the in-console
+    # fallback. Make the fallback explode so we prove it is not reached.
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="", destroyed=destroyed)
+    ui_ = _tty_ui()
+
+    def _no_fallback(_p: str) -> str | None:
+        pytest.fail("fallback must not run after a native cancel")
+
+    monkeypatch.setattr(ui_, "_path_fallback", _no_fallback)
+    assert ui_.pick_dir("Pick a folder") is None
+    assert destroyed == [True]
+
+
+def test_native_open_dir_importerror_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "tkinter", cast(Any, None))
+    assert RichQuestionaryUI._native_open_dir("Pick a folder", None) is None
+
+
+def test_native_open_dir_tclerror_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    destroyed: list[bool] = []
+    _install_fake_tk(monkeypatch, picked="x", destroyed=destroyed, raise_tcl=True)
+    assert RichQuestionaryUI._native_open_dir("Pick a folder", None) is None
+    assert destroyed == []  # root was never created → nothing to destroy
+
+
+def test_pick_dir_falls_back_when_tk_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real WSL state: no tkinter, so the operator types a path instead.
+    ui_ = _tty_ui()
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open_dir", staticmethod(lambda *_a: None))
+    monkeypatch.setattr(ui_, "_path_fallback", lambda _p: "/typed/folder")
+    assert ui_.pick_dir("Pick a folder") == "/typed/folder"
+
+
+def test_pick_dir_native_keyboardinterrupt_becomes_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    ui_ = _tty_ui()
+
+    def _boom(*_a: object) -> str | None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(RichQuestionaryUI, "_native_open_dir", staticmethod(_boom))
+    with pytest.raises(EOFError):
+        ui_.pick_dir("Pick a folder")

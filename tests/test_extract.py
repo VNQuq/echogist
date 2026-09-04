@@ -492,3 +492,65 @@ def test_the_conversion_runner_stays_unbounded(monkeypatch: pytest.MonkeyPatch) 
     extract._default_runner(["/fake/ffmpeg", "-i", "in.mp4", "out.mp3"])
 
     assert seen["timeout"] is None
+
+
+def test_the_real_probe_path_actually_gets_the_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The eng-review fix, pinned end to end.
+
+    ``_probe_runner_for`` is what swaps the bounded runner in when the caller did not
+    inject one — i.e. on every real single-file run. Every other test in this file passes
+    its own runner, so that branch was never executed and the whole timeout could be
+    deleted with a green suite.
+    """
+    import subprocess
+    import types
+
+    seen: list[object] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> object:
+        seen.append(kwargs.get("timeout"))
+        return types.SimpleNamespace(returncode=1, stderr="  Duration: 00:10:00.00\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"x")
+
+    # No ``runner=`` override: this is the production wiring.
+    extract.probe_media(source, "/fake/ffmpeg")
+
+    assert seen == [extract._PROBE_TIMEOUT_SECONDS]
+
+
+def test_extract_audios_probe_is_bounded_but_its_conversion_is_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Two spawns on this path, and they need OPPOSITE treatment: the probe must not hang
+    # on a dead share, the conversion must not be cut off mid-lecture.
+    import subprocess
+    import types
+
+    timeouts: list[object] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> object:
+        timeouts.append(kwargs.get("timeout"))
+        if "-i" in argv and len(argv) == 4:  # the probe: exe -nostdin -i <source>
+            return types.SimpleNamespace(returncode=1, stderr="  Duration: 00:10:00.00\n")
+        Path(argv[-1]).write_bytes(b"ID3")  # the conversion
+        return types.SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"x")
+
+    extract.extract_audio(
+        source,
+        tmp_path / "out",
+        log=lambda _m: None,
+        ffmpeg_exe="/fake/ffmpeg",
+        progress=lambda _f: None,
+        stream_runner=lambda argv, _on: (Path(argv[-1]).write_bytes(b"ID3"), (0, ""))[1],
+    )
+
+    assert timeouts[0] == extract._PROBE_TIMEOUT_SECONDS  # the probe is bounded

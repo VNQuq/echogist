@@ -205,6 +205,46 @@ def test_phase_target_invalid_fails_loud(tmp_path: Path) -> None:
         load_model_config(_write(tmp_path / "models.toml", text))
 
 
+# --------------------------------------------------------------------------- #
+# [scan] — the scanner's speech-rate constants: optional, defaulted, validated
+# --------------------------------------------------------------------------- #
+def test_shipped_scan_config_loads() -> None:
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.scan.words_per_minute == 150.0
+    assert cfg.scan.chars_per_word == 7.0
+
+
+def test_missing_scan_table_uses_defaults(tmp_path: Path) -> None:
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.scan.words_per_minute == 150.0
+    assert cfg.scan.chars_per_word == 7.0
+
+
+def test_scan_constants_override_parses(tmp_path: Path) -> None:
+    # The whole point of TD-23: recalibrating these must be a models.toml edit, with no
+    # code change. If the override does not land, that plan silently does nothing.
+    text = VALID_MODELS_TOML + "\n[scan]\nwords_per_minute = 120\nchars_per_word = 6\n"
+    cfg = load_model_config(_write(tmp_path / "models.toml", text))
+    assert cfg.scan.words_per_minute == 120.0
+    assert cfg.scan.chars_per_word == 6.0
+
+
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_scan_constant_invalid_fails_loud(tmp_path: Path, value: str) -> None:
+    text = VALID_MODELS_TOML + f"\n[scan]\nwords_per_minute = {value}\n"
+    with pytest.raises(ConfigError, match="must be > 0"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
+def test_scan_table_of_the_wrong_shape_fails_loud(tmp_path: Path) -> None:
+    # PREPENDED, not appended: a bare key after the last [table] header would be parsed
+    # as a member of that table, land nowhere near the top level, and the test would pass
+    # for the wrong reason.
+    text = 'scan = "not a table"\n' + VALID_MODELS_TOML
+    with pytest.raises(ConfigError, match=r"\[scan\] must be a table"):
+        load_model_config(_write(tmp_path / "models.toml", text))
+
+
 def test_blank_synthesis_prompt_fails_loud(tmp_path: Path) -> None:
     # A hand-edited blank prompt is a loud ConfigError (caught, not silently defaulted).
     text = VALID_MODELS_TOML.replace(

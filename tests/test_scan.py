@@ -174,6 +174,31 @@ def test_an_unstattable_file_is_unreadable_not_a_crash(
     assert [p.name for p, _r in result.unreadable] == ["a.mp4"]
 
 
+def test_a_folder_that_cannot_be_listed_is_reported_not_swallowed(tmp_path: Path) -> None:
+    # os.walk's DEFAULT swallows a PermissionError from scandir and yields nothing for
+    # that directory, so every media file inside an ACL-locked or cloud-sync-locked folder
+    # vanished from the report entirely: not in files, not in unreadable, not in
+    # placeholders. A scanner exists to show what is there; losing a folder in silence is
+    # the one thing it must not do.
+    _media(tmp_path, "visible.mp4")
+    locked = tmp_path / "locked"
+    _media(locked, "hidden.mp4")
+    locked.chmod(0o000)
+    try:
+        # Checked while the chmod is still in force. Root ignores it, and so do some
+        # filesystems; skipping AFTER restoring the mode would always skip.
+        really_locked = not os.access(locked, os.R_OK)
+        result = _scan(tmp_path, tmp_path)
+    finally:
+        locked.chmod(0o755)  # always restore, or the tmp tree cannot be cleaned up
+
+    if not really_locked:
+        pytest.skip("this user can list a 0o000 directory; nothing to assert")
+    assert [f.path.name for f in result.files] == ["visible.mp4"]
+    assert [str(p) for p, _reason in result.unreadable] == [str(locked)]
+    assert "cannot list this folder" in result.unreadable[0][1]
+
+
 def test_a_cloud_placeholder_is_listed_and_never_probed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -304,6 +329,38 @@ def test_the_cache_is_published_atomically(tmp_path: Path, monkeypatch: pytest.M
     assert replaced == [(str(cache_path) + ".part", str(cache_path))]
     assert not cache_path.with_name(cache_path.name + ".part").exists()
     assert json.loads(cache_path.read_text())["schema"] == 1
+
+
+def test_a_cache_that_cannot_be_written_does_not_fail_the_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The results are already in hand; the only loss is next run's speed. A locked
+    # output/, a full disk or a permission-denied publish on Windows must not destroy a
+    # scan that already did all its work.
+    _media(tmp_path, "a.mp4")
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "replace", boom)
+    result = _scan(tmp_path, tmp_path)
+
+    assert [f.path.name for f in result.files] == ["a.mp4"]  # the scan still succeeded
+
+
+def test_a_leftover_part_file_is_swept_when_the_publish_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _media(tmp_path, "a.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+
+    def boom(_src: object, _dst: object) -> None:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "replace", boom)
+    scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+
+    assert not cache_path.with_name(cache_path.name + ".part").exists()
 
 
 def test_ctrl_c_carries_the_partial_result_and_still_flushes(tmp_path: Path) -> None:

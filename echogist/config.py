@@ -183,8 +183,10 @@ class ScanConfig:
     UPPER BOUND — CLAUDE.md requires the estimate to run high, and an under-quote is the
     one failure mode that costs the operator money they did not agree to.
 
-    Unmeasured as shipped. The first scan of a folder that already holds a transcript
-    calibrates both against the real character count.
+    Unmeasured as shipped, and nothing in the code measures them: recalibration is a
+    MANUAL step (TD-23). Scan a folder that already holds a transcript, compare the
+    projected character count against the real one, and edit the two numbers in
+    ``models.toml``. No code change is needed to do it.
     """
 
     words_per_minute: float = _DEFAULT_WORDS_PER_MINUTE

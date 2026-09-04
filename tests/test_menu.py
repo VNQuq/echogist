@@ -1573,6 +1573,15 @@ def test_the_other_menu_rows_still_dispatch_after_the_renumber(
     assert "Goodbye." in stub.log_text
 
 
+def test_the_sweep_shape_check_tracks_the_digest_size() -> None:
+    # If these two ever drift, _sweep_stale_resumes deletes every VALID partial as
+    # "stale" — silently, and only on the re-run that was meant to save the work.
+    key = menu._resume_key(Path("/any/source.mp4"))
+
+    assert len(key) == menu._RESUME_KEY_DIGEST_SIZE * 2
+    assert menu._RESUME_KEY_RE.fullmatch(key)
+
+
 def test_scan_is_offered_before_settings_in_the_main_menu() -> None:
     # Number keys are POSITIONAL, so where the row lands changes the operator's fingers.
     keys = [key for key, _label in menu._MAIN_MENU]
