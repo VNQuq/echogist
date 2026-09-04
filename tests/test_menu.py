@@ -1465,8 +1465,11 @@ def test_scan_flow_surfaces_duplicate_names(
 
     menu.run_menu(deps)
 
-    assert "used by more than one file" in stub.log_text
+    assert "shared by more than one file" in stub.log_text
     assert ("table", "Duplicate names") in stub.messages
+    # Rendered RELATIVE to the scan root. Three absolute paths per group wrap over several
+    # lines and bury the one part that tells the files apart: which folder each is in.
+    assert ("table-row", "lecture: A/lecture.mp4, B/lecture.mp4") in stub.messages
 
 
 def test_scan_flow_never_counts_echogists_own_output(
@@ -1538,6 +1541,36 @@ def test_a_missing_ffmpeg_fails_once_not_five_hundred_times(
 
     assert "missing or corrupt" in stub.log_text
     assert ("pick_dir", "Select a folder to scan") not in stub.messages
+
+
+def test_an_empty_folder_says_so_instead_of_drawing_an_empty_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An empty Folders table and a $0.00 total reads as "the scan broke". Say it plainly.
+    _offline_scan(monkeypatch)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(empty), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "No media files found" in stub.log_text
+    assert ("table", "Folders") not in stub.messages
+    assert ("table", "Totals") not in stub.messages
+
+
+def test_the_other_menu_rows_still_dispatch_after_the_renumber(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Inserting a row shifts Settings and Exit by one POSITIONAL key. The semantic keys
+    # must be untouched, or the operator's next Settings visit lands somewhere else.
+    _offline_scan(monkeypatch)
+    deps, stub, _calls = _make_deps(tmp_path, ["settings", "__back__", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert ("table", "Current settings") in stub.messages
+    assert "Goodbye." in stub.log_text
 
 
 def test_scan_is_offered_before_settings_in_the_main_menu() -> None:

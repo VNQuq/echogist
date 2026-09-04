@@ -799,23 +799,18 @@ def _report_scan(
         "scratch at the current tier, and it does not subtract work already done."
     )
 
-    duplicates = scan.collisions(result.files)
+    duplicates = scan.collision_rows(result)
     if duplicates:
         ui.warn(
-            f"{len(duplicates)} name(s) are used by more than one file. Their artifacts "
-            "would be named from the same stem."
+            f"{scan.plural(len(duplicates), 'name')} shared by more than one file. Their "
+            "artifacts would be named from the same stem, so summarizing both is what "
+            "corrupts a paid run."
         )
-        ui.table(
-            "Duplicate names",
-            [(stem, ", ".join(str(p) for p in paths)) for stem, paths in duplicates],
-        )
+        ui.table("Duplicate names", duplicates)
     if result.unreadable:
-        ui.table("Unreadable", [(str(path), reason) for path, reason in result.unreadable])
+        ui.table("Unreadable", scan.unreadable_rows(result))
     if result.placeholders:
-        ui.table(
-            "Cloud placeholders (not downloaded, not probed)",
-            [(str(path), "bytes are not on this machine") for path in result.placeholders],
-        )
+        ui.table("Cloud placeholders (not downloaded, not probed)", scan.placeholder_rows(result))
 
 
 def _flow_scan(deps: Deps) -> None:

@@ -133,8 +133,13 @@ class ScanResult:
     The three tuples are disjoint and together account for every candidate the walk
     found: nothing is dropped silently, which is the whole point of running a scan
     before spending money.
+
+    ``unreadable`` and ``placeholders`` carry ABSOLUTE paths, unlike ``MediaFile.rel``:
+    the operator may need to go find one of those files, and by then the scan root is not
+    on screen any more. The render helpers below relativize them for display.
     """
 
+    root: Path
     files: tuple[MediaFile, ...]
     unreadable: tuple[tuple[Path, str], ...]  # path, reason
     placeholders: tuple[Path, ...]
@@ -316,6 +321,7 @@ def scan_tree(
 
     def result() -> ScanResult:
         return ScanResult(
+            root=root,
             files=tuple(files),
             unreadable=tuple(unreadable),
             placeholders=tuple(placeholders),
@@ -441,7 +447,10 @@ def collisions(files: Sequence[MediaFile]) -> list[tuple[str, tuple[Path, ...]]]
     """
     groups: dict[str, list[Path]] = {}
     for f in files:
-        groups.setdefault(_stem_key(f.path), []).append(f.path)
+        # ``rel``, not ``path``: an absolute path per member wraps over three lines in the
+        # report and buries the one part that tells the two files apart — which folder
+        # each is in. The operator picked the root seconds ago.
+        groups.setdefault(_stem_key(f.path), []).append(f.rel)
     return sorted((stem, tuple(sorted(paths))) for stem, paths in groups.items() if len(paths) > 1)
 
 
@@ -531,6 +540,13 @@ def project_cost(
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
+def plural(count: int, singular: str, plural: str | None = None) -> str:
+    """``1 file`` / ``2 files``. The scan report is read by a person, and "1 transcript
+    candidates" reads like a bug in the tool rather than a count of one."""
+    word = singular if count == 1 else (plural or singular + "s")
+    return f"{count:,} {word}"
+
+
 def human_hours(seconds: float) -> str:
     """``18h 04m`` — the unit the operator thinks in for a lecture library."""
     total_minutes = int(seconds // 60)
@@ -565,10 +581,10 @@ def folder_rows(result: ScanResult, index: Counter[str]) -> list[Choice]:
         rows.append(
             (
                 name,
-                f"{len(items):>4} files  "
+                f"{plural(len(items), 'file'):>9}  "
                 f"{human_hours(sum(f.duration for f in items)):>9}  "
                 f"{human_size(sum(f.size for f in items)):>10}  "
-                f"{with_transcript} transcript candidates",
+                f"{plural(with_transcript, 'transcript candidate')}",
             )
         )
     return rows
@@ -596,3 +612,22 @@ def totals_rows(result: ScanResult, model_config: ModelConfig, tier: ModelTier) 
     if result.placeholders:
         rows.append(("Cloud placeholders (not probed)", f"{len(result.placeholders):,}"))
     return rows
+
+
+def collision_rows(result: ScanResult) -> list[Choice]:
+    """One row per duplicated name: the stem, then every file that claims it."""
+    return [(stem, ", ".join(str(p) for p in paths)) for stem, paths in collisions(result.files)]
+
+
+def unreadable_rows(result: ScanResult) -> list[Choice]:
+    """One row per file ffmpeg could not read, with why. Shown relative to the scan root
+    for the same reason as :func:`collision_rows`."""
+    return [(str(_relative(path, result.root)), reason) for path, reason in result.unreadable]
+
+
+def placeholder_rows(result: ScanResult) -> list[Choice]:
+    """One row per cloud placeholder. These were never probed, on purpose."""
+    return [
+        (str(_relative(path, result.root)), "bytes are not on this machine")
+        for path in result.placeholders
+    ]

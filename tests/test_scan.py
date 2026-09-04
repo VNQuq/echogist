@@ -518,6 +518,20 @@ def test_an_empty_folder_projects_nothing() -> None:
     assert estimate.total_usd == 0.0
 
 
+def test_an_unreadable_file_is_excluded_from_the_price(tmp_path: Path) -> None:
+    # It has no duration, so there is nothing to price it from. Counting it at zero is
+    # right; counting it at a guessed duration would quote money for a file that cannot
+    # even be transcribed.
+    _media(tmp_path, "broken.mp4")
+    result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
+    model_config = _model_config()
+
+    estimate = scan.project_cost(result.files, model_config, model_config.tier("economy"))
+
+    assert result.unreadable != ()
+    assert estimate.total_usd == 0.0
+
+
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
@@ -557,3 +571,35 @@ def test_totals_name_the_tier_the_price_belongs_to(tmp_path: Path) -> None:
 )
 def test_human_hours(seconds: float, expected: str) -> None:
     assert scan.human_hours(seconds) == expected
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [(0, "0 files"), (1, "1 file"), (2, "2 files"), (1500, "1,500 files")],
+)
+def test_counts_read_like_english(count: int, expected: str) -> None:
+    # "1 transcript candidates" reads like a bug in the tool rather than a count of one.
+    assert scan.plural(count, "file") == expected
+
+
+def test_a_folder_with_only_unreadable_files_still_renders_its_totals(tmp_path: Path) -> None:
+    _media(tmp_path, "broken.mp4")
+    result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
+    model_config = _model_config()
+
+    assert scan.folder_rows(result, Counter()) == []  # no folder has a countable file
+    totals = dict(scan.totals_rows(result, model_config, model_config.tier("economy")))
+    assert totals["Media files"] == "0"
+    assert totals["Unreadable files"] == "1"
+    assert scan.unreadable_rows(result) == [
+        ("broken.mp4", "ffmpeg reported no duration for this file")
+    ]
+
+
+def test_problem_lists_are_shown_relative_to_the_scan_root(tmp_path: Path) -> None:
+    # An absolute path per row wraps over several lines in the report and buries the part
+    # that identifies the file. The operator picked the root seconds ago.
+    _media(tmp_path / "Course" / "week 2", "broken.mp4")
+    result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
+
+    assert scan.unreadable_rows(result)[0][0] == "Course/week 2/broken.mp4"
