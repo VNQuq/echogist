@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-09-04 — **bulk v3 increments 0 and 1 shipped; the scanner is live and unrun on real data.**
+**Updated:** 2026-09-04 — **bulk v3 increments 0 and 1 shipped and review-hardened; scanner unrun on real data.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -54,6 +54,11 @@ the spec; only what the code cannot tell you lives here.
 - **Casefold is asymmetric ON PURPOSE.** `menu._resume_key` folds case (one file the operator picked twice, on
   Windows). `scan._resolve` does NOT (a dedup key across a tree — folding made `Lecture.mp4` and `lecture.mp4`
   one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
+- **A folder the walk cannot LIST is reported, not lost.** `os.walk`'s default `onerror` swallows the
+  `PermissionError` and yields nothing, so every file in an ACL/cloud-locked folder used to vanish from all three
+  buckets. `walk` takes `on_error`; the FOLDER goes to `unreadable` (its contents are unknowable by definition).
+- **Cached numbers are INPUT, not state.** `_valid_duration`/`_valid_kbps` reject non-finite, negative, bool and
+  >1000h values: a hand-edited negative duration produced a plausible, silently CHEAPER quote.
 - **Ctrl-C MERGES the scan cache, a completed run REPLACES it.** A cancel must never delete entries it had not
   reached; a complete run rewriting from live results IS the eviction policy. Consequence, accepted: the cache
   holds ONE scan root, so alternating folders re-probes.
@@ -66,7 +71,7 @@ the spec; only what the code cannot tell you lives here.
   records a unit discrepancy: the threshold is specified in MiB but its justifying figure was computed in
   decimal MB (207 vs 197 kbps at 2.5h).
 - **Both CRITICAL regressions are pinned:** cross-source summary prose (inc 0), cost estimate biased low (inc 1 —
-  the prompt overhead must land K times, not once). 554 tests green.
+  the prompt overhead must land K times, not once). 588 tests green.
 
 ## Next
 
