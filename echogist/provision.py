@@ -21,7 +21,13 @@ from .config import ConfigError, load_model_config
 
 # ``summaries/raw`` holds the F13 recovery .json out of the operator's eye-line;
 # the readable .pdf/.md stay directly under ``summaries``.
-OUTPUT_SUBDIRS: tuple[str, ...] = ("audio", "transcripts", "summaries", "summaries/raw")
+OUTPUT_SUBDIRS: tuple[str, ...] = (
+    "audio",
+    "transcripts",
+    "summaries",
+    "summaries/raw",
+    "logs",  # per-launch session transcripts (ui.RunLog)
+)
 
 Logger = Callable[[str], object]
 

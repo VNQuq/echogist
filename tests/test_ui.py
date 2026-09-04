@@ -9,6 +9,7 @@ double the whole menu suite rides on. Killswitch-safe: no model, no key, no netw
 from __future__ import annotations
 
 import io
+import re
 import sys
 import types
 from pathlib import Path
@@ -23,6 +24,7 @@ from echogist.ui import (
     UI,
     NotInteractiveError,
     RichQuestionaryUI,
+    RunLog,
     StubUI,
     build_default_ui,
     human_size,
@@ -586,3 +588,94 @@ def test_pick_dir_native_keyboardinterrupt_becomes_eof(monkeypatch: pytest.Monke
     monkeypatch.setattr(RichQuestionaryUI, "_native_open_dir", staticmethod(_boom))
     with pytest.raises(EOFError):
         ui_.pick_dir("Pick a folder")
+
+
+# --------------------------------------------------------------------------- #
+# RunLog (session transcript) — a run must survive its terminal
+# --------------------------------------------------------------------------- #
+def test_runlog_records_every_level_with_a_timestamp(tmp_path: Path) -> None:
+    log = RunLog(tmp_path / "logs" / "session.log")
+    log.write("plain line")
+    log.write("something odd", level="WARN")
+    log.write("broke", level="ERROR")
+
+    body = (tmp_path / "logs" / "session.log").read_text(encoding="utf-8")
+    assert "EchoGist session" in body  # the header that separates one launch from the next
+    assert "plain line" in body
+    assert "WARN" in body and "something odd" in body
+    assert "ERROR" in body and "broke" in body
+    # Every message line carries a clock, so a hang can be located afterwards.
+    for line in body.splitlines():
+        if "plain line" in line:
+            assert re.match(r"^\[\d\d:\d\d:\d\d\] ", line)
+
+
+def test_runlog_splits_a_multiline_message(tmp_path: Path) -> None:
+    """A cost table or an ffmpeg dump must not land as one unreadable line."""
+    path = tmp_path / "s.log"
+    RunLog(path).write("first\nsecond", level="INFO")
+
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if "INFO" in ln]
+    assert len(lines) == 2
+
+
+def test_runlog_that_cannot_be_written_disables_itself_silently(tmp_path: Path) -> None:
+    """A log is a courtesy. It must never take down the run it exists to record."""
+    blocker = tmp_path / "blocked"
+    blocker.write_text("I am a file, not a directory", encoding="utf-8")
+
+    log = RunLog(blocker / "nested" / "session.log")  # mkdir under a FILE -> OSError
+
+    assert log.path is None
+    log.write("this must not raise")  # the whole point
+
+
+def test_runlog_write_failure_mid_run_does_not_raise(tmp_path: Path) -> None:
+    path = tmp_path / "s.log"
+    log = RunLog(path)
+    path.unlink()
+    path.mkdir()  # the file's name is now a directory: every further write fails
+
+    log.write("still must not raise")
+
+    assert log.path is None, "one failure disables the sink instead of raising per line"
+
+
+def test_the_production_ui_mirrors_its_output_into_the_run_log(tmp_path: Path) -> None:
+    """The wiring, not the sink: RunLog on its own passing proves nothing if no console
+    method calls it. Every level the operator can see must land in the file."""
+    path = tmp_path / "session.log"
+    real = RichQuestionaryUI(stdin=_TTY(), stdout=_TTY(), log_path=path)
+
+    real.banner("EchoGist", "local transcription + summary")
+    real.info("Reusing 7 saved transcript(s).")
+    real.success("Summary received")
+    real.warn("Couldn't save the MP3")
+    real.error("Summarization failed")
+    real.table("Transcribed", [("Transcribed", "7"), ("Failed", "0")])
+    with real.spinner("Summarizing (34 cloud calls)"):
+        pass
+
+    body = path.read_text(encoding="utf-8")
+    for expected in (
+        # NOT the bare title: RunLog's own session header already says "EchoGist", so
+        # asserting that would pass with the banner unwired. The subtitle is banner-only.
+        "local transcription + summary",
+        "Reusing 7 saved transcript(s).",
+        "Summary received",
+        "Couldn't save the MP3",
+        "Summarization failed",
+        "Transcribed: 7",  # the table's rows, not just its title
+        "Summarizing (34 cloud calls)",
+    ):
+        assert expected in body, f"{expected!r} never reached the run log"
+
+
+def test_a_ui_built_without_a_log_path_writes_nothing(tmp_path: Path) -> None:
+    """Tests and any non-logging caller must not need a writable output tree."""
+    real = RichQuestionaryUI(stdin=_TTY(), stdout=_TTY())
+
+    real.info("no sink configured")  # must not raise
+
+    assert real.runlog.path is None
+    assert list(tmp_path.iterdir()) == []

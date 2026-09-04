@@ -64,6 +64,7 @@ import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 
 from . import (
@@ -438,6 +439,18 @@ def _run_summary(
             summarize.write_summary_json(partial, resume_path)
 
     with ui.spinner(f"Summarizing ({calls} cloud calls)") as sp:
+
+        def _progress(message: str) -> None:
+            """Print the stage's own line AND put it beside the spinner.
+
+            The printed lines are the history (which phase covered which span); the spinner
+            shows what is in flight RIGHT NOW next to a running clock. Without the second
+            half a phase call is minutes of a motionless label, which reads as a hung
+            process — the operator killed a working run over exactly that on 2026-09-04.
+            """
+            ui.info(message)
+            sp.update(message.rstrip("."))
+
         try:
             result = deps.summarize(
                 transcript_text,
@@ -447,7 +460,7 @@ def _run_summary(
                 language=settings.summary_language,
                 source_stem=source_stem,
                 api_key=api_key,
-                log=ui.info,
+                log=_progress,
                 on_phase=_persist,
                 resume_from=resume_from,
             )
@@ -1439,6 +1452,20 @@ def _safe_error(ui: UI, message: str) -> None:
         print(message)
 
 
+def _session_log_path(base: Path) -> Path:
+    """Where this launch records itself: ``output/logs/YYYY-MM-DD-HHMMSS.log``.
+
+    One file per launch rather than one rolling file, so a run can be handed over or
+    re-read on its own without slicing a shared log apart. Nothing prunes these: they are
+    small plain text next to artifacts measured in gigabytes, and silently deleting the
+    record of a paid run is a worse failure than a folder with too many files in it.
+
+    Lives under ``output/`` with the artifacts it describes, which is also why it is named
+    here and not in :mod:`echogist.ui` — see TD-27 on that tree's layout as a whole.
+    """
+    return base / "output" / "logs" / f"{datetime.now():%Y-%m-%d-%H%M%S}.log"
+
+
 def run_menu(deps: Deps | None = None) -> int:
     """Run the interactive menu until the operator chooses Exit. Returns 0.
 
@@ -1458,7 +1485,7 @@ def run_menu(deps: Deps | None = None) -> int:
     deps = deps or Deps()
     if deps.ui is None:
         try:
-            ui = build_default_ui()
+            ui = build_default_ui(_session_log_path(deps.base))
         except NotInteractiveError as exc:
             print(str(exc))
             return 0

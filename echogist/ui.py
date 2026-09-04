@@ -28,7 +28,9 @@ import os
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
+from datetime import datetime
 from pathlib import Path
+from time import monotonic
 from typing import IO, Protocol, runtime_checkable
 
 import questionary
@@ -96,9 +98,16 @@ class ProgressHandle(Protocol):
 @runtime_checkable
 class SpinnerHandle(Protocol):
     """A live spinner for a non-progress wait (provision, model load, the paid call).
-    ``done`` stops it and prints a ✓/✗ status line in its place."""
+    ``done`` stops it and prints a ✓/✗ status line in its place.
+
+    ``update`` replaces the label while it spins. A long wait with a static label is
+    indistinguishable from a hung process — which is how the operator lost a folder run on
+    2026-09-04, closing a console that was working. Every spinner also carries an elapsed
+    clock, so "nothing is happening" and "this call is slow" stop looking the same.
+    """
 
     def done(self, *, ok: bool = True, message: str | None = None) -> None: ...
+    def update(self, label: str) -> None: ...
 
 
 def human_size(total: int) -> str:
@@ -164,6 +173,56 @@ def _is_control_value(value: str) -> bool:
     return value.startswith("__") and value.endswith("__")
 
 
+class RunLog:
+    """Append-only plain-text mirror of everything the console said this launch.
+
+    The console is where EchoGist reports, and a console is a terrible record: it wraps,
+    it scrolls, and it dies with the window. A folder run is HOURS long and prints the
+    only copy of what it transcribed, what it dropped, what it quoted and what it actually
+    spent — losing that to a closed terminal (which is exactly how the operator lost the
+    2026-09-04 run) means the run is unauditable afterwards.
+
+    Deliberately dumb: one file per launch, one timestamped line per message, plain text,
+    no rotation and no levels beyond a tag. It is a transcript of the session, not
+    telemetry. Writes are best-effort — a log that cannot be written must never take down
+    the run it is logging, so any failure disables the sink and is otherwise ignored.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path: Path | None = path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n=== EchoGist session {datetime.now():%Y-%m-%d %H:%M:%S} ===\n")
+        except OSError:
+            self._path = None  # unwritable (locked dir, read-only media): log nothing, run on
+
+    @property
+    def path(self) -> Path | None:
+        """Where this session is being recorded, or None if the sink is disabled."""
+        return self._path
+
+    def write(self, message: str, *, level: str = "info") -> None:
+        if self._path is None:
+            return
+        stamp = f"{datetime.now():%H:%M:%S}"
+        try:
+            with self._path.open("a", encoding="utf-8") as fh:
+                for line in str(message).splitlines() or [""]:
+                    fh.write(f"[{stamp}] {level:<6} {line}\n")
+        except OSError:
+            self._path = None  # went away mid-run; stop trying rather than raise per line
+
+
+class _NullLog:
+    """The sink when no path was given (tests, or a UI built without a base directory)."""
+
+    path: Path | None = None
+
+    def write(self, message: str, *, level: str = "info") -> None:
+        return
+
+
 class RichQuestionaryUI:
     """The production UI: rich for output, questionary for arrow-key input.
 
@@ -173,7 +232,13 @@ class RichQuestionaryUI:
     the loop cleanly instead of crashing.
     """
 
-    def __init__(self, *, stdin: IO[str] | None = None, stdout: IO[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        stdin: IO[str] | None = None,
+        stdout: IO[str] | None = None,
+        log_path: Path | None = None,
+    ) -> None:
         stdin = stdin if stdin is not None else sys.stdin
         stdout = stdout if stdout is not None else sys.stdout
         if not (_is_tty(stdin) and _is_tty(stdout)):
@@ -187,6 +252,8 @@ class RichQuestionaryUI:
         # for the highest priority seen. 0 = nothing revealed yet. The guard lives here
         # so the menu stays declarative.
         self._revealed_priority = 0
+        # Everything printed below is mirrored here, so a run survives its terminal.
+        self.runlog: RunLog | _NullLog = RunLog(log_path) if log_path is not None else _NullLog()
 
     # -- input (cancel → EOFError, the loop's clean-exit) -------------------- #
     def _ask(self, question: questionary.Question) -> object:
@@ -199,6 +266,7 @@ class RichQuestionaryUI:
         return answer
 
     def banner(self, title: str, subtitle: str = "") -> None:
+        self.runlog.write(f"{title} — {subtitle}" if subtitle else title, level="BANNER")
         body = Text(title, style="banner")
         if subtitle:
             body.append("\n" + subtitle, style="dim")
@@ -489,15 +557,19 @@ class RichQuestionaryUI:
 
     # -- output -------------------------------------------------------------- #
     def info(self, message: str) -> None:
+        self.runlog.write(message)
         self.console.print(message, style="info", markup=False)
 
     def success(self, message: str) -> None:
+        self.runlog.write(message, level="OK")
         self.console.print(f"{self.glyphs.ok} {message}", style="success", markup=False)
 
     def warn(self, message: str) -> None:
+        self.runlog.write(message, level="WARN")
         self.console.print(message, style="warn", markup=False)
 
     def error(self, message: str) -> None:
+        self.runlog.write(message, level="ERROR")
         self.console.print(message, style="error", markup=False)
 
     def table(self, title: str, rows: Sequence[Choice]) -> None:
@@ -510,6 +582,9 @@ class RichQuestionaryUI:
         silently eating the one token that says which stage broke — and a stray ``[/]``
         raises ``MarkupError``, which would take out the whole post-batch report.
         """
+        self.runlog.write(title, level="TABLE")
+        for key, value in rows:
+            self.runlog.write(f"  {key}: {value}", level="TABLE")
         table = Table(title=title, box=self.glyphs.box, show_header=False, title_style="heading")
         table.add_column("field", style="dim")
         table.add_column("value")
@@ -544,9 +619,11 @@ class RichQuestionaryUI:
 
     @contextmanager
     def spinner(self, label: str) -> Iterator[SpinnerHandle]:
-        status = self.console.status(label, spinner="dots")
+        self.runlog.write(label, level="START")
+        live = _ElapsedLabel(label)
+        status = self.console.status(live, spinner="dots")
         status.start()
-        handle = _RichSpinnerHandle(self.console, status, label, self.glyphs)
+        handle = _RichSpinnerHandle(self.console, status, live, self.glyphs)
         try:
             yield handle
         finally:
@@ -576,16 +653,38 @@ class _RichProgressHandle:
         self._prog.stop_task(self._task_id)
 
 
+class _ElapsedLabel:
+    """A spinner label that re-renders itself, so the clock ticks between log lines.
+
+    rich re-renders a live status on every refresh, calling ``__rich__`` each time; the
+    elapsed figure is therefore computed at draw time rather than frozen at creation.
+    """
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self._started = monotonic()
+
+    def __rich__(self) -> str:
+        seconds = int(monotonic() - self._started)
+        return f"{self.label}  [{seconds // 60}:{seconds % 60:02d}]"
+
+
 class _RichSpinnerHandle:
     """rich-backed :class:`SpinnerHandle`. ``done`` stops the live spinner and prints a
     ✓/✗ status line in its place (replacing the bare 'GPU preflight OK', plan §1.3)."""
 
-    def __init__(self, console: Console, status: object, label: str, glyphs: Glyphs) -> None:
+    def __init__(
+        self, console: Console, status: object, label: _ElapsedLabel, glyphs: Glyphs
+    ) -> None:
         self._console = console
         self._status = status
         self._label = label
         self._glyphs = glyphs
         self._running = True
+
+    def update(self, label: str) -> None:
+        """Swap the text beside the spinner; the elapsed clock keeps running."""
+        self._label.label = label
 
     def _stop(self) -> None:
         if self._running:
@@ -596,15 +695,19 @@ class _RichSpinnerHandle:
         self._stop()
         glyph = self._glyphs.ok if ok else self._glyphs.fail
         self._console.print(
-            f"{glyph} {message or self._label}",
+            f"{glyph} {message or self._label.label}",
             style="success" if ok else "error",
             markup=False,
         )
 
 
-def build_default_ui() -> UI:
-    """The production UI, or raise :class:`NotInteractiveError` (plan §6.1)."""
-    return RichQuestionaryUI()
+def build_default_ui(log_path: Path | None = None) -> UI:
+    """The production UI, or raise :class:`NotInteractiveError` (plan §6.1).
+
+    ``log_path`` turns on the session transcript (:class:`RunLog`). The caller owns the
+    location because ``ui`` knows nothing about the output tree.
+    """
+    return RichQuestionaryUI(log_path=log_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -631,8 +734,17 @@ class _StubProgressHandle:
 
 
 class _StubSpinnerHandle:
+    """Records the labels it was given so a test can assert the operator was told which
+    step is in flight, not just that a spinner existed."""
+
+    def __init__(self, labels: list[str]) -> None:
+        self._labels = labels
+
     def done(self, *, ok: bool = True, message: str | None = None) -> None:
         pass
+
+    def update(self, label: str) -> None:
+        self._labels.append(label)
 
 
 class StubUI:
@@ -646,6 +758,7 @@ class StubUI:
         self.messages: list[tuple[str, str]] = []
         self.progress_values: list[float] = []
         self.progress_events: list[str] = []  # "done"/"fail" per bar exit (TD-17)
+        self.spinner_labels: list[str] = []  # every live label a flow pushed into a spinner
         self._revealed_priority = 0  # mirrors the once-per-launch reveal guard (TD-14)
 
     def _pop(self) -> object:
@@ -752,4 +865,4 @@ class StubUI:
     @contextmanager
     def spinner(self, label: str) -> Iterator[SpinnerHandle]:
         self.messages.append(("spinner", label))
-        yield _StubSpinnerHandle()
+        yield _StubSpinnerHandle(self.spinner_labels)

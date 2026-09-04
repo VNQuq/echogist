@@ -19,6 +19,7 @@ when the queue empties.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,10 @@ def _make_deps(
         calls["summarize"] += 1
         if summarize_error is not None:
             raise SummarizeError(summarize_error)
+        # The real stage narrates each phase through `log`; mirror that so a test can see
+        # what the operator would have been told while the call was in flight.
+        log("Synthesizing phase 1/2 (00:00:00-00:30:00)...")
+        log("Synthesizing phase 2/2 (00:30:00-01:00:00)...")
         return SummarizeResult(summary=_summary(), input_tokens=1234, output_tokens=567)
 
     def render(
@@ -1917,3 +1922,42 @@ def test_a_hand_picked_file_list_still_converts(tmp_path: Path) -> None:
 
     assert spy.seen["sources"] == [videos[0], videos[2]], "a subset must stay a subset"
     assert "Converted" in stub.log_text
+
+
+# --------------------------------------------------------------------------- #
+# Execution visibility — a long wait must not look like a hung process
+# --------------------------------------------------------------------------- #
+def test_the_spinner_names_the_phase_in_flight(tmp_path: Path) -> None:
+    """The 2026-09-04 failure mode: a motionless "Summarizing (7 cloud calls)" for minutes,
+    and the operator closes a console that is working. Each phase the stage announces has
+    to reach the spinner, not only the scrollback."""
+    _seed_transcript(tmp_path)
+    deps, stub, _ = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert stub.spinner_labels == [
+        "Synthesizing phase 1/2 (00:00:00-00:30:00)",
+        "Synthesizing phase 2/2 (00:30:00-01:00:00)",
+    ]
+
+
+def test_phase_progress_still_reaches_the_scrollback(tmp_path: Path) -> None:
+    """The spinner is transient; the printed lines are the history of what covered what.
+    Moving progress into the spinner must not take that away."""
+    _seed_transcript(tmp_path)
+    deps, stub, _ = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "Synthesizing phase 1/2" in stub.log_text
+    assert "Synthesizing phase 2/2" in stub.log_text
+
+
+def test_session_log_path_is_one_file_per_launch(tmp_path: Path) -> None:
+    first = menu._session_log_path(tmp_path)
+
+    assert first.parent == tmp_path / "output" / "logs"
+    assert first.suffix == ".log"
+    # Sortable, so the newest session is the last one in the folder listing.
+    assert re.match(r"^\d{4}-\d\d-\d\d-\d{6}$", first.stem)

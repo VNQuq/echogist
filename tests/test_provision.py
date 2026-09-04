@@ -17,8 +17,9 @@ def test_ensure_output_dirs(tmp_path: Path) -> None:
         "transcripts",
         "summaries",
         "summaries/raw",
+        "logs",
     }
-    for sub in ("audio", "transcripts", "summaries", "summaries/raw"):
+    for sub in ("audio", "transcripts", "summaries", "summaries/raw", "logs"):
         assert (output / sub).is_dir()
 
 
