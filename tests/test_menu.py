@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from echogist import batch, config, extract, menu, scan, summarize
+from echogist import config, extract, folder, menu, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
@@ -68,7 +68,7 @@ def _make_deps(
     summarize_error: str | None = None,
     extract_error: bool = False,
     extract_oserror: bool = False,
-    batch_convert: Any = None,
+    convert_many: Any = None,
 ) -> tuple[menu.Deps, StubUI, dict[str, int]]:
     calls: dict[str, int] = {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
@@ -130,7 +130,7 @@ def _make_deps(
     deps = menu.Deps(
         ui=stub,
         extract_audio=extract_audio,
-        batch_convert=batch_convert or batch.convert_many,
+        convert_many=convert_many or folder.convert_many,
         transcribe=transcribe,
         summarize=summarize,
         render=render,
@@ -745,19 +745,19 @@ def _videos(tmp_path: Path, *names: str) -> list[Path]:
     return made
 
 
-def _spy_batch(report: batch.BatchReport | None = None, *, raises: Exception | None = None) -> Any:
-    """A batch_convert stand-in that records its call and returns a canned report."""
+def _spy_batch(report: folder.Report | None = None, *, raises: Exception | None = None) -> Any:
+    """A convert_many stand-in that records its call and returns a canned report."""
     seen: dict[str, Any] = {}
 
-    def convert(sources: Any, out_dir: Path, **kwargs: Any) -> batch.BatchReport:
+    def convert(sources: Any, out_dir: Path, **kwargs: Any) -> folder.Report:
         seen["sources"] = list(sources)
         seen["out_dir"] = out_dir
         seen.update(kwargs)
         if raises is not None:
             raise raises
-        result = report or batch.BatchReport(
+        result = report or folder.Report(
             items=tuple(
-                batch.BatchItem(source, "converted", output=out_dir / f"{source.stem}.mp3")
+                folder.Item(source, "done", output=out_dir / f"{source.stem}.mp3")
                 for source in sources
             )
             + tuple(kwargs.get("extra", ()))
@@ -766,7 +766,7 @@ def _spy_batch(report: batch.BatchReport | None = None, *, raises: Exception | N
         for item in result.items:
             # Only pool-converted files tick the bar; caller-supplied ``extra`` skips
             # never entered the pool, so the real runner does not tick for them either.
-            if on_item is not None and item.status == "converted":
+            if on_item is not None and item.status == "done":
                 on_item(item)
         return result
 
@@ -778,7 +778,7 @@ def test_batch_converts_every_picked_video(tmp_path: Path) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv", "c.mov")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -800,13 +800,13 @@ def test_selection_bytes_ignores_an_unreadable_entry(tmp_path: Path) -> None:
 
 
 def test_batch_routes_extraction_through_the_injected_seam(tmp_path: Path) -> None:
-    # Without this the batch falls back to batch.convert_many's own module-level default
+    # Without this the batch falls back to folder.convert_many's own module-level default
     # and silently forks from menu #1: a test stubbing deps.extract_audio would spawn real
     # ffmpeg, and any future extraction option would apply to one flow only.
     _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, _, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -817,7 +817,7 @@ def test_batch_routes_extraction_through_the_injected_seam(tmp_path: Path) -> No
 def test_batch_remembers_the_picked_directory(tmp_path: Path, isolate_last_dir: list[Path]) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv")
     deps, _, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=_spy_batch()
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=_spy_batch()
     )
 
     assert menu.run_menu(deps) == 0
@@ -832,7 +832,7 @@ def test_batch_typed_directory_is_remembered_as_itself(
     # picker one level too high on the next run.
     _videos(tmp_path, "a.mp4")
     deps, _, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=_spy_batch()
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=_spy_batch()
     )
 
     assert menu.run_menu(deps) == 0
@@ -845,7 +845,7 @@ def test_batch_uses_the_configured_worker_count(tmp_path: Path) -> None:
     _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -859,7 +859,7 @@ def test_batch_worker_count_of_one_is_announced_as_sequential(tmp_path: Path) ->
     _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -870,7 +870,7 @@ def test_batch_worker_count_of_one_is_announced_as_sequential(tmp_path: Path) ->
 
 def test_batch_cancel_at_the_picker_returns_to_the_menu(tmp_path: Path) -> None:
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, ["folder", None, "exit"], batch_convert=spy)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", None, "exit"], convert_many=spy)
 
     assert menu.run_menu(deps) == 0
 
@@ -884,7 +884,7 @@ def test_batch_asks_once_before_re_encoding_mp3s_and_defaults_to_skipping(tmp_pa
     _videos(tmp_path, "a.mp4", "old.mp3", "b.mkv")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -899,7 +899,7 @@ def test_batch_re_encodes_mp3s_when_the_operator_says_yes(tmp_path: Path) -> Non
     _videos(tmp_path, "a.mp4", "old.mp3")
     spy = _spy_batch()
     deps, _, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", True, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", True, "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -914,7 +914,7 @@ def test_batch_never_asks_about_mp3s_when_the_selection_has_none(tmp_path: Path)
     _videos(tmp_path, "a.mp4", "b.mkv")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -926,7 +926,7 @@ def test_batch_all_mp3_and_declined_converts_nothing(tmp_path: Path) -> None:
     _videos(tmp_path, "one.mp3", "two.mp3")
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", False, "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -938,15 +938,15 @@ def test_batch_all_mp3_and_declined_converts_nothing(tmp_path: Path) -> None:
 def test_batch_reports_failures_in_a_table_and_still_reveals(tmp_path: Path) -> None:
     videos = _videos(tmp_path, "good.mp4", "bad.mp4")
     audio = tmp_path / "output" / "audio"
-    report = batch.BatchReport(
+    report = folder.Report(
         items=(
-            batch.BatchItem(videos[0], "converted", output=audio / "good.mp3"),
-            batch.BatchItem(videos[1], "failed", detail="ffmpeg exit 1: moov atom not found"),
+            folder.Item(videos[0], "done", output=audio / "good.mp3"),
+            folder.Item(videos[1], "failed", detail="ffmpeg exit 1: moov atom not found"),
         )
     )
     spy = _spy_batch(report)
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -964,16 +964,16 @@ def test_batch_ctrl_c_shows_the_partial_report_and_stays_in_the_app(tmp_path: Pa
     # partial report is shown, and run_menu keeps looping (it exits on the queued "exit").
     videos = _videos(tmp_path, "a.mp4", "b.mp4", "c.mp4")
     audio = tmp_path / "output" / "audio"
-    partial = batch.BatchReport(
+    partial = folder.Report(
         items=(
-            batch.BatchItem(videos[0], "converted", output=audio / "a.mp3"),
-            batch.BatchItem(videos[1], "cancelled"),
-            batch.BatchItem(videos[2], "cancelled"),
+            folder.Item(videos[0], "done", output=audio / "a.mp3"),
+            folder.Item(videos[1], "cancelled"),
+            folder.Item(videos[2], "cancelled"),
         )
     )
-    spy = _spy_batch(raises=batch.BatchCancelled(partial))
+    spy = _spy_batch(raises=folder.Cancelled(partial))
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0  # did NOT exit through the interrupt
@@ -992,18 +992,18 @@ def test_batch_cancelled_files_do_not_advance_the_bar(tmp_path: Path) -> None:
     # freezes, which is the false completion TD-17 forbids.
     videos = _videos(tmp_path, "a.mp4", "b.mp4", "c.mp4", "d.mp4")
     audio = tmp_path / "output" / "audio"
-    partial = batch.BatchReport(
-        items=(batch.BatchItem(videos[0], "converted", output=audio / "a.mp3"),)
-        + tuple(batch.BatchItem(v, "cancelled") for v in videos[1:])
+    partial = folder.Report(
+        items=(folder.Item(videos[0], "done", output=audio / "a.mp3"),)
+        + tuple(folder.Item(v, "cancelled") for v in videos[1:])
     )
 
-    def convert(sources: Any, out_dir: Path, **kwargs: Any) -> batch.BatchReport:
+    def convert(sources: Any, out_dir: Path, **kwargs: Any) -> folder.Report:
         for item in partial.items:  # the real runner ticks for cancelled items too
             kwargs["on_item"](item)
-        raise batch.BatchCancelled(partial)
+        raise folder.Cancelled(partial)
 
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=convert
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=convert
     )
 
     assert menu.run_menu(deps) == 0
@@ -1017,7 +1017,7 @@ def test_batch_bad_typed_path_returns_to_menu(tmp_path: Path) -> None:
     # convert an empty selection.
     spy = _spy_batch()
     deps, stub, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "nope.mp4"), "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "nope.mp4"), "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -1035,7 +1035,7 @@ def test_batch_expands_a_typed_directory(tmp_path: Path) -> None:
     (tmp_path / "inbox" / "notes.txt").write_text("not media", encoding="utf-8")
     spy = _spy_batch()
     deps, _, _ = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -1047,7 +1047,7 @@ def test_batch_empty_directory_returns_to_menu(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, ["folder", str(empty), "mp3", "exit"], batch_convert=spy)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(empty), "mp3", "exit"], convert_many=spy)
 
     assert menu.run_menu(deps) == 0
 
@@ -1061,7 +1061,7 @@ def test_batch_never_transcribes_or_summarizes(tmp_path: Path) -> None:
     _videos(tmp_path, "a.mp4")
     spy = _spy_batch()
     deps, _, calls = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -1978,7 +1978,7 @@ def test_folder_mp3_run_converts_the_whole_folder(tmp_path: Path) -> None:
     videos = _videos(tmp_path, "a.mp4", "b.mkv")
     spy = _spy_batch()
     deps, stub, calls = _make_deps(
-        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], batch_convert=spy
+        tmp_path, ["folder", str(tmp_path / "inbox"), "mp3", "exit"], convert_many=spy
     )
 
     assert menu.run_menu(deps) == 0
@@ -1991,15 +1991,15 @@ def test_folder_mp3_run_converts_the_whole_folder(tmp_path: Path) -> None:
 def test_a_hand_picked_file_list_still_converts(tmp_path: Path) -> None:
     """The multi-select path outlived the menu row that used to reach it.
 
-    `_flow_batch_mp3` still takes a hand-picked list, and the folder module simply passes a
+    `_flow_mp3` still takes a hand-picked list, and the folder module simply passes a
     one-element list holding the folder. Kept covered so the capability does not rot while
     it is unreachable from the menu — restoring it is a menu row, not a rewrite.
     """
     videos = _videos(tmp_path, "a.mp4", "b.mkv", "c.mov")
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, [], batch_convert=spy)
+    deps, stub, _ = _make_deps(tmp_path, [], convert_many=spy)
 
-    menu._flow_batch_mp3(deps, [videos[0], videos[2]])
+    menu._flow_mp3(deps, [videos[0], videos[2]])
 
     assert spy.seen["sources"] == [videos[0], videos[2]], "a subset must stay a subset"
     assert "Converted" in stub.log_text

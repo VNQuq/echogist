@@ -10,7 +10,7 @@ ones ffmpeg cannot read.
 killswitch is not merely respected here, there is no paid stage to gate.
 
 This is also the project's ONE tree walker: :func:`walk` is what
-:func:`echogist.batch.expand_selection` delegates to at ``recursive=False``, so the
+:func:`echogist.folder.expand_selection` delegates to at ``recursive=False``, so the
 suffix filter, the resolved-path dedup and the junction guard exist once.
 """
 
@@ -33,8 +33,8 @@ from .cost import CostEstimate
 from .extract import ExtractError, Runner, _default_probe_runner, probe_media
 from .ui import Choice, human_size
 
-# Extensions a directory expansion will feed to ffmpeg. Moved here from ``batch`` because
-# this module owns the walker; ``batch`` has no copy and no re-export, so there is exactly
+# Extensions a directory expansion will feed to ffmpeg. Moved here from the folder runner
+# because this module owns the walker; ``folder`` has no copy and no re-export, so there is exactly
 # one list. Deliberately a
 # closed list rather than "everything that is not an mp3": a folder of lectures also holds
 # .txt/.srt/.jpg, and handing those to ffmpeg would fill the failure table with noise the
@@ -93,7 +93,7 @@ _TRANSCRIPT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<stem>.+?)(?:-\d+)?$")
 class ScanCancelled(Exception):
     """Ctrl-C during a scan. Carries the partial result so the probing is not lost.
 
-    Same contract as :class:`echogist.batch.BatchCancelled`: not a stage failure, so it
+    Same contract as :class:`echogist.folder.Cancelled`: not a stage failure, so it
     is deliberately outside the menu's ``_RECOVERABLE`` tuple and the flow that started
     the scan is the one that catches it. Unlike a batch there is nothing to terminate —
     ``ffmpeg -i`` exits in milliseconds — so the cancel only needs to flush the cache.
@@ -167,7 +167,7 @@ def walk(
     """Media files under ``root``, sorted, deduped by resolved path.
 
     The project's only tree walker. ``recursive=False`` reproduces the one-level
-    expansion :func:`echogist.batch.expand_selection` has always done, so the batch flow
+    expansion :func:`echogist.folder.expand_selection` has always done, so the batch flow
     is unchanged and its existing tests are this function's regression harness.
 
     ``on_error`` is handed straight to :func:`os.walk` and is called once per directory
@@ -187,7 +187,7 @@ def walk(
       real ``output`` tree walks straight through it, and cloud-sync clients create such
       junctions routinely. Callers that know where the artifacts live pass ``exclude``
       and get the authoritative check; the name rule stays as the floor for callers that
-      do not (``batch.expand_selection``);
+      do not (``folder.expand_selection``);
     * any directory whose RESOLVED path has already been visited. ``os.walk`` does not
       follow symlinks by default, but that says nothing about NTFS directory junctions,
       which cloud-sync clients create routinely in a media library and which would

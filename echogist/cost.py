@@ -111,7 +111,7 @@ def estimate_cost_synthesis(
     and the themes whatever the file's size, so it is the one call with a real FIXED cost.
     Without that floor a purely proportional model has no per-call cost at all, and a
     folder of fifty short clips quotes the same as one long file — the exact under-quote
-    :func:`echogist.bulk.folder_estimate` exists to prevent. Above the floor the ratio
+    :func:`echogist.folder.folder_estimate` exists to prevent. Above the floor the ratio
     dominates and this term stops mattering.
 
     The reconcile projection is the loosest part of the model — it prices a header as if it

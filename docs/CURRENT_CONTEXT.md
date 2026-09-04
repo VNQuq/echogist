@@ -1,7 +1,8 @@
 # Current Context
 
 **Updated:** 2026-09-04 — **the first full folder run finished: 7 lectures, 59 calls, $2.4003. Cost model
-rebuilt on its numbers (TD-23, TD-24 closed) and step 4 (оформление) shipped.**
+rebuilt on its numbers (TD-23, TD-24 closed), step 4 (оформление) shipped, and `batch`+`bulk` merged into
+one `folder.py`.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -17,12 +18,12 @@ lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
 ## Live invariants from v2.3.0 / v2.2.0 (full entries in [CHANGELOG.md](../CHANGELOG.md))
 
 - **Name-claiming.** `dated_artifact_path` SELECTS a name without creating it, so colliding stems race.
-  `batch._plan_output_paths` claims every mp3 name up front, single-threaded, **in memory** — an on-disk claim
+  `folder._plan_output_paths` claims every mp3 name up front, single-threaded, **in memory** — an on-disk claim
   survived `kill -9` as a fake artifact that poisoned dedup forever, and `.part` cannot be the marker because
   dedup deliberately cannot see it. **One publish scheme (`.part`→`os.replace`); do not add a second.**
   *The resume file now keys on the resolved source path; transcripts and summary json do NOT yet claim.*
-- **Ctrl-C stops the batch, not the app** — the one local exception to the global Ctrl-C contract, carried on
-  `BatchCancelled` with the partial report. Cancel is bounded: SIGTERM, then `kill()` after 5s.
+- **Ctrl-C stops the run, not the app** — the one local exception to the global Ctrl-C contract, carried on
+  `folder.Cancelled` with the partial report. Cancel is bounded: SIGTERM, then `kill()` after 5s.
 - **Menu keys are SEMANTIC** (`local`/`batch`/…) but number keys are POSITIONAL (`ui._bind_number_keys`), so
   inserting a row renumbers every row after it for the operator's fingers.
 - **Essence block:** reconcile writes it from phase prose only, never a second transcript read; runs ALWAYS
@@ -58,16 +59,20 @@ the spec; only what the code cannot tell you lives here.
   `lecture.mp4` one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
 - **The real folder (Windows, 2026-09-04):** 7 files, one per folder, 23h43m, 8.0 GB, **0 duplicate names,
   0 unreadable**. It killed the case for increment 2's naming machinery.
-- **Increment 2 ✓ the folder run** (`bulk.py`, menu row 5 `Summarize a folder`; POSITIONAL keys — Settings/Exit
-  are now 6/7). **Two phases:** TRANSCRIBE the whole folder (local, free), then ONE exact quote over the real
+- **Increment 2 ✓ the folder run** (now `folder.py`, Folder module actions `Summary` / `Transcript`). **Two phases:** TRANSCRIBE the whole folder (local, free), then ONE exact quote over the real
   transcripts and ONE confirm, then the paid calls. No per-file gate; that is the babysitting it removes.
   The duration→token constants are off this path: it prices the REAL transcripts.
-- **The collision machinery was NOT built.** `bulk.plan_run` instead refuses the one operation that is wrong
+- **The collision machinery was NOT built.** `folder.plan_run` instead refuses the one operation that is wrong
   under a collision: reusing a saved transcript whose stem is ambiguous in either direction. Re-transcribing is
   free and visible; summarizing one lecture from another's transcript is paid and silent. The SUMMARY skip has
   no such limit — TD-22 joins it on the resolved source path, not a name.
-- **The folder run does not extract MP3s** (TD-12's kept-MP3 baseline is a SINGLE-file rule) and its plan is
-  SORTED, not in `os.walk` order, so a 7-lecture course plays back 1..7 and reproduces between runs.
+- **The folder run DOES extract MP3s** (2026-09-04: sharing `_ACTION_CHOICES` made the label a contract, and
+  the folder rows promised an artifact `extract` was never called for) and its plan is SORTED, not in
+  `os.walk` order, so a 7-lecture course plays back 1..7 and reproduces between runs.
+- **One module, two engines** (`folder.py`, merged 2026-09-04 — `batch`/`bulk` were synonyms and neither name
+  said which one spent money). `convert_many` is the PARALLEL ffmpeg pool with its own `Cancellation`;
+  `run_phase` is the strictly sequential one (one GPU job, one cost gate). They share `Item`/`Report`/
+  `Cancelled`. **Do not push the sequential run through the pool** — the gate must see a whole folder.
 - **Increment 1b (mp3 re-encode, `dec-c3adfe5b`)** — DRAFT only at
   [docs/designs/mp3-reencode-1b.md](./designs/mp3-reencode-1b.md), unreviewed and unimplemented. Two open
   questions plus a MiB/MB unit discrepancy (207 vs 197 kbps at 2.5h). With the real durations known, the

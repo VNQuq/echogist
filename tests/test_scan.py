@@ -117,7 +117,7 @@ def test_walk_keeps_two_files_that_differ_only_in_case(tmp_path: Path) -> None:
 
 
 def test_walk_without_recursion_is_one_level(tmp_path: Path) -> None:
-    # The contract batch.expand_selection rides on; its five existing tests are the rest
+    # The contract folder.expand_selection rides on; its five existing tests are the rest
     # of this regression harness.
     _media(tmp_path, "a.mp4")
     _media(tmp_path / "sub", "deep.mp4")

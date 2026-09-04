@@ -296,11 +296,11 @@ def extract_audio(
     failed run never leaves a half-written mp3 in ``output/audio/`` for the user to
     mistake for the real artifact (the F12-analog for audio).
 
-    ``out_path`` overrides the computed destination. Only :mod:`echogist.batch` passes
+    ``out_path`` overrides the computed destination. Only :mod:`echogist.folder` passes
     it: :func:`naming.dated_artifact_path` *selects* a free name but does not create it,
     so two concurrent conversions whose stems collide (``лекция.mp4`` + ``лекция.mkv``)
     would both resolve to the same file and one would silently overwrite the other. The
-    batch runner resolves and claims every name up front, single-threaded, then hands each
+    folder runner resolves and claims every name up front, single-threaded, then hands each
     worker its own reserved path. Callers that omit it keep the original behaviour exactly.
     """
     if not source.is_file():

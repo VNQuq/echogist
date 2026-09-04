@@ -32,7 +32,7 @@ drift into offering something the other cannot produce:
 The five functional rows this replaced (Local file · Batch: videos → MP3 · Saved
 transcript · Scan a folder · Summarize a folder) are all still reachable one level
 down. The one capability that lost its menu row is hand-picking a SUBSET of files to
-convert: :func:`_flow_batch_mp3` still takes a file list and is still covered, the
+convert: :func:`_flow_mp3` still takes a file list and is still covered, the
 folder module simply hands it the folder instead.
 
 **The UI seam (v1.1 §3).** Every prompt and every line of output goes through a
@@ -69,12 +69,11 @@ from pathlib import Path
 from time import monotonic
 
 from . import (
-    batch,
-    bulk,
     chunk,
     config,
     cost,
     extract,
+    folder,
     guard,
     provision,
     render,
@@ -82,10 +81,10 @@ from . import (
     summarize,
     transcribe,
 )
-from .batch import BatchCancelled, BatchReport
-from .bulk import BulkCancelled, BulkReport
 from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
+from .folder import Cancelled as FolderCancelled
+from .folder import Report as FolderReport
 from .model_asset import ProvisionError
 from .render import RenderError
 from .scan import ScanCancelled, ScanResult
@@ -108,7 +107,7 @@ Logger = Callable[[str], object]
 # functions take keyword-only args a bare Callable cannot spell out, and the
 # defaults below pin the production implementations.
 ExtractFn = Callable[..., Path]
-BatchConvertFn = Callable[..., BatchReport]
+ConvertManyFn = Callable[..., FolderReport]
 TranscribeFn = Callable[..., Transcript]
 SummarizeFn = Callable[..., SummarizeResult]
 RenderFn = Callable[..., Path]
@@ -153,7 +152,7 @@ class Deps:
     ui: UI | None = None
     # External / heavy stages — stubbed in tests.
     extract_audio: ExtractFn = extract.extract_audio
-    batch_convert: BatchConvertFn = batch.convert_many
+    convert_many: ConvertManyFn = folder.convert_many
     transcribe: TranscribeFn = transcribe.transcribe
     summarize: SummarizeFn = summarize.summarize_auto
     render: RenderFn = render.render
@@ -706,13 +705,13 @@ def _selection_bytes(sources: Sequence[Path]) -> int:
     return total
 
 
-def _report_batch(ui: UI, report: BatchReport, *, cancelled: bool) -> None:
+def _report_mp3(ui: UI, report: FolderReport, *, cancelled: bool) -> None:
     """Render the outcome: one headline, then a table of ONLY what did not convert.
 
     Tabling all thirty rows would bury the four that need the operator's attention, and
     the converted files are already sitting in the folder that is about to pop open.
     """
-    headline = f"Converted {report.converted} of {len(report.items)} file(s)"
+    headline = f"Converted {report.done} of {len(report.items)} file(s)"
     parts = [
         f"{count} {label}"
         for count, label in (
@@ -738,8 +737,8 @@ def _report_batch(ui: UI, report: BatchReport, *, cancelled: bool) -> None:
         )
 
 
-def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
-    """Menu 'batch' — multi-select videos, convert them all to MP3 (offline, no cost).
+def _flow_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
+    """Folder action 'MP3 only' — convert every file to MP3 (offline, no cost).
 
     MP3 is the whole deliverable here: no transcription, no summary, nothing paid. The
     operator multi-selects in the native dialog (Shift/Ctrl/Ctrl+A), the pool converts
@@ -752,12 +751,12 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
       lossy-to-lossy, and a Shift-range that swept up a neighbouring mp3 must never
       quietly degrade it — the same reasoning that made "Re-encode to a smaller MP3" a
       deliberate menu item rather than an automatism in the single-file flow.
-    * **One bad file does not kill the batch.** Failures are collected and tabled at the
+    * **One bad file does not kill the run.** Failures are collected and tabled at the
       end; the other conversions still land.
-    * **Ctrl-C stops the batch, not the app.** A deliberate local exception to the global
-      Ctrl-C-exits contract: abandoning a twenty-minute batch should not also throw away
+    * **Ctrl-C stops the run, not the app.** A deliberate local exception to the global
+      Ctrl-C-exits contract: abandoning a twenty-minute run should not also throw away
       the report of what it already produced. Every other prompt in this flow keeps the
-      normal contract, since ``BatchCancelled`` is raised only by the pool itself.
+      normal contract, since ``FolderCancelled`` is raised only by the pool itself.
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start this flow on a clean screen
@@ -781,7 +780,7 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
         if missing:
             ui.error(_F1_NOT_FOUND.format(path=missing[0]))
         return
-    sources = batch.expand_selection(picked)
+    sources = folder.expand_selection(picked)
     if not sources:
         ui.warn("Nothing convertible in that selection; returning to the menu.")
         return
@@ -791,7 +790,7 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
     # The one conditional question (operator decision): it appears only when the choice
     # is real, so a pure-video selection goes straight to converting.
     already_mp3 = [path for path in sources if extract.is_mp3(path)]
-    skipped: tuple[batch.BatchItem, ...] = ()
+    skipped: tuple[folder.Item, ...] = ()
     # Short-circuit: the confirm is only reached when the selection actually holds mp3s,
     # so a pure-video batch never sees the question.
     if already_mp3 and not ui.confirm(
@@ -799,7 +798,7 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
         default=False,
     ):
         skipped = tuple(
-            batch.BatchItem(path, "skipped", detail="already an MP3") for path in already_mp3
+            folder.Item(path, "skipped", detail="already an MP3") for path in already_mp3
         )
         sources = [path for path in sources if not extract.is_mp3(path)]
     if not sources:
@@ -822,7 +821,7 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
             # live bars would need a new multi-task UI seam for no real gain.
             done = 0
 
-            def _tick(item: batch.BatchItem) -> None:
+            def _tick(item: folder.Item) -> None:
                 nonlocal done
                 # A cancelled file never ran, so it is not progress. Counting it would
                 # walk the bar to a full 100% during the post-Ctrl-C drain — the exact
@@ -832,7 +831,7 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
                 done += 1
                 bar.advance_to(float(done))
 
-            report = deps.batch_convert(
+            report = deps.convert_many(
                 sources,
                 audio_dir,
                 workers=workers,
@@ -845,14 +844,14 @@ def _flow_batch_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
                 extra=skipped,
             )
             bar.done()
-    except BatchCancelled as exc:
+    except FolderCancelled as exc:
         # The bar was FAILED, not completed, by the progress context manager (TD-17): a
         # cancelled batch must not flash a false 100% before its own partial report.
         report = exc.report
         cancelled = True
 
-    _report_batch(ui, report, cancelled=cancelled)
-    if report.converted:
+    _report_mp3(ui, report, cancelled=cancelled)
+    if report.done:
         ui.reveal_dir(audio_dir, priority=REVEAL_AUDIO)  # TD-14
 
 
@@ -1025,25 +1024,25 @@ _BULK_TRANSCRIBE_HINT = (
 class _StageFailed(Exception):
     """One file's stage failed inside a folder run; the message is already on screen.
 
-    Exists so :func:`echogist.bulk.run_phase` can record the file and carry on with the
+    Exists so :func:`echogist.folder.run_phase` can record the file and carry on with the
     rest of the folder. The stage itself already reported the reason inline, right under
     the file name the progress line announced.
     """
 
 
-def _bulk_transcript_texts(
+def _run_transcript_texts(
     deps: Deps,
     ui: UI,
-    plan: bulk.Plan,
+    plan: folder.Plan,
     model_config: config.ModelConfig,
     *,
     keep_mp3: bool = False,
-) -> tuple[dict[Path, str], BulkReport]:
+) -> tuple[dict[Path, str], FolderReport]:
     """Phase 1 — every source that needs one gets a saved transcript. Local, free.
 
     Returns the transcript text per source (reused sources included, read back from the
     saved file) and the report for the transcribe phase. Raises
-    :class:`echogist.bulk.BulkCancelled` on Ctrl-C, with the partial report.
+    :class:`echogist.folder.FolderCancelled` on Ctrl-C, with the partial report.
     """
     texts: dict[Path, str] = {}
     for source, saved in plan.ready:
@@ -1075,7 +1074,7 @@ def _bulk_transcript_texts(
     def _announce(index: int, total: int, source: Path) -> None:
         ui.rule(f"[{index}/{total}] {source.name}")
 
-    report = bulk.run_phase(
+    report = folder.run_phase(
         plan.to_transcribe,
         _step,
         on_start=_announce,
@@ -1084,10 +1083,10 @@ def _bulk_transcript_texts(
     return texts, report
 
 
-def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = True) -> None:
-    """Menu 'bulk' — summarize every file in a folder, one gate for the whole run.
+def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = True) -> None:
+    """Folder actions 'Summary' / 'Transcript' — the whole folder, one gate for the run.
 
-    Two phases on purpose (see :mod:`echogist.bulk`): TRANSCRIBE the folder first so the
+    Two phases on purpose (see :mod:`echogist.folder`): TRANSCRIBE the folder first so the
     cost gate is reached with the real transcript of every file, then one exact quote and
     one answer, then the paid calls. No per-file confirm, which is the babysitting this
     flow exists to remove.
@@ -1131,7 +1130,7 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
     # transcript deleted since. Feeding an empty index leaves plan_run's OTHER skip — a
     # saved transcript already on disk — as the only one, which is exactly the right one
     # here. On a summary run both skips apply, as before (TD-22).
-    plan = bulk.plan_run(
+    plan = folder.plan_run(
         [f.path for f in result.files],
         summarized=summarize.summary_index(summaries_dir / "raw") if summarize_after else set(),
         transcripts=scan.transcript_files(transcripts_dir),
@@ -1158,22 +1157,22 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
 
     # Phase 1 — local, free, the long one.
     try:
-        with_text, transcribed = _bulk_transcript_texts(
+        with_text, transcribed = _run_transcript_texts(
             deps, ui, plan, model_config, keep_mp3=keep_mp3
         )
-    except BulkCancelled as exc:
-        _report_bulk(ui, exc.report, stage="Transcribed", cancelled=True)
+    except FolderCancelled as exc:
+        _report_run(ui, exc.report, stage="Transcribed", cancelled=True)
         return
     # On a summary run this table is shown ONLY when something failed — the successes speak
     # for themselves in the quote that follows. A transcript-only run always reports below,
     # because there the transcripts ARE the deliverable and there is no quote to follow.
     if transcribed.failed and summarize_after:
-        _report_bulk(ui, transcribed, stage="Transcribed", cancelled=False)
+        _report_run(ui, transcribed, stage="Transcribed", cancelled=False)
 
     if not summarize_after:
         # Transcript-only: phase 1 IS the deliverable. Stop before the gate — nothing on
         # this path can reach the wire, which is the whole point of offering it.
-        _report_bulk(ui, transcribed, stage="Transcribed", cancelled=False)
+        _report_run(ui, transcribed, stage="Transcribed", cancelled=False)
         ui.reveal_dir(transcripts_dir, priority=REVEAL_TRANSCRIPT)
         return
 
@@ -1197,7 +1196,7 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
         ]
         for src in ordered
     ]
-    estimate = bulk.folder_estimate(
+    estimate = folder.folder_estimate(
         per_file,
         tier,
         output_cap=model_config.summarize.max_output_tokens,
@@ -1244,11 +1243,11 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
         ui.rule(f"[{index}/{total}] {source.name}")
 
     try:
-        summarized = bulk.run_phase(
+        summarized = folder.run_phase(
             ordered, _summarize_step, on_start=_announce, recoverable=(_StageFailed,)
         )
-    except BulkCancelled as exc:
-        _report_bulk(
+    except FolderCancelled as exc:
+        _report_run(
             ui,
             exc.report,
             stage="Summarized",
@@ -1258,7 +1257,7 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
             elapsed=monotonic() - started,
         )
         return
-    _report_bulk(
+    _report_run(
         ui,
         summarized,
         stage="Summarized",
@@ -1277,9 +1276,9 @@ def _usd(amount: float) -> str:
     return f"${amount:,.4f}"
 
 
-def _report_bulk(
+def _report_run(
     ui: UI,
-    report: BulkReport,
+    report: FolderReport,
     *,
     stage: str,
     cancelled: bool,
@@ -1411,7 +1410,7 @@ def _flow_folder(deps: Deps) -> None:
     The actions map onto work that already existed: ``scan`` is the read-only walk,
     ``summary`` is the two-phase folder run, ``transcript`` is that same run stopped after
     its free local phase, and ``mp3`` is the conversion pool pointed at a folder instead of
-    a hand-picked list (``batch.expand_selection`` has always accepted directories).
+    a hand-picked list (``folder.expand_selection`` has always accepted directories).
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start the module on a clean screen
@@ -1429,11 +1428,11 @@ def _flow_folder(deps: Deps) -> None:
     if action == "scan":
         _flow_scan(deps, root)
     elif action == "mp3":
-        _flow_batch_mp3(deps, [root])
+        _flow_mp3(deps, [root])
     elif action == "transcript":
-        _flow_bulk(deps, root, summarize_after=False)
+        _flow_run(deps, root, summarize_after=False)
     elif action == "summary":
-        _flow_bulk(deps, root)
+        _flow_run(deps, root)
 
 
 def _flow_settings(deps: Deps) -> None:
