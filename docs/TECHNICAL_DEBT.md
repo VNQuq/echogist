@@ -11,42 +11,26 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-29 — a dropped anchor prints in the same voice as a clean one** · MEDIUM ·
-  created 2026-09-04 (step 4, and step 4 made it slightly worse). `summarize` reports
-  anchor validation through one line — `Validated anchors: 25 exact, 32 snapped, 4
-  dropped.` — and a DROPPED anchor is the one fidelity signal on that line: it means the
-  model emitted a timecode that resolves to nothing in the transcript. `0 dropped` and
-  `4 dropped` render identically. Step 4 muted the whole synthesis channel (right for the
-  other 58 lines, wrong for this one), so the signal is now dimmer than it was.
-  **Why it was not fixed here:** the fix is to widen the stage's `log:
-  Callable[[str], None]` seam to carry a severity, which touches `summarize`'s public
-  contract, every caller and their tests — and this is fidelity signalling, which
-  CLAUDE.md routes through its own review. String-sniffing the message in `menu._progress`
-  was the cheap alternative and was rejected: the console would then depend on the wording
-  of a sentence nobody would think to keep stable. **Trigger for closure:** the next change
-  that touches the summarize log seam for any reason, or the first run where a dropped
-  anchor is missed. The operator's own run had 2 and 4 drops in two phases of two files.
-
-- **TD-28 — the summary text contains characters the PDF cannot draw** · MEDIUM ·
-  created 2026-09-04 (found in the first full folder run's own log). Three of the seven
-  summaries made `fpdf` report a missing glyph: `'描'`, `'技'`, `'催化剂'`. Two separate
-  problems sit behind that one warning, and only one of them is about fonts.
-  1. **Why is Chinese in a Russian summary at all?** The material is a RU lecture and the
-     tier is `economy` (Haiku). Nothing in the transcript, the prompt or the schema asks
-     for CJK. The most likely reading is the model reaching for a Chinese term as a gloss
-     ("катализатор" -> 催化剂) — which, if so, is text the author never said, appearing
-     WITHOUT the `[интерпретация]:` marker the fidelity contract requires for anything
-     beyond what the author said. That is a fidelity question, not a typography one, and
-     it is the half that matters. Unverified: the summaries are on the operator's Windows
-     box and `output/` is machine-local, so the actual sentences have not been read yet.
-  2. **The renderer degrades silently.** `render` prints the missing-glyph line to the
-     console and then emits the PDF anyway, so the operator gets a document with holes in
-     it and a warning that scrolls past between two `✓ Done` lines. Whatever is decided
-     about (1), a character that cannot be drawn must not reach the PDF unannounced.
-  **Trigger for closure:** the operator reading the three flagged passages in the finished
-  summaries — that settles whether this is a fidelity violation to fix in the prompt or a
-  cosmetic gap to fix in the font. **Blocks nothing:** anchors, costs and the other six
-  files are unaffected.
+- **TD-28 — a character the PDF cannot draw still reaches the PDF** · LOW (was MEDIUM) ·
+  created 2026-09-04, HALVED the same day. Three of the seven summaries made `fpdf` report
+  a missing glyph: `'描'`, `'技'`, `'催化剂'`. Two problems sat behind that one warning.
+  1. **RESOLVED — it is not a gloss, and it is not fabrication.** The passages were read
+     (the operator's `output/summaries/raw/*.json`): `как催化剂для перехода`,
+     `материальной и技ической полноты`, `Преподаватель描написывает`. The model did not add
+     a term — it substituted a Chinese morpheme for the RUSSIAN one, mid-word, three times
+     in seven lectures. The meaning survives; the spelling breaks. So no
+     `[интерпретация]:` obligation was skipped and no content was invented: this is
+     language drift on a cheap tier, not a fidelity violation. Closed by the deterministic
+     script check (`echogist/alphabet.py` + `summarize.report_foreign_scripts`) plus a
+     prompt sentence, both shipped — see `docs/designs/script-check.md`.
+  2. **STILL OPEN — the renderer degrades silently.** `render` prints the missing-glyph
+     line and emits the PDF anyway, so the operator gets a document with holes and a
+     warning that scrolls past. The script check now catches the cause BEFORE the document
+     is opened, which drops this from silent corruption to cosmetic, but a character that
+     cannot be drawn still should not reach the PDF unannounced.
+  **Trigger for closure:** the next change that touches `render`'s font handling, or the
+  first missing glyph that is NOT a language slip (a real symbol the material needs).
+  **Blocks nothing.**
 
 - **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
   **HIGH** · created 2026-09-04 (operator call, mid-session). The tree is fixed and flat:
@@ -91,9 +75,10 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   land once the two-module menu has settled which flows exist.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which TD-27, TD-28 and TD-29 remain open: TD-22, TD-25
+branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which TD-27 and TD-28 (its renderer half only) remain open: TD-22, TD-25
 and TD-26 closed on 2026-09-04, and TD-23/TD-24 closed the day after the first full folder
-run, off that run's own audited numbers. The other open forward item is
+run, off that run's own audited numbers. TD-29 closed 2026-09-04 with the `notice` channel, and
+TD-28's fidelity half closed with it. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
@@ -101,6 +86,7 @@ not debt.
 
 ## Closed debts (compact — verbose history in git)
 
+- TD-29 — a dropped anchor printed in the same voice as a clean one · closed 2026-09-04 · `summarize` grew a SECOND channel, `notice`, alongside `log`: `log` is the sixty phase lines the operator scrolls past (menu wires `ui.detail`), `notice` is what they must act on (menu wires `ui.warn`). The anchor line routes itself — `(notice if dropped else log)(...)` — so `0 dropped` stays scenery and `4 dropped` does not. Two named channels rather than a severity argument on `Logger`: that alias is redefined in seven modules and `print` takes no level kwarg, and there are exactly two audiences here, not a spectrum. String-sniffing the message in `menu._progress` stays rejected. The channel is pinned by a test asserting a finding lands on `warn` and not `detail` — necessary because `SummarizeFn` is `Callable[..., ...]` and a stub's `**_kw` would otherwise swallow an unwired `notice` with the suite still green.
 - TD-23 — the scan projection constants were unmeasured · closed 2026-09-04 · reseeded `150 wpm x 7 chars/word` -> `135 x 6.5` in `config/models.toml`. The shipped pair was a guess; measurement (lecture 4, 198 blocks, direct count) gives 122 wpm / 6.21 chars/word, corroborated across all seven lectures by the run's own gate. 150 x 7 = 1050 chars/min against a real ~760 was a 1.4x bias nobody had sized. The new pair keeps a deliberate ~1.15x margin over measured speech, and the whole-course scan quote now lands 1.31x the real $2.4003 bill — high, as required, but a KNOWN margin. Recalibration stays a two-number config edit.
 - TD-24 — the scan quote was labelled an UPPER BOUND the arithmetic did not guarantee · closed 2026-09-04 · **both halves fixed, and the label was the smaller half.** The first full folder run proved the quote could run UNDER the bill: the gate said $2.2394 against $2.4003 (0.93x), and the scan said ~$2.20 against the same bill. Cause: `[guard].output_tokens_estimate`, a FLAT 4,600 output tokens for every call regardless of that call's size. Removed. Output is now projected per call as `tier.output_per_input_ratio x that call's input`, clamped by `[summarize].max_output_tokens` and floored, for the reconcile call only, at `reconcile_output_floor_tokens` (the one genuinely fixed per-call cost — without it a folder of short clips quotes like a single long file). The ratio is per-tier because it is a property of the model (Haiku 0.3707 measured over 59 calls; Sonnet 0.2225 over 5) and is re-seeded from any finished run's own "Actual cost" line: output/input, plus ~5%. Consequences: the quote no longer moves with the phase split (K=4 vs K=7 on the same lecture quoted $0.2204 vs $0.3062 for prose that is the same size either way), and the same run now quotes 1.07x its bill. The display label went from "UPPER BOUND" to "PROJECTION, biased high" with the measured margin named — the arithmetic is biased high in every term but a projection from DURATION is not a guarantee, and saying so is the honest half of the fix.
 

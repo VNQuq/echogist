@@ -26,6 +26,7 @@ from echogist.config import ChunkConfig, ModelTier, SummarizeConfig
 from echogist.summarize import (
     ActionItem,
     CallOutcome,
+    CheckQuestion,
     Decision,
     SummarizeError,
     SummarizeResult,
@@ -1184,3 +1185,124 @@ def test_synthesize_keeps_distinct_same_worded_decisions_across_phases() -> None
     # Both "Approved" decisions survive, each with its own phase anchor — not merged into one.
     assert len(result.summary.decisions) == 2
     assert {d.anchor for d in result.summary.decisions} == {"[00:00:00]", "[00:10:00]"}
+
+
+# --------------------------------------------------------------------------- #
+# Script check + the notice channel (TD-28 / TD-29)
+# --------------------------------------------------------------------------- #
+def _slip_summary(**fields: object) -> Summary:
+    """A Summary carrying a foreign-script slip in whichever field the test names."""
+    base: dict[str, object] = {
+        "title": "t",
+        "core_idea": "",
+        "decisions": (),
+        "action_items": (),
+        "language": "ru",
+    }
+    base.update(fields)
+    return Summary(**base)  # type: ignore[arg-type]
+
+
+def test_report_foreign_scripts_is_quiet_on_a_clean_russian_summary() -> None:
+    said: list[str] = []
+    summary = _slip_summary(core_idea="Обычный русский текст с coach и MVP.")
+    assert summarize.report_foreign_scripts(summary, "ru", notice=said.append) == ()
+    assert said == [], "a clean summary must not spend the loud channel"
+
+
+def test_report_foreign_scripts_names_the_script_and_quotes_the_passage() -> None:
+    said: list[str] = []
+    summary = _slip_summary(core_idea="Привлечь коуча как催化剂для перехода.")
+    findings = summarize.report_foreign_scripts(summary, "ru", notice=said.append)
+    assert len(findings) == 1
+    joined = "\n".join(said)
+    assert "cjk" in joined
+    assert "1 place " in joined, "not '1 place(s)' — it prints in front of the operator"
+    assert "催化剂" in joined, "the operator has to see WHICH passage to check"
+
+
+def test_report_foreign_scripts_never_alters_the_summary() -> None:
+    """Rewriting the model's words to guess the intended one would be exactly the silent
+    fabrication the pipeline exists to prevent. It reports; the human decides."""
+    summary = _slip_summary(core_idea="и技ической полноты")
+    summarize.report_foreign_scripts(summary, "ru", notice=lambda _m: None)
+    assert summary.core_idea == "и技ической полноты"
+
+
+def test_report_foreign_scripts_walks_every_readable_field() -> None:
+    """A slip in the essence block, a heading, a decision or an action is as visible to
+    the reader as one in the prose — checking only the prose would miss most of them."""
+    for field, value in (
+        ("title", "Путь催к переменам"),
+        ("core_idea", "главная催мысль"),
+        ("main_skill", "главный催навык"),
+        ("main_themes", ("тема催одна",)),
+        ("synthesis", (SynthesisSection(heading="Заголовок催", prose="p", anchors=()),)),
+        ("synthesis", (SynthesisSection(heading="H", prose="проза催тут", anchors=()),)),
+        ("decisions", (Decision(decision="решение催", rationale="r", anchor=""),)),
+        ("decisions", (Decision(decision="d", rationale="причина催", anchor=""),)),
+        ("action_items", (ActionItem(task="задача催", owner="", estimate="", anchor=""),)),
+        ("test_questions", (CheckQuestion(question="вопрос催", answer="a"),)),
+        ("test_questions", (CheckQuestion(question="q", answer="ответ催"),)),
+    ):
+        summary = _slip_summary(**{field: value})
+        assert summarize.report_foreign_scripts(summary, "ru", notice=lambda _m: None), field
+
+
+def test_report_foreign_scripts_ignores_anchors() -> None:
+    """An anchor is a coordinate, already validated by validate_anchors. Running a
+    language check over it is a category error."""
+    summary = _slip_summary(
+        synthesis=(SynthesisSection(heading="H", prose="p", anchors=("[00:10:00]",)),)
+    )
+    assert summarize.report_foreign_scripts(summary, "ru", notice=lambda _m: None) == ()
+
+
+def test_report_foreign_scripts_caps_what_it_prints() -> None:
+    """A reply that switched language wholesale must not bury the run's own result under
+    hundreds of lines — past the cap it counts instead of quoting."""
+    said: list[str] = []
+    summary = _slip_summary(main_themes=tuple(f"тема{i}催конец" for i in range(20)))
+    findings = summarize.report_foreign_scripts(summary, "ru", notice=said.append)
+    assert len(findings) == 20
+    assert len(said) == 1 + summarize._MAX_SCRIPT_FINDINGS + 1  # header + quotes + "and N more"
+    assert "and 15 more" in said[-1]
+
+
+def test_report_foreign_scripts_is_silent_for_an_uncalibrated_language() -> None:
+    """Fail-soft, like _language_name and _interpretation_label: an unknown code must not
+    flag every character of a language nobody set a rule for."""
+    said: list[str] = []
+    summary = _slip_summary(core_idea="催化剂 βeta текст")
+    assert summarize.report_foreign_scripts(summary, "de", notice=said.append) == ()
+    assert said == []
+
+
+def test_a_clean_anchor_pass_stays_on_the_quiet_channel() -> None:
+    """Sixty of these print per folder run. They are proof of movement, not findings."""
+    quiet: list[str] = []
+    loud: list[str] = []
+    summarize.validate_anchors(
+        _synth_summary(("[00:10:00]",)),
+        "[00:00:00] a\n[00:10:00] b",
+        log=quiet.append,
+        notice=loud.append,
+    )
+    assert loud == []
+    assert any("0 dropped" in line for line in quiet)
+
+
+def test_a_dropped_anchor_goes_to_the_loud_channel() -> None:
+    """TD-29: a dropped anchor is a timecode the model invented — the one fidelity failure
+    this stage detects on its own. Printed in the same muted grey as the phase chatter it
+    is indistinguishable from a clean run, which is what shipped in 91d4c77."""
+    quiet: list[str] = []
+    loud: list[str] = []
+    summarize.validate_anchors(
+        _synth_summary(("[00:05:00]",)),
+        "[00:00:00] a\n[00:10:00] b",
+        log=quiet.append,
+        notice=loud.append,
+    )
+    assert quiet == []
+    assert any("1 dropped" in line for line in loud)

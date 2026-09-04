@@ -468,6 +468,11 @@ def _run_summary(
                 source_stem=source_stem,
                 api_key=api_key,
                 log=_progress,
+                # The OTHER channel (TD-29). ``_progress`` is muted and feeds the spinner:
+                # right for sixty phase lines, wrong for "I dropped four anchors" or "the
+                # model wrote three characters of Chinese". A finding the operator must
+                # act on goes to ui.warn, at full contrast, and does not touch the spinner.
+                notice=ui.warn,
                 on_phase=_persist,
                 resume_from=resume_from,
             )

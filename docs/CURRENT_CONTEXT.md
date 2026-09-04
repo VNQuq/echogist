@@ -2,7 +2,8 @@
 
 **Updated:** 2026-09-04 — **the first full folder run finished: 7 lectures, 59 calls, $2.4003. Cost model
 rebuilt on its numbers (TD-23, TD-24 closed), step 4 (оформление) shipped, and `batch`+`bulk` merged into
-one `folder.py`.**
+one `folder.py`. The model's three CJK slips are diagnosed and instrumented (TD-29 closed,
+TD-28 halved).**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -17,6 +18,18 @@ lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
 
 ## Live invariants from v2.3.0 / v2.2.0 (full entries in [CHANGELOG.md](../CHANGELOG.md))
 
+- **Two channels out of `summarize`, not one** (TD-29). `log` = the ~60 phase lines, muted
+  (`ui.detail`). `notice` = findings the operator must act on, loud (`ui.warn`): a DROPPED
+  anchor, and a foreign-script slip. The anchor line routes itself on the dropped count.
+  **Do not merge them** and do not sniff the message text in `menu._progress`.
+- **The script check is an instrument, not a cosmetic fix** (`echogist/alphabet.py`,
+  `summarize.report_foreign_scripts`, design at [docs/designs/script-check.md](./designs/script-check.md)).
+  Haiku spliced Chinese morphemes into Russian words 3x in 7 lectures; we only noticed
+  because the PDF font could not draw them. A same-language word swap would be invisible,
+  so this is the one class of model drift that declares itself — keep it even after the
+  prompt sentence appears to work, because it is what MEASURES whether the sentence works.
+  Allowed scripts per language are a code dict in `summarize.py` next to `_LANGUAGE_NAMES`,
+  not config: the operator never tunes "Russian is written in Cyrillic".
 - **Name-claiming.** `dated_artifact_path` SELECTS a name without creating it, so colliding stems race.
   `folder._plan_output_paths` claims every mp3 name up front, single-threaded, **in memory** — an on-disk claim
   survived `kill -9` as a fake artifact that poisoned dedup forever, and `.part` cannot be the marker because

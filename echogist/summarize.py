@@ -50,11 +50,20 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import naming
+from . import alphabet, naming
 from .chunk import Phase, block_timecodes, plan_phases
 from .config import ChunkConfig, ModelTier, SummarizeConfig
 
+#: Progress chatter — the phase-by-phase lines the operator scrolls past. The menu wires
+#: this to the muted console channel.
 Logger = Callable[[str], object]
+
+#: The OTHER channel: things the operator must actually see. Same shape as
+#: :data:`Logger` deliberately, so a caller that does not care passes nothing and both
+#: land in the same ``print``. Two named channels rather than a level argument on one:
+#: ``Logger`` is redefined in seven modules and ``print`` takes no level kwarg, and there
+#: are exactly two audiences here (chatter, and findings), not a spectrum.
+Notice = Callable[[str], object]
 
 # Human language names injected into the prompt's {language} token. settings
 # validation already restricts the code to these; an unknown code falls back to
@@ -70,6 +79,22 @@ _RECONCILE_TOOL_NAME = "emit_reconcile"
 # prefixes any bridge beyond what the author literally said with "[<label>]:", so the
 # reader sees author-versus-model at a glance. Unknown code -> English, fail-soft.
 _INTERPRETATION_LABELS = {"ru": "интерпретация", "en": "interpretation"}
+
+# The writing systems a summary in this language may legitimately use
+# (:func:`echogist.alphabet.script_of` names). Latin rides along with Cyrillic on purpose:
+# a Russian lecture legitimately says "coach", "MVP", or an English book title, and the
+# rule catches a change of SCRIPT, not a foreign word. An unknown code allows everything
+# — fail-soft, exactly like the two maps above; flagging every character of a language
+# nobody calibrated would be noise, not a finding.
+_ALLOWED_SCRIPTS = {
+    "ru": frozenset({"cyrillic", "latin"}),
+    "en": frozenset({"latin"}),
+}
+
+# How many script findings reach the console before they are counted instead of quoted. A
+# stray morpheme is one or two lines; a reply that switched language wholesale would be
+# hundreds, and burying the run's own result under them helps nobody.
+_MAX_SCRIPT_FINDINGS = 5
 
 
 class SummarizeError(Exception):
@@ -518,6 +543,7 @@ def summarize_auto(
     today: date | None = None,
     caller: Caller = _default_caller,
     log: Logger = print,
+    notice: Notice = print,
     on_phase: Callable[[Summary], None] | None = None,
     resume_from: Summary | None = None,
 ) -> SummarizeResult:
@@ -539,6 +565,7 @@ def summarize_auto(
         today=today,
         caller=caller,
         log=log,
+        notice=notice,
         on_phase=on_phase,
         resume_from=resume_from,
     )
@@ -912,12 +939,75 @@ def _make_fixer(
     return fix_many, fix_str, strip_inline, stats
 
 
+def report_foreign_scripts(
+    summary: Summary,
+    language: str,
+    *,
+    notice: Notice = print,
+) -> tuple[alphabet.Finding, ...]:
+    """Report every stretch of ``summary`` written in a script ``language`` does not use.
+
+    The second deterministic, offline gate over the model's finished reply, next to
+    :func:`validate_anchors`. It walks the SAME prose the operator will read — the title,
+    the essence block, every phase heading and its prose, the decisions and actions — and
+    never the anchors, which are timecodes rather than language.
+
+    **It reports and returns; it never raises and never alters the summary.** Dropping a
+    paid summary over three characters would throw away money already spent for a defect
+    the operator can read straight past, and rewriting the model's words to guess at the
+    intended one would be exactly the silent fabrication this pipeline exists to prevent.
+    The machine states the fact; the human decides — the same division as the anchor gate.
+
+    Returns every finding (the caller may want the count); prints at most
+    ``_MAX_SCRIPT_FINDINGS`` of them and then says how many more there were.
+    """
+    allowed = _ALLOWED_SCRIPTS.get(language, frozenset())
+    text = "\n".join(_readable_text(summary))
+    findings = alphabet.foreign_findings(text, allowed)
+    if not findings:
+        return ()
+    scripts = ", ".join(sorted({f.script for f in findings}))
+    where = "1 place" if len(findings) == 1 else f"{len(findings)} places"
+    notice(
+        f"Foreign script in the summary ({scripts}), {where} — the model slipped out of "
+        f"the target language. The text is kept as written; check it:"
+    )
+    for finding in findings[:_MAX_SCRIPT_FINDINGS]:
+        notice(f"  ...{finding.context}...")
+    if len(findings) > _MAX_SCRIPT_FINDINGS:
+        notice(f"  ...and {len(findings) - _MAX_SCRIPT_FINDINGS} more.")
+    return findings
+
+
+def _readable_text(summary: Summary) -> tuple[str, ...]:
+    """Every field of ``summary`` that becomes prose in the rendered document.
+
+    Anchors are excluded on purpose: ``[00:41:12]`` is a coordinate, already validated by
+    :func:`validate_anchors`, and running a language check over it would be a category
+    error. Everything else the reader's eye lands on is here.
+    """
+    parts: list[str] = [summary.title, summary.core_idea, summary.main_skill]
+    parts.extend(summary.main_themes)
+    for section in summary.synthesis:
+        parts.append(section.heading)
+        parts.append(section.prose)
+    for decision in summary.decisions:
+        parts.append(decision.decision)
+        parts.append(decision.rationale)
+    for action in summary.action_items:
+        parts.extend((action.task, action.owner, action.estimate))
+    for question in summary.test_questions:
+        parts.extend((question.question, question.answer))
+    return tuple(part for part in parts if part)
+
+
 def validate_anchors(
     summary: Summary,
     transcript_text: str,
     *,
     snap_window_seconds: float = 2.0,
     log: Logger = print,
+    notice: Notice = print,
 ) -> Summary:
     """Snap or drop every anchor + inline timecode in ``summary`` against ``transcript_text``.
 
@@ -968,7 +1058,11 @@ def validate_anchors(
         replace(q, question=strip_inline(q.question), answer=strip_inline(q.answer))
         for q in summary.test_questions
     )
-    log(f"Validated anchors: {stats[0]} exact, {stats[1]} snapped, {stats[2]} dropped.")
+    # Routed by what it says, not by where it is printed from. A dropped anchor is a
+    # timecode the model invented, which is the one fidelity failure this stage can detect
+    # on its own — it must not arrive in the same muted grey as the sixty phase lines.
+    line = f"Validated anchors: {stats[0]} exact, {stats[1]} snapped, {stats[2]} dropped."
+    (notice if stats[2] else log)(line)
     return replace(
         summary,
         synthesis=sections,
@@ -1038,6 +1132,7 @@ def synthesize_summary(
     today: date | None = None,
     caller: Caller = _default_caller,
     log: Logger = print,
+    notice: Notice = print,
     on_phase: Callable[[Summary], None] | None = None,
     resume_from: Summary | None = None,
 ) -> SummarizeResult:
@@ -1160,6 +1255,11 @@ def synthesize_summary(
     # Sections/decisions/actions are already per-phase validated above; this final pass
     # validates the reconcile header (core_idea + main_themes) against the whole transcript
     # (#3) and harmlessly re-confirms the already-clean per-phase anchors.
-    summary = validate_anchors(summary, "\n".join(ph.text for ph in phases), log=log)
+    summary = validate_anchors(summary, "\n".join(ph.text for ph in phases), log=log, notice=notice)
+    # Once, over the FINAL summary, rather than per phase: this way the reconcile pass's
+    # own prose (the title and the essence block, the freest writing in the document) is
+    # covered too, and a resumed run — whose earlier phases were restored from disk and
+    # never re-synthesized — is still checked end to end.
+    report_foreign_scripts(summary, summary.language, notice=notice)
     log(f"Summary ready: {summary.title}")
     return SummarizeResult(summary=summary, input_tokens=total_in, output_tokens=total_out)

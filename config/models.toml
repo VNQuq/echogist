@@ -169,9 +169,19 @@ never treat it as licence to skip points the author actually makes in THIS phase
 
 decisions / action_items: include any concrete decisions or next actions stated in THIS \
 phase, each with its anchor. Empty lists are correct for material with none — never \
-invent one. Write naturally in {language}, not a word-for-word translation. Call the \
-emit_phase tool exactly once.
+invent one. Write naturally in {language}, not a word-for-word translation. Write every \
+word in the writing system of {language} itself: never substitute a word or a syllable \
+from another script, even where a shorter one exists. Call the emit_phase tool exactly \
+once.
 """
+
+# The "writing system of {language}" sentence in BOTH prompts (added 2026-09-04) is a
+# MITIGATION, not the fix. The first real folder run had `economy`/Haiku splice Chinese
+# morphemes into the middle of Russian words — `как催化剂для перехода`, `и技ической
+# полноты`, `Преподаватель描написывает` — three words across seven lectures. A prompt is a
+# wish addressed to a sampler and cannot be trusted on its own, so the real guard is the
+# deterministic offline check in echogist/alphabet.py, which also MEASURES whether this
+# sentence helped. Do not delete one without the other.
 
 # Reconcile step (TD-16 v2): the document-level header + the ESSENCE BLOCK, derived ONLY
 # from the already-written phase passages — it never re-reads the transcript (that would be
@@ -188,7 +198,8 @@ emit_phase tool exactly once.
 reconcile_system_prompt = """
 You are given the already-written phase passages (their headings and prose) of ONE \
 transcript that was synthesized phase by phase, in order. Produce the document-level \
-header and the essence block, written entirely in {language}, by calling the \
+header and the essence block, written entirely in {language} and entirely in the writing \
+system of {language} — never a word or a syllable from another script — by calling the \
 emit_reconcile tool exactly once:
 - title: a short, specific, human-meaningful title (no date, no extension, no quotes).
 - core_idea: ESSENCE POINT 1 — the single central point a reader should leave with, \

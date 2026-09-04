@@ -101,15 +101,20 @@ def _make_deps(
         source_stem: str,
         api_key: str,
         log: Any = print,
+        notice: Any = print,
         **_kw: Any,
     ) -> SummarizeResult:
         calls["summarize"] += 1
         if summarize_error is not None:
             raise SummarizeError(summarize_error)
         # The real stage narrates each phase through `log`; mirror that so a test can see
-        # what the operator would have been told while the call was in flight.
+        # what the operator would have been told while the call was in flight. ``notice``
+        # is taken EXPLICITLY, not through **_kw: SummarizeFn is Callable[..., ...], so an
+        # unwired channel would be invisible to mypy and swallowed by the catch-all — the
+        # suite would stay green while every finding printed to a dead end.
         log("Synthesizing phase 1/2 (00:00:00-00:30:00)...")
         log("Synthesizing phase 2/2 (00:30:00-01:00:00)...")
+        notice("Validated anchors: 8 exact, 0 snapped, 2 dropped.")
         return SummarizeResult(summary=_summary(), input_tokens=1234, output_tokens=567)
 
     def render(
@@ -2042,3 +2047,23 @@ def test_session_log_path_is_one_file_per_launch(tmp_path: Path) -> None:
     assert first.suffix == ".log"
     # Sortable, so the newest session is the last one in the folder listing.
     assert re.match(r"^\d{4}-\d\d-\d\d-\d{6}$", first.stem)
+
+
+def test_a_finding_is_loud_while_the_phase_chatter_stays_muted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TD-28 / TD-29: the summarize stage has two channels and the menu must not merge
+    them. The phase lines are sixty-per-run scenery; a dropped anchor or a foreign-script
+    slip is a finding the operator has to act on. Routing both through ``ui.detail`` — what
+    shipped in 91d4c77 — makes the finding dimmer than the noise it sits in."""
+    _write_settings(tmp_path)
+    video = _lecture(tmp_path / "inbox", "lecture.mp4")
+    deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(video), "summary", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    muted = [text for level, text in stub.messages if level == "detail"]
+    loud = [text for level, text in stub.messages if level == "warn"]
+    assert any("Synthesizing phase" in text for text in muted)
+    assert any("2 dropped" in text for text in loud), "a finding must not print as chatter"
+    assert not any("2 dropped" in text for text in muted)
