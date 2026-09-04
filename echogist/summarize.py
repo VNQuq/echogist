@@ -26,8 +26,9 @@ cannot drift (operator decision 2026-06-15: "prompt = data, schema = code").
 
 **Cap vs projection.** The request's ``max_tokens`` is :attr:`max_output_tokens`
 (real headroom for a dense, no-upper-limit RU summary with per-section bullets; the
-value itself lives in models.toml, which carries the sizing rationale) — separate
-from the :attr:`GuardConfig.output_tokens_estimate` cost projection. A reply that
+value itself lives in models.toml, which carries the sizing rationale). The cost
+projection is separate: it clamps a call's projected output to this cap but never
+uses it as the projection (see :func:`echogist.cost.estimate_cost_synthesis`). A reply that
 still hits the cap (``stop_reason == "max_tokens"``) yields
 truncated, invalid tool JSON, so it is caught and surfaced (the operator raises the
 cap in models.toml) rather than parsed into a half-summary.

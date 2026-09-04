@@ -123,8 +123,11 @@ def test_the_plan_is_sorted_not_in_walk_order(tmp_path: Path) -> None:
 def test_folder_estimate_is_the_sum_of_the_per_file_quotes() -> None:
     tier = _tier()
     files = [[100, 200], [300]]
-    total = bulk.folder_estimate(files, tier, per_call_output_tokens=50)
-    parts = [cost.estimate_cost_synthesis(f, tier, per_call_output_tokens=50) for f in files]
+    total = bulk.folder_estimate(files, tier, output_cap=50_000, reconcile_floor=2_500)
+    parts = [
+        cost.estimate_cost_synthesis(f, tier, output_cap=50_000, reconcile_floor=2_500)
+        for f in files
+    ]
     assert total.input_tokens == sum(p.input_tokens for p in parts)
     assert total.output_tokens == sum(p.output_tokens for p in parts)
     assert total.total_usd == pytest.approx(sum(p.total_usd for p in parts))
@@ -135,18 +138,19 @@ def test_folder_estimate_prices_one_reconcile_per_file_not_one_per_folder() -> N
     reconcile calls, and an under-quote is the only failure that spends unagreed money."""
     tier = _tier()
     files = [[100], [100], [100]]
-    total = bulk.folder_estimate(files, tier, per_call_output_tokens=50)
+    total = bulk.folder_estimate(files, tier, output_cap=50_000, reconcile_floor=2_500)
     flattened = cost.estimate_cost_synthesis(
-        [t for f in files for t in f], tier, per_call_output_tokens=50
+        [t for f in files for t in f], tier, output_cap=50_000, reconcile_floor=2_500
     )
     assert total.output_tokens > flattened.output_tokens
-    # 3 files x (1 phase + 1 reconcile) = 6 output calls, not 3 phases + 1 reconcile.
-    assert total.output_tokens == 6 * 50
-    assert flattened.output_tokens == 4 * 50
+    # Three reconcile calls, each writing its own document header, against one shared
+    # header for the whole folder: 3 x (40 + 2500) vs (120 + 2500).
+    assert total.output_tokens == 3 * (40 + 2_500)
+    assert flattened.output_tokens == 120 + 2_500
 
 
 def test_folder_estimate_of_nothing_is_zero_but_keeps_the_tier_rates() -> None:
-    total = bulk.folder_estimate([], _tier(), per_call_output_tokens=50)
+    total = bulk.folder_estimate([], _tier(), output_cap=50_000, reconcile_floor=2_500)
     assert total.total_usd == 0.0
     assert total.price_in_per_mtok == 1.0
 

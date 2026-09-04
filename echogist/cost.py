@@ -5,10 +5,12 @@ the reconcile always — it writes the essence block, so K=1 pays for it too):
 
 * **Before** the call(s) — a cost *estimate* (:func:`estimate_cost_synthesis`) from the
   local, language-aware per-phase token guess (:func:`echogist.guard.estimate_input_tokens`)
-  on the input side, and a REALISTIC per-call output projection
-  (``[guard].output_tokens_estimate``) on the output side — NOT the ``max_tokens`` cap
-  (TD-21: the cap-based ceiling ran ~2.4× the bill). The input side keeps its Cyrillic-high
-  bias, so the quote is tight + a modest margin and still rarely undershoots. Always shown.
+  on the input side, and a PROPORTIONAL output projection on the output side: each call's
+  output is ``tier.output_per_input_ratio × that call's input``, clamped to the API's
+  ``max_tokens`` cap (TD-24). Not the cap itself (TD-21: the cap-based ceiling ran ~2.4×
+  the bill), and no longer a flat per-call constant (TD-24: flat made the quote depend on
+  the phase split, and it undershot the first real folder run by 7%). The input side keeps
+  its Cyrillic-high bias, so the quote sits above the bill with a modest margin. Always shown.
 * **After** the call — the *actual* cost from the audited ``response.usage``
   counts carried on :class:`echogist.summarize.SummarizeResult`. The exact,
   billable number.
@@ -29,6 +31,7 @@ with no model, no key, no network.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -76,36 +79,52 @@ def estimate_cost_synthesis(
     phase_input_tokens: Sequence[int],
     tier: ModelTier,
     *,
-    per_call_output_tokens: int,
+    output_cap: int,
+    reconcile_floor: int,
 ) -> CostEstimate:
     """Pre-call cost estimate for the v2 direct-synthesis path (TD-16): K phases + reconcile.
 
     ``phase_input_tokens`` is the per-phase input estimate (one per synthesis call, each
     already including the prompt overhead via :func:`echogist.guard.estimate_input_tokens`).
-    ``per_call_output_tokens`` is a REALISTIC per-call output projection
-    (``[guard].output_tokens_estimate``), NOT the API ``max_tokens`` cap.
+    ``output_cap`` is ``[summarize].max_output_tokens`` — the API ``max_tokens`` ceiling a
+    single reply physically cannot exceed, used here to clamp, never to project.
+    ``reconcile_floor`` is ``[summarize].reconcile_output_floor_tokens``, the smallest
+    reply the reconcile prompt can produce.
 
-    TD-21: a tight estimate + a modest high bias, not a worst-case ceiling. The old quote
-    priced every call's output at the full cap (``output_cap × (K+1)``) and added a phantom
-    ``K × output_cap`` reconcile input — it ran ~2.4× the actual bill (run #1: $0.95 vs
-    $0.39) and tripped the confirm gate needlessly. The faithful-prose contract emits a
-    small fraction of the cap, so each of the K phase calls is projected at
-    ``per_call_output_tokens`` (sized ~25% above the observed mean — still above the bill,
-    no longer double it). A single reconcile call ALWAYS follows — including at K=1, where
-    it writes the essence block the document opens with: its INPUT is the phase prose fed
-    to it, ≈ the K phase outputs (``K × per_call_output_tokens``), and it emits one more
-    ``per_call_output_tokens``. The INPUT side keeps its separate Cyrillic-high bias (the
-    guard), so the quote still rarely undershoots; the exact cost comes from
-    ``response.usage`` after the calls.
+    **The output side is proportional, not flat (TD-24).** Each call is projected at
+    ``tier.output_per_input_ratio × its own input``: the model writes prose in proportion
+    to the material it is given, so a call over twice the transcript emits roughly twice
+    the words. Two properties follow, and both are the point:
+
+    * The quote no longer moves with K. ``sum(ratio × phase_in)`` is ``ratio × sum(phase_in)``
+      however the transcript is split, so halving the phase size no longer looks like it
+      doubles the output bill. The flat model made the same lecture quote $0.22 at K=4 and
+      $0.31 at K=7 for prose that is the same size either way.
+    * It stops undershooting. The flat 4,600/call quoted the first real folder run at
+      $2.2394 against a $2.4003 bill — 0.93x, the one direction CLAUDE.md forbids. At the
+      measured ratio the same run quotes 1.07x.
+
+    A single reconcile call ALWAYS follows the K phase calls — including at K=1, where it
+    writes the essence block the document opens with. Its INPUT is the phase prose fed to
+    it (≈ the K projected phase outputs) and its own output is the ratio applied to that,
+    but never less than ``reconcile_floor``: the reconcile emits a title, an essence block
+    and the themes whatever the file's size, so it is the one call with a real FIXED cost.
+    Without that floor a purely proportional model has no per-call cost at all, and a
+    folder of fifty short clips quotes the same as one long file — the exact under-quote
+    :func:`echogist.bulk.folder_estimate` exists to prevent. Above the floor the ratio
+    dominates and this term stops mattering.
+
+    The reconcile projection is the loosest part of the model — it prices a header as if it
+    were a second synthesis, high, then saturates at ``output_cap``. Deliberate: it errs in
+    the safe direction off ONE measured knob. Look here first if a quote runs far above a bill.
     """
-    k = len(phase_input_tokens)
-    # The phase prose fed to the reconcile call ≈ the K phase outputs (not the cap).
-    reconcile_input = k * per_call_output_tokens
-    total_input = sum(phase_input_tokens) + reconcile_input
-    total_output = (k + 1) * per_call_output_tokens
+    ratio = tier.output_per_input_ratio
+    phase_outputs = [min(math.ceil(tokens * ratio), output_cap) for tokens in phase_input_tokens]
+    reconcile_input = sum(phase_outputs)
+    reconcile_output = min(max(math.ceil(reconcile_input * ratio), reconcile_floor), output_cap)
     return CostEstimate(
-        input_tokens=total_input,
-        output_tokens=total_output,
+        input_tokens=sum(phase_input_tokens) + reconcile_input,
+        output_tokens=reconcile_input + reconcile_output,
         price_in_per_mtok=tier.price_in_per_mtok,
         price_out_per_mtok=tier.price_out_per_mtok,
     )

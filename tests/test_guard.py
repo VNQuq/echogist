@@ -23,7 +23,7 @@ def _tier(context_window: int) -> ModelTier:
 
 
 def _guard(fraction: float = 0.8) -> GuardConfig:
-    return GuardConfig(safe_budget_fraction=fraction, output_tokens_estimate=2000)
+    return GuardConfig(safe_budget_fraction=fraction)
 
 
 # --------------------------------------------------------------------------- #

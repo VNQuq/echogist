@@ -170,6 +170,22 @@ def test_exit_returns_zero(tmp_path: Path) -> None:
     assert "Goodbye." in stub.log_text
 
 
+def test_the_menu_drains_typed_ahead_input_after_every_flow(tmp_path: Path) -> None:
+    """A flow can hold the console for an hour with no prompt on screen. Anything typed
+    into that silence must be dropped before the menu re-opens, or the menu answers itself
+    with it — the 2026-09-04 folder run finished seven summaries and then launched an
+    unasked-for folder picker off a buffered keystroke. Drained after the flow RETURNS, so
+    type-ahead into a prompt the operator can actually see still works.
+    """
+    deps, stub, _ = _make_deps(tmp_path, ["settings", "back", "exit"])
+    assert menu.run_menu(deps) == 0
+    drains = [i for i, (level, _) in enumerate(stub.messages) if level == "drain"]
+    selects = [i for i, (level, _) in enumerate(stub.messages) if level == "select"]
+    assert drains, "a finished flow must drain the input buffer before re-asking"
+    # The drain lands between the flow's last prompt and the menu's next one.
+    assert any(selects[0] < d < selects[-1] for d in drains)
+
+
 def test_eof_exits_cleanly(tmp_path: Path) -> None:
     # No answers at all -> the first menu select EOFs -> clean exit, no crash.
     deps, _, _ = _make_deps(tmp_path, [])
@@ -1506,7 +1522,7 @@ def test_scan_flow_reports_folders_totals_and_costs_nothing(
     assert ("table", "Totals") in stub.messages
     assert "Course-1/" in stub.log_text
     assert "2h 00m" in stub.log_text
-    assert "UPPER BOUND" in stub.log_text
+    assert "PROJECTION from duration, biased high" in stub.log_text
     # Read-only: not one paid or heavy stage ran.
     assert calls == {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
@@ -1697,6 +1713,71 @@ def test_bulk_flow_transcribes_everything_then_asks_once(
     # was reached. A per-file gate would have eaten it and ended the session early.
     assert stub.answers == []
     assert "3 file(s) ready to summarize" in stub.log_text
+
+
+def test_the_folder_report_prices_every_file_and_closes_the_gate_it_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After an hour away the operator's questions are per file, and the console history
+    that would answer them has scrolled past. The report answers them: a row per file with
+    what it cost, then the totals — including the quote the operator agreed to next to the
+    bill, which is the only feedback the cost model ever gets."""
+    _write_settings(tmp_path, confirm_threshold_usd=0.0)
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("one.mp4", "two.mp4"):
+        _lecture(library, name)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(library), "summary", False, True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert ("table", "Per file") in stub.messages
+    assert ("table", "Totals") in stub.messages
+    assert "one.mp4" in stub.log_text and "two.mp4" in stub.log_text
+    assert "Actually spent" in stub.log_text
+    assert "Quoted before the run" in stub.log_text
+    assert "Time" in stub.log_text
+
+
+def test_a_free_transcript_run_reports_no_per_file_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row per file earns its place by carrying a price or a failure. On the free phase
+    it carries neither, and that phase ALSO reports mid-run, right in front of the cost
+    gate — seven rows reading "done" there push the one number being answered off screen."""
+    _write_settings(tmp_path)
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(library), "transcript", False, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert ("table", "Totals") in stub.messages
+    assert ("table", "Per file") not in stub.messages
+
+
+def test_each_file_opens_its_own_section_and_the_phase_lines_are_muted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder run prints ~60 lines. The file headers are rules so the wall becomes
+    sections the eye can skip through; the phase-by-phase lines are muted sub-steps so they
+    cannot bury the result. Both are load-bearing at 7 files and meaningless at 1, which is
+    why they are asserted here and not left to a look."""
+    _write_settings(tmp_path)
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("one.mp4", "two.mp4"):
+        _lecture(library, name)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(library), "summary", False, True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    rules = [text for level, text in stub.messages if level == "rule"]
+    assert any("[1/2] one.mp4" in text for text in rules)
+    assert any("[2/2] two.mp4" in text for text in rules)
+    # The synthesis progress went to the muted channel, not the loud one.
+    assert any(level == "detail" for level, _text in stub.messages)
 
 
 def test_bulk_flow_declined_gate_spends_nothing_but_keeps_the_transcripts(

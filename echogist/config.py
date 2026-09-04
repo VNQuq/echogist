@@ -62,8 +62,23 @@ _DEFAULT_PHASE_TARGET_TOKENS = 12_000
 # The floor is set just under the observed speech minimum so the two classes stay separated.
 _DEFAULT_MIN_UNIQUE_WORD_RATIO = 0.55
 _DEFAULT_MIN_BLOCK_WORDS = 15
-_DEFAULT_WORDS_PER_MINUTE = 150.0
-_DEFAULT_CHARS_PER_WORD = 7.0
+# Scan-time speech-rate constants (see ScanConfig). MEASURED 2026-09-04 against the
+# operator's seven-lecture RU course (23h43m): a real transcript runs ~122 wpm at ~6.2
+# chars/word. Seeded ~10% above that, per CLAUDE.md's estimate-Cyrillic-high rule — the
+# scan quote must stay above the bill, and the resulting margin is now a KNOWN ~1.4x
+# rather than the unmeasured 150 x 7 (TD-23).
+_DEFAULT_WORDS_PER_MINUTE = 135.0
+_DEFAULT_CHARS_PER_WORD = 6.5
+# The reconcile call always writes a title, the essence block (core_idea ~250-350 words,
+# main_skill ~150-200, 3 test questions with 2-4 sentence answers), 5-8 themes and one
+# heading per phase — roughly 700 Russian words even for the shortest material, and RU
+# runs ~3.5 tokens/word at the guard's rate. 2,500 is that floor, rounded down so it stays
+# a floor and not a projection. It is the only FIXED per-call cost in the cost model.
+_DEFAULT_RECONCILE_OUTPUT_FLOOR_TOKENS = 2_500
+# Output-per-input token ratio for a tier that does not declare one (see ModelTier).
+# Set to the highest MEASURED tier ratio + margin, so an unknown model is projected
+# as if it were the most verbose one we have numbers for.
+_DEFAULT_OUTPUT_PER_INPUT_RATIO = 0.40
 
 # Synthesis step (TD-16 v2): synthesize ONE phase of the transcript into faithful,
 # readable prose — the transcript is ground truth, read directly (one hop). {language}
@@ -129,14 +144,25 @@ class ModelTier:
     # advisory: the summarize flow prints a one-time notice when it is True and never
     # blocks or moves the cost gate on it.
     prices_unverified: bool = False
+    # Projected OUTPUT tokens per INPUT token for this tier's model, under the v2
+    # synthesis prompt (TD-24). Per-tier because it is a property of the model's
+    # verbosity: Haiku writes ~1.7x the prose Sonnet does over the same material.
+    # Measured from a finished run's own audited totals — output_tokens / input_tokens
+    # off the "Actual cost" line — plus a small margin, so the quote stays above the
+    # bill. Optional so a hand-added tier still loads; the default is biased high.
+    output_per_input_ratio: float = _DEFAULT_OUTPUT_PER_INPUT_RATIO
 
 
 @dataclass(frozen=True)
 class GuardConfig:
-    """Inputs to the local overflow guard + cost estimate (plan §3, §4)."""
+    """Inputs to the local overflow guard (plan §4).
+
+    The cost projection's output side no longer lives here: it is
+    ``ModelTier.output_per_input_ratio``, because it differs per model and scales
+    with each call's input rather than being one flat number for every call (TD-24).
+    """
 
     safe_budget_fraction: float
-    output_tokens_estimate: int
 
     def safe_budget(self, tier: ModelTier) -> int:
         """Max single-pass input tokens allowed for ``tier`` before the guard stops."""
@@ -154,14 +180,19 @@ class SummarizeConfig:
     tool-use SCHEMAs (the emit_phase / emit_reconcile field contracts the parser depends
     on) live in code, in :mod:`echogist.summarize`, so prompt and schema cannot drift.
 
-    ``max_output_tokens`` is the API's hard ``max_tokens`` cap — deliberately SEPARATE
-    from, and larger than, ``GuardConfig.output_tokens_estimate`` (the cost projection).
+    ``max_output_tokens`` is the API's hard ``max_tokens`` cap. It is also the ceiling
+    the cost projection clamps a call's output to (a call cannot emit more than the cap),
+    but it is NOT the projection itself — see ``ModelTier.output_per_input_ratio``.
     A phase's prose carries no upper limit, so a flush cap would truncate a dense RU
     phase into invalid tool-use JSON and waste the paid call; the cap carries real
     headroom for Cyrillic tokenization.
     """
 
     max_output_tokens: int
+    #: Smallest reply the reconcile call can produce, in tokens — the cost model's only
+    #: fixed per-call cost (see :func:`echogist.cost.estimate_cost_synthesis`). Derived
+    #: from the reconcile prompt's own word budget, so it moves when that prompt does.
+    reconcile_output_floor_tokens: int = _DEFAULT_RECONCILE_OUTPUT_FLOOR_TOKENS
     synthesis_system_prompt: str = _DEFAULT_SYNTHESIS_SYSTEM_PROMPT
     reconcile_system_prompt: str = _DEFAULT_RECONCILE_SYSTEM_PROMPT
 
@@ -193,15 +224,14 @@ class ScanConfig:
 
     The scanner prices a folder before anything is transcribed, so it has no text to
     count: it turns each file's DURATION into a character count via these two numbers,
-    then into tokens. Both are seeded high (150 wpm against roughly 110-130 for real
-    Russian lecture speech, 7 chars/word against roughly 6) because the projection is an
-    UPPER BOUND — CLAUDE.md requires the estimate to run high, and an under-quote is the
-    one failure mode that costs the operator money they did not agree to.
+    then into tokens. Both are seeded ~10% above MEASURED Russian lecture speech (122 wpm,
+    6.2 chars/word across the operator's seven-lecture course), because the projection is
+    biased high on purpose — an under-quote is the one failure mode that costs the
+    operator money they did not agree to.
 
-    Unmeasured as shipped, and nothing in the code measures them: recalibration is a
-    MANUAL step (TD-23). Scan a folder that already holds a transcript, compare the
-    projected character count against the real one, and edit the two numbers in
-    ``models.toml``. No code change is needed to do it.
+    Recalibration stays a MANUAL step: scan a folder that already holds a transcript,
+    compare the projected character count against the real one, and edit the two numbers
+    in ``models.toml``. No code change is needed to do it.
     """
 
     words_per_minute: float = _DEFAULT_WORDS_PER_MINUTE
@@ -443,6 +473,9 @@ def _parse_tier(name: str, table: Any) -> ModelTier:
         ),
         temperature=_optional_temperature(table, where),
         prices_unverified=_optional_bool(table, "prices_unverified", where, False),
+        output_per_input_ratio=_optional_positive(
+            table, "output_per_input_ratio", where, _DEFAULT_OUTPUT_PER_INPUT_RATIO
+        ),
     )
 
 
@@ -472,16 +505,7 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
     )
     if fraction > 1:
         raise ConfigError(f"{_MODELS_FILENAME}: 'safe_budget_fraction' must be <= 1.")
-    guard = GuardConfig(
-        safe_budget_fraction=fraction,
-        output_tokens_estimate=int(
-            _as_positive_number(
-                _require(guard_table, "output_tokens_estimate", "[guard]"),
-                "output_tokens_estimate",
-                "[guard]",
-            )
-        ),
-    )
+    guard = GuardConfig(safe_budget_fraction=fraction)
 
     summarize_table = raw.get("summarize")
     if not isinstance(summarize_table, dict):
@@ -492,6 +516,14 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
                 _require(summarize_table, "max_output_tokens", "[summarize]"),
                 "max_output_tokens",
                 "[summarize]",
+            )
+        ),
+        reconcile_output_floor_tokens=int(
+            _optional_positive(
+                summarize_table,
+                "reconcile_output_floor_tokens",
+                "[summarize]",
+                _DEFAULT_RECONCILE_OUTPUT_FLOOR_TOKENS,
             )
         ),
         # Optional, defaulted (TD-16 v2): the synthesis + reconcile prompts. A minimal

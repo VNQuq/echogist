@@ -27,17 +27,36 @@
 # for an older model that still honors sampling and where you want a pinned title
 # (the summary filename stem) so a re-run overwrites instead of making a -2/-3 copy.
 
+# `output_per_input_ratio` — projected OUTPUT tokens per INPUT token for this model
+# under the v2 synthesis prompt. It is what the cost estimate multiplies each call's
+# input by (TD-24), so it is the ONE number to re-seed after a real run.
+#
+# RECIPE, and it needs no code and no transcript: take a finished run's own
+# "Actual cost: $X (A input + B output tokens)" line, compute B / A, add ~5%. That is
+# it. For a folder run use the run's TOTAL, which is the strongest sample you can get.
+# Biased high on purpose: the estimate must stay above the bill (CLAUDE.md).
+
 [tiers.economy]
 model_id = "claude-haiku-4-5"
 context_window = 200000
 price_in_per_mtok = 1.0
 price_out_per_mtok = 5.0
+# MEASURED 2026-09-04 on the operator's seven-lecture RU course, 59 calls end to end:
+# 311,829 output / 841,122 input = 0.3707, and the per-file spread was 0.365-0.376 —
+# tight enough across K=6..12 that the proportional model is clearly the right shape.
+# Seeded 5% above it; the resulting quote for that same run is 1.07x the real bill.
+output_per_input_ratio = 0.39
 
 [tiers.balanced]
 model_id = "claude-sonnet-5"
 context_window = 1000000
 price_in_per_mtok = 3.0
 price_out_per_mtok = 15.0
+# Measured on the validated 2026-06-27 full-coverage 3h RU run (K=4, 5 calls): 18,382
+# output over 82,599 input = 0.2225. Sonnet writes noticeably less prose than Haiku over
+# the same material, which is exactly why this knob is per-tier and not global. n=1 file,
+# so the margin here is wider (~8%) than economy's.
+output_per_input_ratio = 0.24
 # scripts/check-models.py sets this true on a generation bump; a human clears it
 # after verifying the prices above against the Anthropic pricing page. While true,
 # the summarize flow prints a one-time non-blocking notice (it never blocks the run
@@ -49,22 +68,21 @@ model_id = "claude-opus-4-8"
 context_window = 1000000
 price_in_per_mtok = 5.0
 price_out_per_mtok = 25.0
+# NOT measured — no full run on this tier yet. Left at the shipped default (the highest
+# measured ratio plus margin), so an unknown model is priced as the most verbose one we
+# have numbers for. Re-seed from the first real Opus run's own "Actual cost" line.
+output_per_input_ratio = 0.40
 
 [guard]
 # Fraction of a tier's context window usable by one single-pass transcript+prompt.
 # The overflow guard (plan §4) stops cleanly above this. Biased to estimate high.
 safe_budget_fraction = 0.8
-# Per-CALL output projection for the cost estimate (TD-21) — NOT the API cap
-# (that is [summarize].max_output_tokens). The synthesis contract is faithful prose, so
-# real output is a small fraction of the cap. Recalibrated against the full-coverage 3h RU
-# re-run (K=4, balanced/Sonnet): 18,382 output tokens over 5 calls = ~3.7k/call. (The earlier
-# 2,800 was fit to the truncated run #1, which under-produced because it dropped ~22% of the
-# lecture — it ran the quote ~0.91x the bill, UNDER it, breaking the high bias.) This is sized
-# ~25% above the observed mean — biased high so the quote stays above the bill (~1.2x), but
-# tight enough that it no longer doubles it (the old cap-based estimate ran ~2.4x). The INPUT
-# side keeps its SEPARATE Cyrillic-high bias (safe_budget_fraction / the guard estimate);
-# that is about catching an over-long transcript, not cost, and is unchanged.
-output_tokens_estimate = 4600
+# The old `output_tokens_estimate` (a flat 4,600 output tokens for EVERY call) was
+# REMOVED 2026-09-04 in favour of the per-tier `output_per_input_ratio` above (TD-24).
+# It was wrong in both halves: flat made the quote scale with the phase split instead of
+# with the material, and 4,600 under-quoted the first real folder run ($2.2394 against a
+# $2.4003 bill). Cost output is now projected per call from that call's own input.
+
 
 [summarize]
 # The ONE network stage (plan §3, T6). DATA, not code: edit the prompt TEXT here
@@ -76,8 +94,9 @@ output_tokens_estimate = 4600
 #                   model never free-chooses the wording (Не назначено / Unassigned).
 # Both are filled by build_request() in echogist/summarize.py.
 #
-# max_output_tokens is the API's hard max_tokens cap. Kept SEPARATE from and larger
-# than [guard].output_tokens_estimate (the cost projection): a flush cap would
+# max_output_tokens is the API's hard max_tokens cap. It is also the ceiling the cost
+# projection clamps a call's projected output to, but it is never the projection itself
+# (that is the per-tier output_per_input_ratio above): a flush cap would
 # truncate a long multi-section RU summary into invalid tool-use JSON and waste the
 # paid call, so it carries real headroom for Cyrillic tokenization. No beta header is
 # required at this size: Haiku 4.5 / Sonnet 4.6 cap at 64K output and Opus 4.8 at 128K.
@@ -93,6 +112,15 @@ output_tokens_estimate = 4600
 # line where the summarize call would have to switch to streaming to dodge SDK timeouts;
 # going above that is a code change, not a config edit.
 max_output_tokens = 12288
+
+# The smallest reply the reconcile call can produce — the ONE fixed per-call cost in the
+# cost model, and what stops a folder of fifty short clips quoting the same as one long
+# lecture. Derived from the reconcile prompt below, not fitted: title + essence block
+# (core_idea 250-350 words, main_skill 150-200, three questions with 2-4 sentence
+# answers) + 5-8 themes + one heading per phase is ~700 Russian words even at K=1, and RU
+# runs ~3.5 tokens/word at the guard's rate. Rounded DOWN so it stays a floor. Move it if
+# you materially change reconcile_system_prompt's word budget.
+reconcile_output_floor_tokens = 2500
 
 # Synthesis step (TD-16 v2 direct synthesis): synthesize ONE phase (a contiguous time
 # span) of the transcript into faithful, readable prose. The transcript is ground truth,
@@ -207,10 +235,11 @@ contradiction in core_idea rather than silently choosing one.
 #    24000   4         22005          54 min      0.2204   <- overflowed the cap
 #    12000   7         13203          32 min      0.3062
 #    10000   9         10335          26 min      0.3634
-# The quoted delta OVERSTATES the real one: estimate_cost_synthesis prices every call at
-# a FLAT [guard].output_tokens_estimate, so splitting looks like it multiplies output
-# while the actual prose over the same material is roughly constant. Input barely moves
-# (phases do not overlap; only per-call prompt overhead is added). See TD-24.
+# The quoted deltas above are an ARTEFACT of the old flat per-call output projection and
+# no longer occur: the cost model prices each call from its own input, so the same
+# material quotes the same output however it is split (TD-24, closed 2026-09-04). Only the
+# per-call prompt overhead still moves with K, which is real. Pick this number for
+# OUTPUT-CAP safety (a phase whose prose fits under max_output_tokens), not for price.
 phase_target_tokens = 12000
 
 # TD-26 transcript hygiene — applied to the SYNTHESIS INPUT only; the saved transcript on
@@ -236,13 +265,19 @@ min_block_words = 15
 
 [scan]
 # The folder scanner prices summaries BEFORE anything is transcribed, so it turns each
-# file's duration into a character count with these two numbers. Both are seeded high on
-# purpose: the scan figure is an UPPER BOUND, and an under-quote is the only failure mode
-# that spends money the operator did not agree to. Real Russian lecture speech runs
-# roughly 110-130 wpm at ~6 chars/word; calibrate against a folder that already has a
-# transcript before lowering either.
-words_per_minute = 150
-chars_per_word = 7
+# file's duration into a character count with these two numbers. Both are seeded above
+# measured speech on purpose: an under-quote is the only failure mode that spends money
+# the operator did not agree to.
+#
+# RESEEDED 150 x 7 -> 135 x 6.5 on 2026-09-04 (TD-23 closed). The shipped pair was never
+# measured. Against the operator's real course the measurement is 122 wpm / 6.21
+# chars/word (lecture 4, 198 blocks, direct count), corroborated across all seven
+# lectures by the run's own gate: 150 x 7 = 1050 chars/min against a real ~760.
+# 135 x 6.5 = 878 chars/min keeps a deliberate ~1.15x margin over measured speech, and
+# the whole scan quote for that course now lands ~1.4x the real bill — still high, but a
+# KNOWN margin instead of an unmeasured one, and above the bill rather than under it.
+words_per_minute = 135
+chars_per_word = 6.5
 
 [transcript]
 # Timecode granularity of the saved transcript (and the text the summarizer reads).

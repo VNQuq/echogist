@@ -36,6 +36,14 @@ RICH_THEME = Theme(
         "dim": "dim",
         "heading": "bold cyan",
         "banner": "bold cyan",
+        # A run's per-file section header. Same accent as a heading but not bold: it
+        # separates work, it does not announce it.
+        "rule": "cyan",
+        # Sub-steps INSIDE one file's work (the phase-by-phase synthesis lines). A folder
+        # run prints ~60 of them and the operator reads none of them line by line — they
+        # are there to prove the run is moving and to be scrolled back to when it is not.
+        # Muted so the file headers and the result stand out of them.
+        "detail": "dim",
     }
 )
 
@@ -73,11 +81,14 @@ class Glyphs:
     fail: str
     arrow: str
     bullet: str
+    #: The character a section rule is drawn with. Same reason as the rest of this table:
+    #: rich degrades its own box drawing, but not a Unicode char we place in our strings.
+    rule: str
     box: box.Box
 
 
-_FANCY = Glyphs(ok="✓", fail="✗", arrow="→", bullet="•", box=box.ROUNDED)
-_ASCII = Glyphs(ok="OK", fail="X", arrow=">", bullet="-", box=box.ASCII)
+_FANCY = Glyphs(ok="✓", fail="✗", arrow="→", bullet="•", rule="─", box=box.ROUNDED)
+_ASCII = Glyphs(ok="OK", fail="X", arrow=">", bullet="-", rule="-", box=box.ASCII)
 
 
 def glyphs(fancy: bool) -> Glyphs:

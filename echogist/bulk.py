@@ -4,7 +4,7 @@
 summarization is the one paid stage. Running the whole folder through TRANSCRIBE first
 means the cost gate is reached with the REAL transcript text of every file in hand, so
 the quote is the same arithmetic the single-file flow uses, summed — no duration-to-token
-projection (TD-23's two unmeasured constants are not on this path at all) and no
+projection (the scan's speech-rate constants are not on this path at all) and no
 per-file confirm the operator has to sit and answer seven times. The cost is that the
 first summary lands after the last transcription rather than after the first.
 
@@ -169,7 +169,8 @@ def folder_estimate(
     phase_inputs_per_file: Sequence[Sequence[int]],
     tier: ModelTier,
     *,
-    per_call_output_tokens: int,
+    output_cap: int,
+    reconcile_floor: int,
 ) -> CostEstimate:
     """One quote for the whole folder: the per-file estimates, summed.
 
@@ -189,7 +190,7 @@ def folder_estimate(
     total_output = 0
     for phase_inputs in phase_inputs_per_file:
         est = cost.estimate_cost_synthesis(
-            phase_inputs, tier, per_call_output_tokens=per_call_output_tokens
+            phase_inputs, tier, output_cap=output_cap, reconcile_floor=reconcile_floor
         )
         total_input += est.input_tokens
         total_output += est.output_tokens

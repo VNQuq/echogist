@@ -47,6 +47,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -134,6 +135,7 @@ class UI(Protocol):
 
     def banner(self, title: str, subtitle: str = "") -> None: ...
     def clear(self) -> None: ...
+    def drain_input(self) -> None: ...
     def select(self, prompt: str, choices: Sequence[Choice]) -> str: ...
     def text(self, prompt: str, *, default: str = "") -> str: ...
     def confirm(self, prompt: str, *, default: bool = False) -> bool: ...
@@ -145,7 +147,9 @@ class UI(Protocol):
     ) -> tuple[str, ...] | None: ...
     def pick_dir(self, prompt: str, *, initialdir: Path | None = None) -> str | None: ...
     def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None: ...
+    def rule(self, title: str) -> None: ...
     def info(self, message: str) -> None: ...
+    def detail(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
     def warn(self, message: str) -> None: ...
     def error(self, message: str) -> None: ...
@@ -277,6 +281,36 @@ class RichQuestionaryUI:
         prior cycle's answered prompts and tables don't pile up; the working log of the
         flow about to run starts on a clean screen."""
         self.console.clear()
+
+    def drain_input(self) -> None:
+        """Discard anything already typed at the console, unread.
+
+        A folder run holds the terminal for an hour with no prompt on screen. Every
+        keystroke made in that window — a key pressed to check the machine is alive, a
+        stray click-through, a wake-up tap — sits in the OS input buffer, and the next
+        prompt reads it the instant it opens. That is the mechanism behind the 2026-09-04
+        run, which finished seven summaries and then opened a folder picker nobody asked
+        for: the main menu appeared, took an answer it was not given, and launched the row
+        that answer selected. What produced the keystroke was never established — the log
+        shows only that the menu was answered instantly and that the answer was row 4. The
+        mechanism is the part a fix can close, and this closes it whatever the source.
+
+        So the menu drains the buffer before asking anything after a flow. Type-ahead into
+        a fresh prompt still works; only input typed while EchoGist was not asking is
+        dropped. Every failure mode here is non-fatal — a terminal that cannot be drained
+        just keeps its old behavior — so the whole thing is wrapped: this must never be the
+        reason a finished run ends in a traceback.
+        """
+        with suppress(Exception):
+            if os.name == "nt":
+                import msvcrt
+
+                while msvcrt.kbhit():  # type: ignore[attr-defined]  # nt-only, guarded
+                    msvcrt.getwch()  # type: ignore[attr-defined]  # nt-only, guarded
+                return
+            import termios
+
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
 
     def select(self, prompt: str, choices: Sequence[Choice]) -> str:
         # A dunder-wrapped value (``__back__`` / ``__cancel__``) is a navigation control,
@@ -556,21 +590,53 @@ class RichQuestionaryUI:
         return False
 
     # -- output -------------------------------------------------------------- #
+    def rule(self, title: str) -> None:
+        """A titled horizontal rule — the header of one unit of work in a long run.
+
+        A folder run prints sixty-odd lines of equal weight, and finding where lecture
+        five started means reading all of them. A rule per file turns that wall into
+        sections the eye can skip through, which is the whole difference between a log
+        that scrolls past and one an operator can actually use an hour later.
+        """
+        self.runlog.write(title, level="SECTION")
+        self.console.print(
+            Rule(Text(title, style="rule"), characters=self.glyphs.rule, style="rule")
+        )
+
+    # Every print below passes markup=False AND highlight=False. markup=False is the old
+    # promise: a filename or an ffmpeg line carrying [...] is text, not console markup.
+    # highlight=False is the other half, added when the styled output was first looked at
+    # end to end: rich's repr highlighter recolors numbers, paths, times and quotes INSIDE
+    # our strings, so a muted sub-step came out with bright cyan digits and yellow dots —
+    # the style we asked for lost an argument with a highlighter nobody asked for. Every
+    # line now renders in exactly one style: the one this method chose.
     def info(self, message: str) -> None:
         self.runlog.write(message)
-        self.console.print(message, style="info", markup=False)
+        self.console.print(message, style="info", markup=False, highlight=False)
+
+    def detail(self, message: str) -> None:
+        """A sub-step inside the current section — muted, and never the point.
+
+        The phase-by-phase synthesis lines live here. They exist to prove the run is
+        moving and to be scrolled back to when it is not; at the same weight as the
+        result they bury it.
+        """
+        self.runlog.write(message, level="DETAIL")
+        self.console.print(message, style="detail", markup=False, highlight=False)
 
     def success(self, message: str) -> None:
         self.runlog.write(message, level="OK")
-        self.console.print(f"{self.glyphs.ok} {message}", style="success", markup=False)
+        self.console.print(
+            f"{self.glyphs.ok} {message}", style="success", markup=False, highlight=False
+        )
 
     def warn(self, message: str) -> None:
         self.runlog.write(message, level="WARN")
-        self.console.print(message, style="warn", markup=False)
+        self.console.print(message, style="warn", markup=False, highlight=False)
 
     def error(self, message: str) -> None:
         self.runlog.write(message, level="ERROR")
-        self.console.print(message, style="error", markup=False)
+        self.console.print(message, style="error", markup=False, highlight=False)
 
     def table(self, title: str, rows: Sequence[Choice]) -> None:
         """Render rows as a two-column table, treating every cell as PLAIN TEXT.
@@ -777,6 +843,9 @@ class StubUI:
     def clear(self) -> None:
         self.messages.append(("clear", ""))
 
+    def drain_input(self) -> None:
+        self.messages.append(("drain", ""))
+
     def select(self, prompt: str, choices: Sequence[Choice]) -> str:
         self.messages.append(("select", prompt))
         return str(self._pop())
@@ -831,8 +900,14 @@ class StubUI:
         self._revealed_priority = priority
         self.messages.append(("reveal_dir", str(path)))
 
+    def rule(self, title: str) -> None:
+        self.messages.append(("rule", title))
+
     def info(self, message: str) -> None:
         self.messages.append(("info", message))
+
+    def detail(self, message: str) -> None:
+        self.messages.append(("detail", message))
 
     def success(self, message: str) -> None:
         self.messages.append(("success", message))

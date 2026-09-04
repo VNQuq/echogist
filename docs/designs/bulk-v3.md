@@ -393,6 +393,8 @@ The chain, closed-form (no synthetic string is materialised, see the note on cos
 5. `phase_input_tokens = [ceil(body / K) + PROMPT_OVERHEAD] * K`, then
    `cost.estimate_cost_synthesis(phase_input_tokens, tier,
    per_call_output_tokens=model_config.guard.output_tokens_estimate)`
+   *(SUPERSEDED 2026-09-04, TD-24: the signature is now `output_cap=` + `reconcile_floor=`,
+   and the output side is per-tier `output_per_input_ratio`, not a flat per-call constant.)*
 
 **Step 5 is where the first draft of this doc was wrong, in the forbidden direction.**
 `guard.estimate_input_tokens` folds a flat `_PROMPT_OVERHEAD_TOKENS = 1000` in ONCE, while
@@ -417,7 +419,8 @@ identical result at O(1) per file.
 
 New constants, both config data, both seeded high for Russian:
 `WORDS_PER_MINUTE = 150`, `CHARS_PER_WORD = 7`. The other two values in the chain
-(`chunk.phase_target_tokens` at `config.py:168`, `guard.output_tokens_estimate` at
+(`chunk.phase_target_tokens` at `config.py:168`, `guard.output_tokens_estimate` (removed
+2026-09-04, see TD-24) at
 `config.py:129`) already exist and carry their own bias policy.
 
 **The chain runs per file and the results are summed.** K is a per-file quantity; summing

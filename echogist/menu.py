@@ -62,10 +62,11 @@ import contextlib
 import hashlib
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 
 from . import (
     batch,
@@ -366,7 +367,10 @@ def _run_summary(
         ui.warn(_oversize_phase_message(p, est, budget, tier))
         return None
     estimate = cost.estimate_cost_synthesis(
-        phase_inputs, tier, per_call_output_tokens=model_config.guard.output_tokens_estimate
+        phase_inputs,
+        tier,
+        output_cap=model_config.summarize.max_output_tokens,
+        reconcile_floor=model_config.summarize.reconcile_output_floor_tokens,
     )
 
     api_key = deps.get_api_key()
@@ -447,8 +451,12 @@ def _run_summary(
             shows what is in flight RIGHT NOW next to a running clock. Without the second
             half a phase call is minutes of a motionless label, which reads as a hung
             process — the operator killed a working run over exactly that on 2026-09-04.
+
+            They print MUTED: a seven-file run emits ~60 of these, and at the weight of the
+            result they bury it. They are proof of movement and a place to scroll back to,
+            not the thing the operator is waiting for.
             """
-            ui.info(message)
+            ui.detail(message)
             sp.update(message.rstrip("."))
 
         try:
@@ -918,8 +926,10 @@ def _report_scan(
         ui.table("Folders", scan.folder_rows(result, index))
     ui.table("Totals", scan.totals_rows(result, model_config, tier))
     ui.info(
-        "The dollar figure is an UPPER BOUND: it assumes every file is summarized from "
-        "scratch at the current tier, and it does not subtract work already done."
+        "The dollar figure is a PROJECTION from duration, biased high (~1.3x the bill on "
+        "the one course measured end to end): every file summarized from scratch at the "
+        "current tier, nothing already done subtracted. The exact price is quoted from "
+        "the real transcripts before anything is paid for."
     )
 
     duplicates = scan.collision_rows(result)
@@ -1063,7 +1073,7 @@ def _bulk_transcript_texts(
         return path
 
     def _announce(index: int, total: int, source: Path) -> None:
-        ui.info(f"[{index}/{total}] {source.name}")
+        ui.rule(f"[{index}/{total}] {source.name}")
 
     report = bulk.run_phase(
         plan.to_transcribe,
@@ -1188,7 +1198,10 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
         for src in ordered
     ]
     estimate = bulk.folder_estimate(
-        per_file, tier, per_call_output_tokens=model_config.guard.output_tokens_estimate
+        per_file,
+        tier,
+        output_cap=model_config.summarize.max_output_tokens,
+        reconcile_floor=model_config.summarize.reconcile_output_floor_tokens,
     )
     calls = sum(len(phases) + 1 for phases in per_file)
     ui.info(f"{len(ordered)} file(s) ready to summarize — {calls} cloud calls in total.")
@@ -1203,9 +1216,16 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
         return
 
     # Phase 2 — the paid half. Gated once, above.
-    spent: list[cost.CostEstimate] = []
+    # Keyed by source, not a positional list: the report prints a price PER FILE, and a
+    # file that fails after partial spend appends nothing, so position stops matching the
+    # file it belongs to the moment anything goes wrong.
+    spent: dict[Path, cost.CostEstimate] = {}
+    started = monotonic()
 
     def _summarize_step(source: Path) -> Path:
+        def _record(actual: cost.CostEstimate) -> None:
+            spent[source] = actual
+
         out = _run_summary(
             deps,
             settings,
@@ -1214,25 +1234,47 @@ def _flow_bulk(deps: Deps, root: Path | None = None, *, summarize_after: bool = 
             source,
             source.stem,
             gate=False,
-            on_cost=spent.append,
+            on_cost=_record,
         )
         if out is None:
             raise _StageFailed(f"{source.name} produced no summary (see the message above)")
         return out
 
     def _announce(index: int, total: int, source: Path) -> None:
-        ui.info(f"[{index}/{total}] {source.name}")
+        ui.rule(f"[{index}/{total}] {source.name}")
 
     try:
         summarized = bulk.run_phase(
             ordered, _summarize_step, on_start=_announce, recoverable=(_StageFailed,)
         )
     except BulkCancelled as exc:
-        _report_bulk(ui, exc.report, stage="Summarized", cancelled=True, spent=spent)
+        _report_bulk(
+            ui,
+            exc.report,
+            stage="Summarized",
+            cancelled=True,
+            spent=spent,
+            quoted=estimate,
+            elapsed=monotonic() - started,
+        )
         return
-    _report_bulk(ui, summarized, stage="Summarized", cancelled=False, spent=spent)
+    _report_bulk(
+        ui,
+        summarized,
+        stage="Summarized",
+        cancelled=False,
+        spent=spent,
+        quoted=estimate,
+        elapsed=monotonic() - started,
+    )
     if summarized.done:
         ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
+
+
+def _usd(amount: float) -> str:
+    """USD to 4 decimals — the same shape ``cost`` prints, so the run report and the
+    per-file "Actual cost" lines above it are read as the same number, not two roundings."""
+    return f"${amount:,.4f}"
 
 
 def _report_bulk(
@@ -1241,22 +1283,60 @@ def _report_bulk(
     *,
     stage: str,
     cancelled: bool,
-    spent: Sequence[cost.CostEstimate] = (),
+    spent: Mapping[Path, cost.CostEstimate] | None = None,
+    quoted: cost.CostEstimate | None = None,
+    elapsed: float | None = None,
 ) -> None:
-    """Headline counts, then a row per failure — never a row per success.
+    """The close of a folder run: what each file cost, then what the run cost.
 
-    Mirrors the batch report: the operator already watched the successes scroll past, and
-    burying the one file that broke under six that did not is how a failure goes unseen.
+    A row per FILE, because after an hour away the operator's questions are per file —
+    which ones landed, what each one cost — and the console history that would answer them
+    is sixty scrolled-past lines. Failures keep their own loud rows underneath; a file that
+    broke says so in its row AND in an error line, since a red cell in a seven-row table is
+    exactly the thing a tired reader skips.
 
-    ``spent`` is the audited cost of every call the run actually made. Its total is the
-    close of the transaction the gate opened: the operator agreed to one quote, and this
-    is the bill. It is also the only place the quote's real bias is visible.
+    The totals close the transaction the gate opened. ``quoted`` is what the operator
+    agreed to and ``spent`` is the bill, shown side by side with the ratio between them:
+    that ratio is the only feedback the cost model gets, and it is what the tier's
+    ``output_per_input_ratio`` is re-seeded from (see ``config/models.toml``).
     """
-    rows = [(stage, str(report.done)), ("Failed", str(report.failed))]
+    spent = spent or {}
+    ui.rule(f"{stage} — result")
+
+    # A row per file EARNS its place only when it carries something the scrolled-past
+    # console did not: a price, or a failure. On the free transcribe phase — which also
+    # reports mid-run, right before the cost gate — seven rows reading "done" would push
+    # the one number the operator is about to answer for off the screen.
+    if spent or report.failed:
+        rows: list[Choice] = []
+        for item in report.items:
+            if item.status == "failed":
+                rows.append((item.source.name, "failed"))
+                continue
+            # The price IS the success mark on the paid phase — a row with a number in it
+            # worked. No glyph: these cells are plain text on a console that may be cp437,
+            # and theme.Glyphs (not menu.py) is the only place allowed to pick a symbol.
+            price = spent.get(item.source)
+            rows.append((item.source.name, _usd(price.total_usd) if price else "done"))
+        ui.table("Per file", rows)
+
+    totals: list[Choice] = [(stage, str(report.done))]
+    if report.failed:
+        totals.append(("Failed", str(report.failed)))
+    if elapsed is not None:
+        totals.append(("Time", scan.human_hours(elapsed)))
     if spent:
-        total = sum(item.total_usd for item in spent)
-        rows.append(("Actually spent", f"${total:,.4f}"))
-    ui.table(f"{stage} — result", rows)
+        bill = sum(item.total_usd for item in spent.values())
+        totals.append(("Actually spent", _usd(bill)))
+        if quoted is not None and bill > 0:
+            totals.append(
+                (
+                    "Quoted before the run",
+                    f"{_usd(quoted.total_usd)} ({quoted.total_usd / bill:.2f}x)",
+                )
+            )
+    ui.table("Totals", totals)
+
     for item in report.failures:
         ui.error(f"{item.source.name}: {item.detail}")
     if cancelled:
@@ -1522,3 +1602,8 @@ def run_menu(deps: Deps | None = None) -> int:
             _safe_error(ui, f"{exc}\nReturning to the main menu.")
         except Exception as exc:  # noqa: BLE001 - backstop: never crash the console
             _safe_error(ui, f"Unexpected error: {exc}\nReturning to the main menu.")
+        # A flow can hold the console for an hour with nothing on screen to answer. Drop
+        # whatever was typed into that silence before re-opening the menu, or the menu
+        # answers itself with it — which is exactly what happened after the 2026-09-04
+        # folder run: seven finished summaries, then an unasked-for folder picker.
+        ui.drain_input()

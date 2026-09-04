@@ -11,59 +11,42 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-23 — The scan projection constants are unmeasured** · LOW · created 2026-09-04
-  (bulk v3 increment 1). `config.ScanConfig` turns a file's DURATION into a token count with
-  `words_per_minute = 150` and `chars_per_word = 7` (`config/models.toml`, `[scan]`), because at
-  scan time nothing has been transcribed. Neither number is measured. Both are seeded HIGH on
-  purpose — CLAUDE.md requires the estimate to run high, and the figure is labelled an upper bound
-  in the console — but the SIZE of the margin is unknown, and a quote several times the real bill
-  is nearly as useless as one that undershoots. Real Russian lecture speech runs roughly 110-130
-  wpm at ~6 chars/word, so the shipped pair may be biased high by ~1.5x on top of the
-  all-Cyrillic token rate. **Trigger for closure:** the first scan of a folder that already holds
-  a transcript — compare the projected character count against `len(transcript_text)` and reseed
-  both values from the ratio. Cheap, offline, and it needs no code change, only the two numbers in
-  `models.toml`. **The 2026-09-04 real-folder scan did NOT close this**, contrary to the plan:
-  all seven folders reported 0 transcript candidates, so the trigger condition was never met.
-  An arithmetic cross-check against the validated 2026-06-27 run (Sonnet, 2h58m57s, $0.5237;
-  economy is exactly a third of those prices, so ~$0.175) against the scan's own $0.093/hour
-  puts the projection ~1.6x high — inside the band this entry predicted, but not a measurement.
-  **The folder run does not depend on these constants**: it gates on the real transcripts
-  (`bulk.folder_estimate`), so only the pre-transcription scan quote is still affected.
-  **MEASURED 2026-09-04** against the first real transcript (lecture 4, 3h22m57s, 198 blocks):
-  153,365 speech characters, 24,698 words = **122 wpm, 6.21 chars/word** — almost exactly the
-  110-130 / ~6 band this entry predicted. The shipped 150 x 7 = 1050 chars/min against an actual
-  756 is a **1.39x** high bias, which independently corroborates the folder run's own numbers
-  (scan $2.20 vs the real-transcript gate $1.5244 = 1.44x). **Deliberately NOT reseeded yet:**
-  this is n=1, the variance across the other six lectures is unmeasured, and the error direction
-  that matters (under-quoting) is the one that spends unagreed money. Reseed to ~135 wpm /
-  ~6.5 chars/word once a second and third transcript agree; until then the margin stays.
+- **TD-29 — a dropped anchor prints in the same voice as a clean one** · MEDIUM ·
+  created 2026-09-04 (step 4, and step 4 made it slightly worse). `summarize` reports
+  anchor validation through one line — `Validated anchors: 25 exact, 32 snapped, 4
+  dropped.` — and a DROPPED anchor is the one fidelity signal on that line: it means the
+  model emitted a timecode that resolves to nothing in the transcript. `0 dropped` and
+  `4 dropped` render identically. Step 4 muted the whole synthesis channel (right for the
+  other 58 lines, wrong for this one), so the signal is now dimmer than it was.
+  **Why it was not fixed here:** the fix is to widen the stage's `log:
+  Callable[[str], None]` seam to carry a severity, which touches `summarize`'s public
+  contract, every caller and their tests — and this is fidelity signalling, which
+  CLAUDE.md routes through its own review. String-sniffing the message in `menu._progress`
+  was the cheap alternative and was rejected: the console would then depend on the wording
+  of a sentence nobody would think to keep stable. **Trigger for closure:** the next change
+  that touches the summarize log seam for any reason, or the first run where a dropped
+  anchor is missed. The operator's own run had 2 and 4 drops in two phases of two files.
 
-- **TD-24 — the scan quote is labelled an UPPER BOUND that the arithmetic does not guarantee** ·
-  LOW · created 2026-09-04 (found by the increment-1 review army). `scan.project_file` prices
-  output at `guard.output_tokens_estimate`, whose own docstring in `cost.py` calls it "a REALISTIC
-  per-call output projection... NOT the API max_tokens cap", sized ~25% above the observed mean
-  (TD-21). The INPUT side is biased high several ways over (all-Cyrillic token rate, 150 wpm, 7
-  chars/word — see TD-23), so in practice the total almost certainly overshoots. But "upper bound"
-  is a guarantee, and formally the output half does not make it: a run whose phases come back
-  unusually verbose can exceed the quote. The console says UPPER BOUND in two places
-  (`scan.totals_rows`, `menu._report_scan`). Two honest fixes, and the choice is the operator's:
-  price the scan's output side at a real ceiling (diverges from the reviewed design, which
-  specified `per_call_output_tokens=output_tokens_estimate`), or soften the label to "projected"
-  and say what it is biased on. **Not urgent:** this figure is display-only. The actual spend gate
-  (`cost.confirm_proceed`, `menu.py`) recomputes from the real transcript text, so a scan quote
-  can mislead the folder-level preview but cannot let money out the door unseen.
-  **2026-09-04, the first real run made this concrete and widened it.** `output_tokens_estimate`
-  (4,600) is applied FLAT per call, independent of phase size, and both halves of that are now
-  measurably wrong: (a) on the `economy` tier a ~22k-token phase produced MORE than the 8,192 cap
-  and was truncated, so the projection ran UNDER the bill — the exact direction the "upper bound"
-  label forbids; (b) because the model is flat, halving the phase size looks like it multiplies
-  total output (K+1 calls x 4,600) when the real prose over the same material is roughly constant,
-  so the quote now over-penalizes the very split that makes the run safe (this file: $0.2204 at
-  K=4 vs $0.3062 at K=7, a delta that mostly is not real). The honest fix is to make the output
-  projection PROPORTIONAL to each phase's input tokens with a per-tier ratio (Haiku >=0.39
-  measured as a truncated lower bound, Sonnet ~0.18 from the 2026-06-27 run) instead of a flat
-  constant. **Trigger for closure:** the first folder run that completes end to end on real
-  material — its `Actually spent` total against the gate quote gives the per-tier ratio directly.
+- **TD-28 — the summary text contains characters the PDF cannot draw** · MEDIUM ·
+  created 2026-09-04 (found in the first full folder run's own log). Three of the seven
+  summaries made `fpdf` report a missing glyph: `'描'`, `'技'`, `'催化剂'`. Two separate
+  problems sit behind that one warning, and only one of them is about fonts.
+  1. **Why is Chinese in a Russian summary at all?** The material is a RU lecture and the
+     tier is `economy` (Haiku). Nothing in the transcript, the prompt or the schema asks
+     for CJK. The most likely reading is the model reaching for a Chinese term as a gloss
+     ("катализатор" -> 催化剂) — which, if so, is text the author never said, appearing
+     WITHOUT the `[интерпретация]:` marker the fidelity contract requires for anything
+     beyond what the author said. That is a fidelity question, not a typography one, and
+     it is the half that matters. Unverified: the summaries are on the operator's Windows
+     box and `output/` is machine-local, so the actual sentences have not been read yet.
+  2. **The renderer degrades silently.** `render` prints the missing-glyph line to the
+     console and then emits the PDF anyway, so the operator gets a document with holes in
+     it and a warning that scrolls past between two `✓ Done` lines. Whatever is decided
+     about (1), a character that cannot be drawn must not reach the PDF unannounced.
+  **Trigger for closure:** the operator reading the three flagged passages in the finished
+  summaries — that settles whether this is a fidelity violation to fix in the prompt or a
+  cosmetic gap to fix in the font. **Blocks nothing:** anchors, costs and the other six
+  files are unaffected.
 
 - **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
   **HIGH** · created 2026-09-04 (operator call, mid-session). The tree is fixed and flat:
@@ -108,15 +91,18 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   land once the two-module menu has settled which flows exist.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since, of which TD-22 is
-now closed and TD-23/24/27 remain open (TD-25 and TD-26 both closed the same day, TD-26 the
-day it was opened). The other open forward item is
+branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which TD-27, TD-28 and TD-29 remain open: TD-22, TD-25
+and TD-26 closed on 2026-09-04, and TD-23/TD-24 closed the day after the first full folder
+run, off that run's own audited numbers. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- TD-23 — the scan projection constants were unmeasured · closed 2026-09-04 · reseeded `150 wpm x 7 chars/word` -> `135 x 6.5` in `config/models.toml`. The shipped pair was a guess; measurement (lecture 4, 198 blocks, direct count) gives 122 wpm / 6.21 chars/word, corroborated across all seven lectures by the run's own gate. 150 x 7 = 1050 chars/min against a real ~760 was a 1.4x bias nobody had sized. The new pair keeps a deliberate ~1.15x margin over measured speech, and the whole-course scan quote now lands 1.31x the real $2.4003 bill — high, as required, but a KNOWN margin. Recalibration stays a two-number config edit.
+- TD-24 — the scan quote was labelled an UPPER BOUND the arithmetic did not guarantee · closed 2026-09-04 · **both halves fixed, and the label was the smaller half.** The first full folder run proved the quote could run UNDER the bill: the gate said $2.2394 against $2.4003 (0.93x), and the scan said ~$2.20 against the same bill. Cause: `[guard].output_tokens_estimate`, a FLAT 4,600 output tokens for every call regardless of that call's size. Removed. Output is now projected per call as `tier.output_per_input_ratio x that call's input`, clamped by `[summarize].max_output_tokens` and floored, for the reconcile call only, at `reconcile_output_floor_tokens` (the one genuinely fixed per-call cost — without it a folder of short clips quotes like a single long file). The ratio is per-tier because it is a property of the model (Haiku 0.3707 measured over 59 calls; Sonnet 0.2225 over 5) and is re-seeded from any finished run's own "Actual cost" line: output/input, plus ~5%. Consequences: the quote no longer moves with the phase split (K=4 vs K=7 on the same lecture quoted $0.2204 vs $0.3062 for prose that is the same size either way), and the same run now quotes 1.07x its bill. The display label went from "UPPER BOUND" to "PROJECTION, biased high" with the measured margin named — the arithmetic is biased high in every term but a projection from DURATION is not a guarantee, and saying so is the honest half of the fix.
 
 - TD-25 — `output/` pruning was by NAME, so a junction under another name leaked · closed 2026-09-04 · `scan.walk`/`scan_tree` take an `exclude` directory and prune any subtree whose RESOLVED path is it (compared through `os.path.normcase`, since Windows `resolve` does not fold case); `menu` passes `deps.base / "output"` at both scan sites. The literal-name rule stays as the floor for callers that do not know the layout (`batch.expand_selection`). The regression test does not need a junction: any artifact tree not literally named `output` reproduces it.
 - TD-26 — Whisper boilerplate reached the summary · closed 2026-09-04 · `chunk.drop_degenerate_blocks` trims the synthesis INPUT only (the saved transcript stays verbatim ground truth); two measured, content-agnostic rules — a unique-word-ratio floor for the repetition loop, plus adjacency for the short credit line touching it. Drops 10 of 198 blocks on the real lecture with no false positives, and is reported to the operator rather than skipped silently.

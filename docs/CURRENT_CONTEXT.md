@@ -1,6 +1,7 @@
 # Current Context
 
-**Updated:** 2026-09-04 — **bulk v3 increments 0, 1 and 2 shipped; real folder scanned; folder run unrun on real data.**
+**Updated:** 2026-09-04 — **the first full folder run finished: 7 lectures, 59 calls, $2.4003. Cost model
+rebuilt on its numbers (TD-23, TD-24 closed) and step 4 (оформление) shipped.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -56,13 +57,11 @@ the spec; only what the code cannot tell you lives here.
   Windows). `naming.resolve_source` does NOT (a dedup key across a tree — folding made `Lecture.mp4` and
   `lecture.mp4` one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
 - **The real folder (Windows, 2026-09-04):** 7 files, one per folder, 23h43m, 8.0 GB, **0 duplicate names,
-  0 unreadable, 0 transcript candidates**, $2.20 upper bound at `economy`. It killed the case for increment 2's
-  naming machinery and did NOT calibrate TD-23 (no transcript to compare against — see that entry).
+  0 unreadable**. It killed the case for increment 2's naming machinery.
 - **Increment 2 ✓ the folder run** (`bulk.py`, menu row 5 `Summarize a folder`; POSITIONAL keys — Settings/Exit
   are now 6/7). **Two phases:** TRANSCRIBE the whole folder (local, free), then ONE exact quote over the real
   transcripts and ONE confirm, then the paid calls. No per-file gate; that is the babysitting it removes.
-  TD-23's duration→token constants are off this path; **TD-24 is NOT dissolved by it** — the output side is
-  still `output_tokens_estimate`, exactly as the single-file flow prices it.
+  The duration→token constants are off this path: it prices the REAL transcripts.
 - **The collision machinery was NOT built.** `bulk.plan_run` instead refuses the one operation that is wrong
   under a collision: reusing a saved transcript whose stem is ambiguous in either direction. Re-transcribing is
   free and visible; summarizing one lecture from another's transcript is paid and silent. The SUMMARY skip has
@@ -75,21 +74,50 @@ the spec; only what the code cannot tell you lives here.
   222 MiB threshold works out to 206 kbps for the shortest lecture and 94 kbps for the longest.
 - **Pinned regressions:** cross-source summary prose (inc 0); cost estimate biased low (inc 1); the folder
   gate asked ONCE not per file, and `folder_estimate` summing per-file quotes rather than flattening them into
-  one reconcile (inc 2 — flattening under-quotes by `files - 1` calls). 618 tests green.
+  one reconcile (inc 2). Plus the cost model's own calibration test, which reconstructs the 2026-09-04 run
+  from its published numbers and fails if a quote ever drops under that bill again. 659 tests green.
 
 ## Next
 
-1. **Run the folder run on the real lecture folder (Windows).** Everything is shipped and green
-   in CI against stubs; it has never touched a real recording or the real API. Start it, let the
-   7 transcripts build, then read the ONE quote before confirming. Expect it near $1.40, not the
-   scan's $2.20 (that quote projects from duration; this one is computed from the real text).
-2. **Calibrate TD-23 from the first transcript** — compare the scan's projected character count
-   against `len(transcript_text)` and reseed `words_per_minute`/`chars_per_word` in
-   `config/models.toml`. Two numbers, no code change.
-3. **Decide TD-24** (soften the "UPPER BOUND" label, or price the scan's output at a real
-   ceiling). Its trigger has fired; it is blocked on the real `Actually spent` total from a
-   folder run, which gives the per-tier output/input ratio directly. TD-25 is CLOSED
-   (2026-09-04): the walk now prunes on the resolved artifact path, not the name.
-4. **Review the increment 1b draft** at `docs/designs/mp3-reencode-1b.md` — NOT approved, NOT
-   implemented, two open questions plus a MiB/MB unit discrepancy.
-5. **First live run of `scripts/check-models.py`** on a box with a key. Open from before.
+**The run that changed things (2026-09-04).** Seven RU lectures, 23h43m, `economy`/Haiku, 59 cloud
+calls, **$2.4003 actually spent**, 0 failures, every phase's anchors validated. It is the first end-to-end
+paid folder run and it is now the calibration fixture for everything below.
+
+- **The cost model was rebuilt on it (TD-24 closed).** The flat per-call output projection
+  (`[guard].output_tokens_estimate = 4600`) is GONE. Output is projected per call as
+  `tier.output_per_input_ratio x that call's input`, clamped by `max_output_tokens`, with a floor under
+  the reconcile call only (`[summarize].reconcile_output_floor_tokens = 2500` — the one real fixed
+  per-call cost; without it a folder of short clips quotes like one long file). The gate quoted **0.93x**
+  the bill before, **1.07x** now, and it no longer moves when the phase split changes.
+  **Re-seed a tier from any finished run's own "Actual cost" line: output/input, plus ~5%.** No code, no
+  transcript. Measured: economy 0.3707 -> seeded 0.39; balanced 0.2225 -> 0.24; flagship unmeasured.
+- **TD-23 closed:** `[scan]` reseeded 150x7 -> 135x6.5. The scan quote for that same course was ALSO
+  under the bill (~$2.20 vs $2.4003); it now lands 1.31x, and the console label went from "UPPER BOUND"
+  to "PROJECTION, biased high" with the margin named.
+- **The stray folder picker is fixed.** After the run finished, the main menu launched `Scan a folder`
+  on its own. A menu prompt reads whatever was typed while a flow held the console with nothing to
+  answer, so `ui.drain_input()` now flushes the console buffer after every flow returns, before the menu
+  re-opens. Type-ahead into a visible prompt still works. **The keystroke's origin was never proven** —
+  only the mechanism, which the fix closes regardless.
+- **TD-28 opened (MEDIUM):** three summaries contain Chinese characters (`描`, `技`, `催化剂`) that the
+  PDF font cannot draw, and `render` emits the PDF anyway. The font gap is the small half; text the
+  author never said, unmarked, is the half that matters. Needs the operator to read those passages.
+
+**Step 4 — оформление, SHIPPED.** Three changes, all sized by the seven-file run rather than by taste.
+A `ui.rule()` section header per file, so ~60 flat lines become sections the eye skips through. The
+phase-by-phase synthesis lines print MUTED (`ui.detail`), so they stop competing with the result.
+The end-of-run report gained a row per file with what it cost, plus Time and the quote next to the bill
+with the ratio between them — that ratio is the only feedback the cost model gets, and it is what
+`output_per_input_ratio` is re-seeded from. One thing only a LOOK could find: rich's repr highlighter
+was recoloring numbers, paths and times INSIDE our own styled strings, so a muted line came out with
+bright cyan digits. Every print now passes `highlight=False` as well as `markup=False`.
+
+1. **Read the three flagged passages** (TD-28) and say whether the CJK is a gloss the model invented.
+2. **TD-29 (MEDIUM)** — a dropped anchor prints in the same voice as a clean one, and muting the
+   synthesis channel made it dimmer. Needs the `log` seam to carry a severity; own review.
+3. **TD-27 (HIGH) — decide the `output/` artifact-release unit** and land a real `paths` module.
+   Trigger: before the SECOND real course goes through the folder run. That trigger is now close.
+4. **Restore hand-picked file subsets as a menu row** — awaiting whether the operator uses it.
+5. **Streaming the model reply** — own change, own review. Older open items unchanged: the increment 1b
+   draft (`docs/designs/mp3-reencode-1b.md`, NOT approved), and the first live `scripts/check-models.py`
+   run on a box with a key.

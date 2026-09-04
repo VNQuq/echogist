@@ -581,7 +581,7 @@ def _cyrillic_tokens_per_char() -> float:
 def project_file(
     duration_seconds: float, model_config: ModelConfig, tier: ModelTier
 ) -> CostEstimate:
-    """Upper-bound cost of summarizing ONE file of this duration, priced against ``tier``.
+    """Projected cost of summarizing ONE file of this duration, priced against ``tier``.
 
     Duration is all there is to go on at scan time — nothing has been transcribed — so
     the chain is seconds -> words -> characters -> tokens -> phases -> dollars, with every
@@ -609,14 +609,15 @@ def project_file(
     return cost.estimate_cost_synthesis(
         [per_phase] * phases,
         tier,
-        per_call_output_tokens=model_config.guard.output_tokens_estimate,
+        output_cap=model_config.summarize.max_output_tokens,
+        reconcile_floor=model_config.summarize.reconcile_output_floor_tokens,
     )
 
 
 def project_cost(
     files: Iterable[MediaFile], model_config: ModelConfig, tier: ModelTier
 ) -> CostEstimate:
-    """Upper-bound cost of summarizing every file, priced against ``tier``.
+    """Projected cost of summarizing every file, priced against ``tier``.
 
     Per file, then summed. K is a per-file quantity, so summing the durations first and
     computing one K for the total would be wrong in both directions: it would over-count
@@ -703,7 +704,7 @@ def totals_rows(result: ScanResult, model_config: ModelConfig, tier: ModelTier) 
         ("Total duration", human_hours(result.total_seconds)),
         ("Total size", human_size(result.total_bytes)),
         (
-            f"Summaries (upper bound, '{tier.name}')",
+            f"Summaries (projected, '{tier.name}')",
             f"${estimate.total_usd:,.2f}",
         ),
         ("Duplicate name groups", f"{len(duplicate_groups):,}"),

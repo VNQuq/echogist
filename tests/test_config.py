@@ -28,7 +28,6 @@ price_out_per_mtok = 5.0
 
 [guard]
 safe_budget_fraction = 0.8
-output_tokens_estimate = 2000
 
 [summarize]
 max_output_tokens = 4096
@@ -216,16 +215,36 @@ def test_phase_target_invalid_fails_loud(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # [scan] — the scanner's speech-rate constants: optional, defaulted, validated
 # --------------------------------------------------------------------------- #
+def test_tier_output_ratio_loads_and_defaults_high() -> None:
+    """The cost model's output side is a per-tier ratio (TD-24). A tier that declares one
+    gets it; a hand-added tier that does not is priced as the most verbose model measured,
+    never as a cheap one — an under-quote is the failure that spends unagreed money."""
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.tier("economy").output_per_input_ratio == 0.39  # measured, seven-lecture run
+    assert cfg.tier("balanced").output_per_input_ratio < cfg.tier("economy").output_per_input_ratio
+
+
+def test_shipped_reconcile_floor_loads() -> None:
+    cfg = load_model_config(REPO_MODELS)
+    assert cfg.summarize.reconcile_output_floor_tokens == 2500
+
+
+def test_tier_without_a_ratio_falls_back_to_the_high_default(tmp_path: Path) -> None:
+    cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
+    assert cfg.tier("economy").output_per_input_ratio == 0.40
+    assert cfg.summarize.reconcile_output_floor_tokens == 2500
+
+
 def test_shipped_scan_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
-    assert cfg.scan.words_per_minute == 150.0
-    assert cfg.scan.chars_per_word == 7.0
+    assert cfg.scan.words_per_minute == 135.0
+    assert cfg.scan.chars_per_word == 6.5
 
 
 def test_missing_scan_table_uses_defaults(tmp_path: Path) -> None:
     cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
-    assert cfg.scan.words_per_minute == 150.0
-    assert cfg.scan.chars_per_word == 7.0
+    assert cfg.scan.words_per_minute == 135.0
+    assert cfg.scan.chars_per_word == 6.5
 
 
 def test_scan_constants_override_parses(tmp_path: Path) -> None:

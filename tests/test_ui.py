@@ -9,6 +9,7 @@ double the whole menu suite rides on. Killswitch-safe: no model, no key, no netw
 from __future__ import annotations
 
 import io
+import os
 import re
 import sys
 import types
@@ -679,3 +680,89 @@ def test_a_ui_built_without_a_log_path_writes_nothing(tmp_path: Path) -> None:
 
     assert real.runlog.path is None
     assert list(tmp_path.iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# drain_input — the buffered-keystroke fix
+# --------------------------------------------------------------------------- #
+def test_drain_input_flushes_the_posix_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    import termios
+
+    flushed: list[tuple[int, int]] = []
+    monkeypatch.setattr("os.name", "posix")
+    monkeypatch.setattr(termios, "tcflush", lambda fd, queue: flushed.append((fd, queue)))
+    with open(os.devnull) as real_stdin:  # pytest's captured stdin has no fileno()
+        monkeypatch.setattr(sys, "stdin", real_stdin)
+        _tty_ui().drain_input()
+    assert flushed and flushed[0][1] == termios.TCIFLUSH  # input queue, not output
+
+
+def test_drain_input_never_raises_on_a_terminal_that_cannot_be_drained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A finished hour-long run must not end in a traceback because a stream could not be
+    flushed. Every failure here is swallowed; the terminal just keeps its old behavior."""
+    import termios
+
+    monkeypatch.setattr("os.name", "posix")
+
+    def _boom(fd: int, queue: int) -> None:
+        raise termios.error("not a terminal")
+
+    monkeypatch.setattr(termios, "tcflush", _boom)
+    with open(os.devnull) as real_stdin:
+        monkeypatch.setattr(sys, "stdin", real_stdin)
+        _tty_ui().drain_input()  # no exception
+
+
+def test_stub_ui_records_the_drain() -> None:
+    stub = StubUI()
+    stub.drain_input()
+    assert ("drain", "") in stub.messages
+
+
+# --------------------------------------------------------------------------- #
+# Output styling — one style per line, chosen here and nowhere else
+# --------------------------------------------------------------------------- #
+def test_every_printed_line_disables_markup_and_highlighting() -> None:
+    """Two promises, one assertion.
+
+    ``markup=False`` keeps a filename or an ffmpeg line carrying ``[...]`` as text — a raw
+    ``[libmp3lame @ 0x7f] error`` must not render as the word "error", and a stray ``[/]``
+    must not raise MarkupError in the middle of a run report. ``highlight=False`` keeps
+    rich's repr highlighter from recoloring numbers, paths and times INSIDE our strings,
+    which is what turned a muted sub-step into bright cyan digits on a dim line.
+    """
+    ui = _tty_ui()
+    ui.console = MagicMock()
+
+    ui.info("a [tag] 1")
+    ui.detail("b 2")
+    ui.success("c 3")
+    ui.warn("d 4")
+    ui.error("e 5")
+
+    assert ui.console.print.call_count == 5
+    for call in ui.console.print.call_args_list:
+        assert call.kwargs["markup"] is False
+        assert call.kwargs["highlight"] is False
+
+
+def test_a_rule_carries_the_glyph_tables_character() -> None:
+    """Rules are drawn with our own character, not a hardcoded one: rich degrades its box
+    drawing on legacy cmd, but not a Unicode dash we place in the call ourselves."""
+    ui = _tty_ui()
+    ui.console = MagicMock()
+
+    ui.rule("[1/7] lecture.mp4")
+
+    (rendered,) = ui.console.print.call_args.args
+    assert rendered.characters == ui.glyphs.rule
+
+
+def test_stub_ui_records_rules_and_details() -> None:
+    stub = StubUI()
+    stub.rule("[1/2] a.mp4")
+    stub.detail("phase 1/6")
+    assert ("rule", "[1/2] a.mp4") in stub.messages
+    assert ("detail", "phase 1/6") in stub.messages
