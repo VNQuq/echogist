@@ -193,13 +193,18 @@ lifecycle, and per-folder statistics are a grouping, not an entity:
 ```python
 @dataclass(frozen=True)
 class MediaFile:
-    path: Path; rel: Path; size: int
-    duration: float | None; audio_kbps: float | None; has_video: bool
+    path: Path
+    rel: Path
+    size: int
+    duration: float | None
+    audio_kbps: float | None
+    has_video: bool
+
 
 @dataclass(frozen=True)
 class ScanResult:
     files: tuple[MediaFile, ...]
-    unreadable: tuple[tuple[Path, str], ...]   # path, reason
+    unreadable: tuple[tuple[Path, str], ...]  # path, reason
     placeholders: tuple[Path, ...]
 ```
 
@@ -443,7 +448,7 @@ already refused.
 So: append one row before Settings, and print the explanation with `ui.info` once the flow is
 entered, which is where every other flow already does its talking.
 
-```python
+```text
 ("scan", "Scan a folder"),
 ```
 
