@@ -189,6 +189,16 @@ contradiction in core_idea rather than silently choosing one.
 # the map target lands the validated ~84k-token 3h lecture at ~4 phases.
 phase_target_tokens = 24000
 
+[scan]
+# The folder scanner prices summaries BEFORE anything is transcribed, so it turns each
+# file's duration into a character count with these two numbers. Both are seeded high on
+# purpose: the scan figure is an UPPER BOUND, and an under-quote is the only failure mode
+# that spends money the operator did not agree to. Real Russian lecture speech runs
+# roughly 110-130 wpm at ~6 chars/word; calibrate against a folder that already has a
+# transcript before lowering either.
+words_per_minute = 150
+chars_per_word = 7
+
 [transcript]
 # Timecode granularity of the saved transcript (and the text the summarizer reads).
 # Whisper emits a segment per VAD pause (~2-10s); echogist groups them into blocks of

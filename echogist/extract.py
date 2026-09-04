@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -42,6 +43,18 @@ StreamRunner = Callable[[list[str], Callable[[str], None]], tuple[int, str]]
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)")
 # ``-progress pipe:1`` emits ``out_time_us=<microseconds>`` lines as it encodes.
 _OUT_TIME_PREFIX = "out_time_us="
+# ffmpeg prints one ``Stream #0:1: Audio: mp3, 44100 Hz, stereo, fltp, 128 kb/s`` line per
+# audio stream. The trailing ``kb/s`` is the AUDIO track's own bitrate, unlike the
+# ``bitrate:`` field on the Duration line, which is the container average and on a video
+# file is dominated by the picture track.
+_AUDIO_STREAM_RE = re.compile(r"^\s*Stream #\S+?:\s*Audio:\s*(?P<rest>.*)$", re.MULTILINE)
+_AUDIO_KBPS_RE = re.compile(r"(?P<kbps>\d+(?:\.\d+)?)\s*kb/s")
+# A real picture track. ``(attached pic)`` marks embedded cover art — an mp3 with album
+# art carries a Video stream that is a single JPEG, and treating it as video would strip
+# the size-derived bitrate fallback from every tagged mp3 in a library.
+_VIDEO_STREAM_RE = re.compile(r"^\s*Stream #\S+?:\s*Video:\s*(?P<rest>.*)$", re.MULTILINE)
+# How long a header probe may take before the file counts as unreachable.
+_PROBE_TIMEOUT_SECONDS = 30.0
 
 
 class ExtractError(Exception):
@@ -53,7 +66,7 @@ def is_mp3(path: Path) -> bool:
     return path.suffix.lower() == ".mp3"
 
 
-def _default_ffmpeg_exe() -> str:
+def default_ffmpeg_exe() -> str:
     """Locate the bundled ffmpeg, or raise the F11 diagnostic."""
     try:
         import imageio_ffmpeg
@@ -70,15 +83,52 @@ def _default_ffmpeg_exe() -> str:
     return exe
 
 
-def _default_runner(argv: list[str]) -> tuple[int, str]:
+def _default_runner(argv: list[str], *, timeout: float | None = None) -> tuple[int, str]:
     # argv is ours (no user-built shell string, shell=False) — safe to spawn.
     # encoding/errors are explicit: on Windows ffmpeg writes stderr in the OEM
     # console codepage, and the default locale-strict decode would raise
     # UnicodeDecodeError *inside* subprocess.run — crashing the very fail-loud
     # path that is meant to surface a friendly ExtractError. utf-8 + replace
     # keeps the diagnostic readable and never throws.
-    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    #
+    # ``timeout`` defaults to None because a real conversion legitimately runs for
+    # minutes on a long lecture and must never be cut short. Only the PROBE passes a
+    # bound (see ``_default_probe_runner``), where any wait past a second or two means
+    # the file is not really reachable.
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ExtractError(
+            f"ffmpeg did not respond within {timeout:.0f}s for: {argv[-1]}. "
+            "A file on an unreachable network share or an unresponsive cloud mount "
+            "does this; check that the path is available."
+        ) from exc
     return proc.returncode, proc.stderr
+
+
+def _default_probe_runner(argv: list[str]) -> tuple[int, str]:
+    """:data:`Runner` for ``ffmpeg -i`` probes: the default spawn, but BOUNDED.
+
+    A probe reads a container header and exits in milliseconds. Without a bound, one
+    file on a dead SMB share blocks ``subprocess.run`` forever, which hangs a whole
+    folder scan and leaves the child alive after Ctrl-C. The timeout turns that file
+    into one ``ExtractError`` the caller counts as unreadable, and the scan moves on.
+    """
+    return _default_runner(argv, timeout=_PROBE_TIMEOUT_SECONDS)
+
+
+def _probe_runner_for(runner: Runner) -> Runner:
+    """The probe variant of ``runner``: the shared default gains the timeout above; an
+    injected runner is used unchanged (a test's fake cannot hang, and the batch pool's
+    cancellable runner is already bounded by its own terminate/kill grace window)."""
+    return _default_probe_runner if runner is _default_runner else runner
 
 
 def _default_stream_runner(argv: list[str], on_line: Callable[[str], None]) -> tuple[int, str]:
@@ -125,16 +175,71 @@ def _parse_out_time_us(line: str) -> float | None:
         return None
 
 
-def _probe_duration(source: Path, exe: str, runner: Runner) -> float | None:
-    """Total media duration in seconds, or None when unknowable.
+def _parse_audio_kbps(text: str) -> float | None:
+    """The AUDIO track's bitrate in kb/s from ffmpeg's stream lines, or None.
 
-    Runs ``ffmpeg -i <source>`` with no output: ffmpeg prints the ``Duration:`` line
-    to stderr and then exits non-zero ("At least one output file must be specified").
-    The non-zero exit is expected here, not a failure — we only want the stderr. Uses
-    the all-at-once ``runner`` seam so the probe is testable off-process. ``imageio-
-    ffmpeg`` ships ffmpeg but no ffprobe, so this stderr parse is the only local route."""
+    Reads the per-stream ``Audio:`` line, never the ``bitrate:`` field on the
+    ``Duration:`` line: that one is the container average, so on a video file it reports
+    the picture track and would read 1500-4000 kb/s for a 128 kb/s soundtrack.
+
+    None when no audio stream carries a ``kb/s`` figure, which is normal for VBR in some
+    containers. The caller decides whether a size-derived fallback is safe; None must
+    never be treated as zero or as a licence to guess.
+    """
+    for match in _AUDIO_STREAM_RE.finditer(text):
+        kbps = _AUDIO_KBPS_RE.search(match.group("rest"))
+        if kbps:
+            return float(kbps.group("kbps"))
+    return None
+
+
+def _parse_has_video(text: str) -> bool:
+    """True when the file carries a real picture track.
+
+    ``(attached pic)`` streams are excluded: an mp3 with embedded album art announces a
+    Video stream that is one still JPEG, and counting it as video would suppress the
+    size-derived bitrate fallback for every tagged mp3 in a music-managed library.
+    """
+    return any(
+        "attached pic" not in match.group("rest") for match in _VIDEO_STREAM_RE.finditer(text)
+    )
+
+
+@dataclass(frozen=True)
+class MediaProbe:
+    """What one ``ffmpeg -i`` says about a file. Any field may be unknown.
+
+    ``duration is None`` is the load-bearing one: it means ffmpeg printed no
+    ``Duration:`` line, which is this project's definition of an unreadable file. The
+    exit code is NOT that signal — ``ffmpeg -i`` with no output always exits non-zero
+    ("At least one output file must be specified"), by design.
+    """
+
+    duration: float | None
+    audio_kbps: float | None
+    has_video: bool
+
+
+def probe_media(source: Path, exe: str, runner: Runner = _default_probe_runner) -> MediaProbe:
+    """Duration, audio bitrate and a picture-track flag from ONE ``ffmpeg -i`` run.
+
+    ffmpeg prints all three to stderr while probing an input and then exits non-zero; the
+    non-zero exit is expected, not a failure, and only the stderr is read. ``imageio-
+    ffmpeg`` ships ffmpeg but no ffprobe, so this stderr parse is the only local route.
+
+    One run for all three fields on purpose: spawning is the expensive part of a scan
+    (roughly 0.1-0.3s per file, times a whole library), and re-walking the tree later to
+    collect the bitrate would double that cost.
+
+    The ``runner`` seam is what lets tests drive captured real stderr without spawning
+    ffmpeg. Its default is bounded (see :func:`_default_probe_runner`).
+    """
     _code, stderr = runner([exe, "-nostdin", "-i", str(source)])
-    return _parse_duration(stderr)
+    return MediaProbe(
+        duration=_parse_duration(stderr),
+        audio_kbps=_parse_audio_kbps(stderr),
+        has_video=_parse_has_video(stderr),
+    )
 
 
 def _conversion_argv(exe: str, source: Path, tmp_path: Path, *, stream: bool) -> list[str]:
@@ -207,14 +312,18 @@ def extract_audio(
             out_dir, source.stem, ".mp3", fallback="audio", today=today
         )
     tmp_path = out_path.with_name(out_path.name + ".part")
-    exe = ffmpeg_exe or _default_ffmpeg_exe()
+    exe = ffmpeg_exe or default_ffmpeg_exe()
     log(f"Extracting audio -> {out_path.name}")
 
     # Live progress needs a known total: probe the duration first, then stream
     # ffmpeg's ``out_time_us`` against it. Without a callback (MP3-only callers,
     # the unit suite) or when the duration is unknowable, fall back to the plain
     # capture-at-end runner — same behaviour as before, just no bar.
-    duration = _probe_duration(source, exe, runner) if progress is not None else None
+    duration = (
+        probe_media(source, exe, _probe_runner_for(runner)).duration
+        if progress is not None
+        else None
+    )
     if progress is not None and duration is not None and duration > 0.0:
         total = duration  # narrowed to float for the closure below
         sink = progress

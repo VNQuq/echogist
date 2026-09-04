@@ -339,7 +339,7 @@ def test_extract_audio_no_progress_skips_probe_and_streaming(tmp_path: Path) -> 
 
 
 # --------------------------------------------------------------------------- #
-# _default_ffmpeg_exe — F11 missing-binary guard
+# default_ffmpeg_exe — F11 missing-binary guard
 # --------------------------------------------------------------------------- #
 def test_default_ffmpeg_exe_missing_package_fails_loud(
     monkeypatch: pytest.MonkeyPatch,
@@ -348,7 +348,7 @@ def test_default_ffmpeg_exe_missing_package_fails_loud(
 
     monkeypatch.setitem(sys.modules, "imageio_ffmpeg", None)
     with pytest.raises(ExtractError, match="imageio-ffmpeg is not installed"):
-        extract._default_ffmpeg_exe()
+        extract.default_ffmpeg_exe()
 
 
 def test_default_ffmpeg_exe_corrupt_binary_fails_loud(
@@ -361,4 +361,134 @@ def test_default_ffmpeg_exe_corrupt_binary_fails_loud(
     fake.get_ffmpeg_exe = lambda: str(tmp_path / "ghost-ffmpeg")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake)
     with pytest.raises(ExtractError, match="missing or corrupt"):
-        extract._default_ffmpeg_exe()
+        extract.default_ffmpeg_exe()
+
+
+# --------------------------------------------------------------------------- #
+# probe_media — one ffmpeg -i, three facts (bulk v3 increment 1, T2)
+# --------------------------------------------------------------------------- #
+# Real ``ffmpeg -i`` stderr, trimmed to the lines the parser reads.
+_STDERR_VIDEO_128 = """\
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'lecture.mp4':
+  Duration: 02:58:57.42, start: 0.000000, bitrate: 1502 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High), yuv420p(tv), 1920x1080, 1350 kb/s, 30 fps
+  Stream #0:1[0x2](und): Audio: aac (LC), 44100 Hz, stereo, fltp, 128 kb/s
+"""
+_STDERR_MP3_320 = """\
+Input #0, mp3, from 'talk.mp3':
+  Duration: 00:45:10.03, start: 0.025057, bitrate: 320 kb/s
+  Stream #0:0: Audio: mp3 (mp3float), 44100 Hz, stereo, fltp, 320 kb/s
+"""
+_STDERR_VBR_NO_KBPS = """\
+Input #0, matroska,webm, from 'seminar.mkv':
+  Duration: 01:02:03.40, start: 0.000000, bitrate: 96 kb/s
+  Stream #0:0: Audio: opus, 48000 Hz, stereo, fltp
+"""
+_STDERR_MP3_WITH_COVER = """\
+Input #0, mp3, from 'tagged.mp3':
+  Duration: 01:00:00.00, start: 0.000000, bitrate: 192 kb/s
+  Stream #0:0: Audio: mp3 (mp3float), 44100 Hz, stereo, fltp, 192 kb/s
+  Stream #0:1: Video: mjpeg (Baseline), yuvj420p(pc), 500x500, 90k tbr (attached pic)
+"""
+_STDERR_SILENT_VIDEO = """\
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'screencast.mp4':
+  Duration: 00:10:00.00, start: 0.000000, bitrate: 900 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High), yuv420p(tv), 1280x720, 900 kb/s, 30 fps
+"""
+_STDERR_UNREADABLE = """\
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x55] moov atom not found
+broken.mp4: Invalid data found when processing input
+"""
+
+
+def _stderr_runner(text: str) -> extract.Runner:
+    def runner(argv: list[str]) -> tuple[int, str]:
+        assert argv[-1] == "/media/file"  # the source is the last argv element
+        return 1, text  # ffmpeg -i ALWAYS exits non-zero; the code carries no signal
+
+    return runner
+
+
+@pytest.mark.parametrize(
+    ("stderr", "duration", "kbps", "has_video"),
+    [
+        (_STDERR_VIDEO_128, 10737.42, 128.0, True),
+        (_STDERR_MP3_320, 2710.03, 320.0, False),
+        # VBR opus: no ``kb/s`` on the Audio line. None, never a guess — the container
+        # average on the Duration line is deliberately not consulted.
+        (_STDERR_VBR_NO_KBPS, 3723.40, None, False),
+        # Album art is not a picture track: an mp3 tagged with a cover must stay audio, or
+        # the size-derived bitrate fallback vanishes for a whole tagged library.
+        (_STDERR_MP3_WITH_COVER, 3600.0, 192.0, False),
+        # A silent screencast: a real video stream, and no audio bitrate to report.
+        (_STDERR_SILENT_VIDEO, 600.0, None, True),
+        # Corrupt container: no Duration line at all — the definition of unreadable.
+        (_STDERR_UNREADABLE, None, None, False),
+    ],
+)
+def test_probe_media_reads_all_three_facts_from_one_run(
+    stderr: str, duration: float | None, kbps: float | None, has_video: bool
+) -> None:
+    probe = extract.probe_media(Path("/media/file"), "/fake/ffmpeg", _stderr_runner(stderr))
+
+    if duration is None:
+        assert probe.duration is None
+    else:
+        assert probe.duration == pytest.approx(duration)
+    assert probe.audio_kbps == kbps
+    assert probe.has_video is has_video
+
+
+def test_probe_media_takes_the_audio_stream_bitrate_not_the_container_average() -> None:
+    # The regression that matters for the 1b re-encode rule: the Duration line says
+    # 1502 kb/s (video-dominated) while the soundtrack is 128. Reading the wrong one
+    # would trip a >= 320 kb/s trigger on every ordinary lecture video.
+    probe = extract.probe_media(
+        Path("/media/file"), "/fake/ffmpeg", _stderr_runner(_STDERR_VIDEO_128)
+    )
+
+    assert probe.audio_kbps == 128.0
+
+
+def test_probe_media_uses_a_single_ffmpeg_run() -> None:
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 1, _STDERR_VIDEO_128
+
+    extract.probe_media(Path("/media/file"), "/fake/ffmpeg", runner)
+
+    assert len(calls) == 1
+    assert calls[0] == ["/fake/ffmpeg", "-nostdin", "-i", "/media/file"]
+
+
+def test_probe_runner_turns_a_hang_into_a_loud_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A file on a dead network share: without the timeout this blocks forever, hanging a
+    # whole folder scan and leaving the child alive past Ctrl-C.
+    import subprocess
+
+    def hang(*_args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=float(kwargs["timeout"]))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(ExtractError, match="did not respond within"):
+        extract._default_probe_runner(["/fake/ffmpeg", "-nostdin", "-i", "//share/gone.mp4"])
+
+
+def test_the_conversion_runner_stays_unbounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The timeout belongs to the PROBE only. A three-hour lecture legitimately spends
+    # minutes inside ffmpeg, and a bound on the shared runner would kill it mid-convert.
+    import subprocess
+    import types
+
+    seen: dict[str, object] = {}
+
+    def fake_run(_argv: list[str], **kwargs: object) -> object:
+        seen.update(kwargs)
+        return types.SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    extract._default_runner(["/fake/ffmpeg", "-i", "in.mp4", "out.mp3"])
+
+    assert seen["timeout"] is None

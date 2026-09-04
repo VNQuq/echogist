@@ -52,7 +52,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from . import extract, naming
+from . import extract, naming, scan
 
 # The extract seam, mirroring ``menu.ExtractFn``: ``...`` because the real function takes
 # keyword-only arguments a bare Callable cannot spell out. Tests inject a fake.
@@ -61,39 +61,6 @@ ExtractFn = Callable[..., Path]
 # What happened to one source. ``skipped`` is decided by the caller (an already-mp3 source
 # the operator chose not to re-encode) and passed through the report unchanged.
 ItemStatus = Literal["converted", "skipped", "failed", "cancelled"]
-
-# Extensions the batch flow will feed to ffmpeg when expanding a directory. Deliberately a
-# closed list rather than "everything that is not an mp3": a folder of lectures also holds
-# .txt/.srt/.jpg, and handing those to ffmpeg would fill the failure table with noise the
-# operator cannot act on. Config-shaped data, so an exotic container is a one-line addition.
-CONVERTIBLE_SUFFIXES = frozenset(
-    {
-        # video containers
-        ".mp4",
-        ".mkv",
-        ".mov",
-        ".webm",
-        ".ts",
-        ".avi",
-        ".m4v",
-        ".mpg",
-        ".mpeg",
-        ".wmv",
-        ".flv",
-        # Audio. ``.mp3`` is here on purpose: the flow ASKS before re-encoding an mp3, so
-        # including it turns a silent drop into a visible question. Filtering it out here
-        # would make a typed directory behave differently from the same files picked by
-        # hand, which is the kind of quiet divergence "fail loud" exists to prevent.
-        ".mp3",
-        ".m4a",
-        ".wav",
-        ".flac",
-        ".aac",
-        ".ogg",
-        ".opus",
-        ".wma",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -266,7 +233,8 @@ class Cancellation:
 def expand_selection(selected: Iterable[Path]) -> list[Path]:
     """A picker result → the concrete files to convert, in order, deduped.
 
-    A directory expands to its :data:`CONVERTIBLE_SUFFIXES` members (one level — no
+    A directory expands to its :data:`echogist.scan.CONVERTIBLE_SUFFIXES` members (one
+    level — no
     recursion; the native multi-select is the operator's precision tool and a directory
     only ever arrives from the no-tkinter console fallback). A file is taken as-is,
     whatever its extension: naming it explicitly IS the intent, so an odd container is
@@ -275,15 +243,10 @@ def expand_selection(selected: Iterable[Path]) -> list[Path]:
     files: list[Path] = []
     seen: set[Path] = set()
     for entry in selected:
-        candidates: list[Path]
-        if entry.is_dir():
-            candidates = sorted(
-                child
-                for child in entry.iterdir()
-                if child.is_file() and child.suffix.lower() in CONVERTIBLE_SUFFIXES
-            )
-        else:
-            candidates = [entry]
+        # One walker for the whole project: the suffix filter, the sort and the junction
+        # guard live in ``scan.walk``, and ``recursive=False`` is what keeps this the
+        # one-level expansion the flow has always done.
+        candidates = scan.walk(entry, recursive=False) if entry.is_dir() else [entry]
         for path in candidates:
             resolved = path.resolve()
             if resolved in seen:  # the same file reachable twice (dir + explicit pick)

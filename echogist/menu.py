@@ -56,6 +56,7 @@ from . import (
     guard,
     provision,
     render,
+    scan,
     summarize,
     transcribe,
 )
@@ -64,6 +65,7 @@ from .config import VALID_FORMATS, VALID_LANGUAGES, ConfigError, Settings
 from .extract import ExtractError
 from .model_asset import ProvisionError
 from .render import RenderError
+from .scan import ScanCancelled, ScanResult
 from .summarize import SummarizeError, SummarizeResult
 from .transcribe import TranscribeError, Transcript
 from .ui import (
@@ -74,6 +76,7 @@ from .ui import (
     Choice,
     NotInteractiveError,
     build_default_ui,
+    human_size,
 )
 
 Logger = Callable[[str], object]
@@ -470,7 +473,7 @@ _AV_FILETYPES: tuple[tuple[str, str], ...] = (
     # Derived from the batch whitelist, not hand-listed: the two had already drifted
     # (.avi/.wmv/.flv converted fine from an expanded directory but were hidden by the
     # picker in the very same flow), and a hand-kept copy would drift again.
-    ("Audio/Video", " ".join(f"*{suffix}" for suffix in sorted(batch.CONVERTIBLE_SUFFIXES))),
+    ("Audio/Video", " ".join(f"*{suffix}" for suffix in sorted(scan.CONVERTIBLE_SUFFIXES))),
     ("All files", "*.*"),
 )
 
@@ -563,18 +566,6 @@ def _flow_local_file(deps: Deps) -> None:
         ui.reveal_dir(deps.base / "output" / "transcripts", priority=REVEAL_TRANSCRIPT)
         return
     _run_summary(deps, settings, model_config, text, source, source.stem)
-
-
-def _human_size(total: int) -> str:
-    """Bytes as a short human string — the batch's "how long will this take" proxy."""
-    size = float(total)
-    if size < 1024.0:
-        return f"{size:,.0f} B"
-    for unit in ("KB", "MB"):
-        size /= 1024.0
-        if size < 1024.0:
-            return f"{size:,.1f} {unit}"
-    return f"{size / 1024.0:,.1f} GB"
 
 
 def _selection_bytes(sources: Sequence[Path]) -> int:
@@ -687,7 +678,7 @@ def _flow_batch_mp3(deps: Deps) -> None:
     workers = settings.batch_workers
     mode = "one at a time" if workers == 1 else f"{workers} at a time"
     ui.info(
-        f"Converting {len(sources)} file(s), {_human_size(_selection_bytes(sources))} total, "
+        f"Converting {len(sources)} file(s), {human_size(_selection_bytes(sources))} total, "
         f"{mode}. Ctrl-C stops the batch and keeps what is already converted."
     )
 
@@ -772,6 +763,108 @@ def _flow_saved_transcript(deps: Deps) -> None:
         ui.warn(f"{chosen.name} is empty; nothing to summarize.")
         return
     _run_summary(deps, settings, model_config, text, chosen, chosen.stem)
+
+
+# --------------------------------------------------------------------------- #
+# Scan
+# --------------------------------------------------------------------------- #
+# Printed on entry rather than carried on the menu row: ``Choice`` is a value and a
+# ONE-LINE label (``ui.py``), so a multi-line hint is not renderable in the menu itself.
+_SCAN_HINT = (
+    "Walks a folder and every folder under it, counts what is there, and prices the "
+    "summaries before you spend anything. Reads only. Writes nothing but its own cache. "
+    "Tells you which files share a name, which is the one thing that will silently "
+    "corrupt a paid run later."
+)
+
+
+def _report_scan(
+    ui: UI,
+    result: ScanResult,
+    model_config: config.ModelConfig,
+    tier: config.ModelTier,
+    transcripts_dir: Path,
+) -> None:
+    """Render one scan: the per-folder table, the totals, then the two problem lists."""
+    if not result.files and not result.unreadable and not result.placeholders:
+        ui.warn("No media files found under that folder.")
+        return
+
+    index = scan.transcript_index(transcripts_dir)
+    if result.files:
+        ui.table("Folders", scan.folder_rows(result, index))
+    ui.table("Totals", scan.totals_rows(result, model_config, tier))
+    ui.info(
+        "The dollar figure is an UPPER BOUND: it assumes every file is summarized from "
+        "scratch at the current tier, and it does not subtract work already done."
+    )
+
+    duplicates = scan.collisions(result.files)
+    if duplicates:
+        ui.warn(
+            f"{len(duplicates)} name(s) are used by more than one file. Their artifacts "
+            "would be named from the same stem."
+        )
+        ui.table(
+            "Duplicate names",
+            [(stem, ", ".join(str(p) for p in paths)) for stem, paths in duplicates],
+        )
+    if result.unreadable:
+        ui.table("Unreadable", [(str(path), reason) for path, reason in result.unreadable])
+    if result.placeholders:
+        ui.table(
+            "Cloud placeholders (not downloaded, not probed)",
+            [(str(path), "bytes are not on this machine") for path in result.placeholders],
+        )
+
+
+def _flow_scan(deps: Deps) -> None:
+    """Menu 'scan' — walk a folder and report what is in it. Read-only, offline, free.
+
+    Nothing here converts, transcribes or summarizes, and no network call is possible on
+    this path: the whole point is to see the library and the price before committing to
+    either. The only write is the probe cache under ``output/``.
+
+    Ctrl-C aborts to the menu with whatever was already probed, rather than exiting the
+    app: a cold scan of a large tree is minutes of ffmpeg spawns, and throwing away both
+    the report and the cache for a keystroke would be the same mistake the batch flow
+    already refuses to make.
+    """
+    ui = _ui(deps)
+    ui.clear()  # TD-11: start this flow on a clean screen
+    ui.info(_SCAN_HINT)
+    settings = config.load_settings(deps.settings_path)
+    model_config = config.load_model_config()
+    tier = model_config.tier(settings.model_tier)
+
+    # Resolved ONCE, before the walk, and deliberately before the picker: a missing or
+    # corrupt ffmpeg must fail loud one time, not mark all 500 files unreadable.
+    exe = extract.default_ffmpeg_exe()
+
+    initialdir = config.resolve_initial_dir(config.load_last_dir())
+    raw = ui.pick_dir("Select a folder to scan", initialdir=initialdir)
+    if not raw or not raw.strip():  # dialog Cancel / blank fallback entry → soft cancel
+        ui.info("No folder selected; returning to the menu.")
+        return
+    root = Path(raw.strip()).expanduser()
+    if not root.is_dir():
+        ui.error(f"Not a folder: {root}. Check the path and try again.")
+        return
+    config.save_last_dir(root)
+
+    cache_path = deps.base / "output" / scan.CACHE_FILENAME
+    cancelled = False
+    try:
+        with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
+            result = scan.scan_tree(root, cache_path=cache_path, exe=exe)
+            spin.done(message=f"Scanned {len(result.files)} file(s).")
+    except ScanCancelled as exc:
+        result = exc.result
+        cancelled = True
+
+    _report_scan(ui, result, model_config, tier, deps.base / "output" / "transcripts")
+    if cancelled:
+        ui.warn("Scan cancelled; the numbers above cover only what was read.")
 
 
 # --------------------------------------------------------------------------- #
@@ -871,6 +964,7 @@ _MAIN_MENU: tuple[Choice, ...] = (
     ("local", "Local file (audio/video)"),
     ("batch", "Batch: videos -> MP3"),
     ("transcript", "Saved transcript"),
+    ("scan", "Scan a folder"),
     ("settings", "Settings"),
     ("exit", "Exit"),
 )
@@ -915,6 +1009,7 @@ def run_menu(deps: Deps | None = None) -> int:
         "local": _flow_local_file,
         "batch": _flow_batch_mp3,
         "transcript": _flow_saved_transcript,
+        "scan": _flow_scan,
         "settings": _flow_settings,
     }
     ui.banner("EchoGist", "local transcription + summary")

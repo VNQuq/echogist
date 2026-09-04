@@ -25,6 +25,7 @@ from echogist.ui import (
     RichQuestionaryUI,
     StubUI,
     build_default_ui,
+    human_size,
 )
 
 _AV_FILETYPES = [("Audio/Video", "*.mp3 *.mp4"), ("All files", "*.*")]
@@ -508,3 +509,18 @@ def test_path_fallback_interrupt_becomes_eof(
     monkeypatch.setattr(questionary, "path", lambda *_a, **_k: _FakePathQ(raises=interrupt))
     with pytest.raises(EOFError):
         _tty_ui()._path_fallback("Type a path")
+
+
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [
+        (0, "0 B"),
+        (1023, "1,023 B"),
+        (1024, "1.0 KB"),
+        (1024**2, "1.0 MB"),
+        (1024**3, "1.0 GB"),
+        (5 * 1024**4, "5,120.0 GB"),  # past the last named unit, still readable
+    ],
+)
+def test_human_size_units(total: int, expected: str) -> None:
+    assert human_size(total) == expected

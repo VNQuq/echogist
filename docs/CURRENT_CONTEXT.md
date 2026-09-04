@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-09-04 — **bulk v3 designed and eng-cleared; no code written yet.**
+**Updated:** 2026-09-04 — **bulk v3 increments 0 and 1 shipped; the scanner is live and unrun on real data.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -44,43 +44,39 @@ lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
   Windows-produced summary is only re-validatable in WSL against ITS transcript. **API key:**
   `ANTHROPIC_API_KEY` env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are Windows-only.
 
-## Designed, eng-cleared, NOT yet implemented — bulk v3 ([docs/designs/bulk-v3.md](./designs/bulk-v3.md))
+## bulk v3 — increments 0 and 1 SHIPPED ([docs/designs/bulk-v3.md](./designs/bulk-v3.md))
 
-Point EchoGist at a folder, walk it recursively, run the full core. Approved 2026-09-04 after /office-hours
-(3 rounds of spec review: 7, 6, 7) and /plan-eng-review (6 findings, 0 critical gaps, CLEAR). **Split into
-three increments; the design doc carries the executable spec, the 8 tasks and 4 accepted risks.**
+Approved 2026-09-04 after /office-hours (3 rounds: 7, 6, 7) and /plan-eng-review (CLEAR). The design doc carries
+the spec; only what the code cannot tell you lives here.
 
-- **Increment 0 — the live cross-source resume bug.** ✓ DONE 2026-09-04. `_run_summary` takes
-  `source_path: Path`; the resume file keys on `blake2s(resolved path, casefold)`, and partials left by the
-  old stem key are swept by shape (`^[0-9a-f]{16}$`). Regression test drives two same-stem sources through
-  the real flow and asserts the second run starts fresh — it fails against the old key, carrying source A's
-  prose into source B's PAID summary.
-- **Increment 1 — `scan.py`, read-only, offline, free.** Recursive walk (prunes `output/`, junction-safe
-  `seen`), one `ffmpeg -i` per file behind a `(path,size,mtime_ns)` sidecar cache, per-folder rows, upper-bound
-  cost projection, duplicate-stem report, unreadable + cloud-placeholder rows. Ships as its own menu entry.
-- **Increment 2 — the paid bulk.** Streams extract+transcribe per file, ONE global barrier (the exact
-  token-derived gate) before the summarize pool. Build only after the scanner runs on the real folder.
-
-**Eng-review calls, all folded in:** two dataclasses not four (`MediaFile`, `ScanResult`); `_default_runner:80`
-gains a **timeout** (today a file on a dead share hangs any multi-file flow forever); scan cache publishes via
-`.part`→`os.replace`; **one tree walker** — `batch.expand_selection` delegates at `recursive=False`, its five
-existing tests are the regression harness; `menu._human_size`→`ui.human_size` (menu imports scan, so scan
-cannot import menu back); transcript detection is a one-pass index, not `O(files × transcripts)`.
-**Two CRITICAL regression tests are mandatory:** cross-source summary prose ✓ (increment 0), and the cost estimate biased low.
+- **Increment 0 ✓** resume keyed on `blake2s(resolved source path, casefolded)`, old stem-keyed partials swept by
+  shape. **Increment 1 ✓** `scan.py` + menu row 4 `Scan a folder` (POSITIONAL keys — Settings/Exit renumbered).
+- **Casefold is asymmetric ON PURPOSE.** `menu._resume_key` folds case (one file the operator picked twice, on
+  Windows). `scan._resolve` does NOT (a dedup key across a tree — folding made `Lecture.mp4` and `lecture.mp4`
+  one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
+- **Ctrl-C MERGES the scan cache, a completed run REPLACES it.** A cancel must never delete entries it had not
+  reached; a complete run rewriting from live results IS the eviction policy. Consequence, accepted: the cache
+  holds ONE scan root, so alternating folders re-probes.
+- **Increment 2 (the paid bulk) is NOT started and is GATED** on running the scanner against the real lecture
+  folder. Its file count and collision report decide whether the paid bulk is worth building at all.
+- **Both CRITICAL regressions are pinned:** cross-source summary prose (inc 0), cost estimate biased low (inc 1 —
+  the prompt overhead must land K times, not once). 554 tests green.
 
 ## Next
 
-1. **Increment 1** (T2-T7 + T8 tests): the scanner. Then run it on the real lecture folder — its file count
-   and collision report decide whether increment 2 is worth building at all.
+1. **Run the scanner on the real lecture folder (Windows).** The one gate on everything downstream: its file
+   count, hours, dollar figure and collision report decide whether increment 2 is worth building, and its first
+   run against a folder that already has a transcript calibrates TD-23's two unmeasured constants.
 2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
    real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
 3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
 
 ## Blockers / debts / SoT
 
-- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) — **TD-22 open** (a summary has no
+- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) — **TD-22, TD-23 open** (a summary has no
   back-link to its source; `save_raw_result:311` names it from the LLM title, so bulk cannot skip already-paid
-  work — closes at the start of increment 2). TD-1..21 shut 2026-08-03 (TD-7, TD-20 WONTFIX).
+  work — closes at the start of increment 2; **TD-23** the scan projection constants are unmeasured, calibrated by the
+  first real scan). TD-1..21 shut 2026-08-03 (TD-7, TD-20 WONTFIX).
 - **Language rule (2026-09-04):** English is the language of the application — console, code, comments,
   commits. Russian only for `README.md`, `docs/USAGE.md`, `CHANGELOG.md` and the generated summaries.
 - **SoT:** locked build spec [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates,

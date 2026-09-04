@@ -48,7 +48,7 @@ _TOKENS_PER_CHAR_DEFAULT = 0.30  # ~3.3 chars/token
 # near-empty transcript is the only case the shortfall isn't absorbed, and it is
 # sub-cent and nowhere near overflow. If the prompt/schema grows materially, raise
 # this constant above the measured prompt+schema total to keep the estimate high.
-_PROMPT_OVERHEAD_TOKENS = 1000
+PROMPT_OVERHEAD_TOKENS = 1000
 
 
 def _is_cyrillic(ch: str) -> bool:
@@ -59,7 +59,7 @@ def _is_cyrillic(ch: str) -> bool:
 def estimate_input_tokens(
     text: str,
     *,
-    prompt_overhead: int = _PROMPT_OVERHEAD_TOKENS,
+    prompt_overhead: int = PROMPT_OVERHEAD_TOKENS,
     cyrillic_rate: float = _TOKENS_PER_CHAR_CYRILLIC,
     default_rate: float = _TOKENS_PER_CHAR_DEFAULT,
 ) -> int:
@@ -94,7 +94,7 @@ def check_overflow(
     tier: ModelTier,
     guard: GuardConfig,
     *,
-    prompt_overhead: int = _PROMPT_OVERHEAD_TOKENS,
+    prompt_overhead: int = PROMPT_OVERHEAD_TOKENS,
 ) -> GuardResult:
     """Estimate input tokens and compare against ``guard.safe_budget(tier)`` (§4)."""
     est = estimate_input_tokens(transcript_text, prompt_overhead=prompt_overhead)

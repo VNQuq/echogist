@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from echogist import batch, config, menu, summarize
+from echogist import batch, config, extract, menu, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
@@ -721,21 +721,6 @@ def test_batch_converts_every_picked_video(tmp_path: Path) -> None:
     assert ("reveal_dir", str(tmp_path / "output" / "audio")) in stub.messages
 
 
-@pytest.mark.parametrize(
-    ("total", "expected"),
-    [
-        (0, "0 B"),
-        (1023, "1,023 B"),
-        (1024, "1.0 KB"),
-        (1024**2, "1.0 MB"),
-        (1024**3, "1.0 GB"),
-        (5 * 1024**4, "5,120.0 GB"),  # past the last named unit, still readable
-    ],
-)
-def test_human_size_units(total: int, expected: str) -> None:
-    assert menu._human_size(total) == expected
-
-
 def test_selection_bytes_ignores_an_unreadable_entry(tmp_path: Path) -> None:
     # The size line is a courtesy, never a gate: a file that vanished between the picker
     # and the stat must contribute 0, not abort a batch the operator already committed to.
@@ -1407,3 +1392,156 @@ def test_module_imports_nothing_network_at_top_level() -> None:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             imported.add(node.module.split(".")[0])
     assert not (imported & banned), f"network import at module top: {imported & banned}"
+
+
+# --------------------------------------------------------------------------- #
+# Scan flow (bulk v3, increment 1)
+# --------------------------------------------------------------------------- #
+_SCAN_STDERR = """\
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.mp4':
+  Duration: 01:00:00.00, start: 0.000000, bitrate: 1502 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High), yuv420p(tv), 1920x1080, 1350 kb/s, 30 fps
+  Stream #0:1[0x2](und): Audio: aac (LC), 44100 Hz, stereo, fltp, 128 kb/s
+"""
+
+
+def _offline_scan(monkeypatch: pytest.MonkeyPatch, *, cancel_after: int | None = None) -> None:
+    """Point the scan flow at a fake ffmpeg: no binary resolved, no process spawned."""
+    monkeypatch.setattr(extract, "default_ffmpeg_exe", lambda: "/fake/ffmpeg")
+    seen: list[str] = []
+
+    def runner(argv: list[str]) -> tuple[int, str]:
+        if cancel_after is not None and len(seen) >= cancel_after:
+            raise KeyboardInterrupt
+        seen.append(argv[-1])
+        return 1, _SCAN_STDERR
+
+    real_scan_tree = scan.scan_tree
+    monkeypatch.setattr(
+        scan,
+        "scan_tree",
+        lambda root, **kw: real_scan_tree(root, **{**kw, "runner": runner}),
+    )
+
+
+def _lecture(directory: Path, name: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(b"x" * 4096)
+    return path
+
+
+def test_scan_flow_reports_folders_totals_and_costs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library / "Course-1", "one.mp4")
+    _lecture(library / "Course-1", "two.mp4")
+    deps, stub, calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "prices the summaries before you spend anything" in stub.log_text
+    assert ("table", "Folders") in stub.messages
+    assert ("table", "Totals") in stub.messages
+    assert "Course-1/" in stub.log_text
+    assert "2h 00m" in stub.log_text
+    assert "UPPER BOUND" in stub.log_text
+    # Read-only: not one paid or heavy stage ran.
+    assert calls == {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
+
+
+def test_scan_flow_surfaces_duplicate_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The one thing that silently corrupts a paid run later, so it gets its own warning
+    # rather than a quiet row in a table.
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library / "A", "lecture.mp4")
+    _lecture(library / "B", "lecture.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+
+    menu.run_menu(deps)
+
+    assert "used by more than one file" in stub.log_text
+    assert ("table", "Duplicate names") in stub.messages
+
+
+def test_scan_flow_never_counts_echogists_own_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    _lecture(tmp_path / "output" / "audio", "2026-01-01-lecture.mp3")
+    _lecture(tmp_path, "lecture.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(tmp_path), "exit"])
+
+    menu.run_menu(deps)
+
+    assert "Media files: 1" in stub.log_text
+
+
+def test_scan_flow_cancelled_still_reports_what_it_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C returns to the MENU with the partial report, it does not exit the app: a cold
+    # scan is minutes of spawns and the operator should not lose both the numbers and the
+    # cache for one keystroke.
+    _offline_scan(monkeypatch, cancel_after=1)
+    library = tmp_path / "library"
+    _lecture(library, "a.mp4")
+    _lecture(library, "b.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(library), "exit"])
+
+    assert menu.run_menu(deps) == 0  # back to the menu, then a normal exit
+
+    assert "Scan cancelled" in stub.log_text
+    assert "Media files: 1" in stub.log_text
+
+
+def test_scan_flow_returns_to_the_menu_on_a_bad_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", str(tmp_path / "ghost"), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "Not a folder" in stub.log_text
+
+
+def test_scan_flow_soft_cancels_when_no_folder_is_picked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", None, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "No folder selected" in stub.log_text
+
+
+def test_a_missing_ffmpeg_fails_once_not_five_hundred_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Resolved before the walk on purpose. Resolving it per file would mark every file in
+    # the library "unreadable" and bury the one real cause.
+    def boom() -> str:
+        raise ExtractError("The bundled ffmpeg binary is missing or corrupt")
+
+    monkeypatch.setattr(extract, "default_ffmpeg_exe", boom)
+    _lecture(tmp_path / "library", "a.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["scan", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "missing or corrupt" in stub.log_text
+    assert ("pick_dir", "Select a folder to scan") not in stub.messages
+
+
+def test_scan_is_offered_before_settings_in_the_main_menu() -> None:
+    # Number keys are POSITIONAL, so where the row lands changes the operator's fingers.
+    keys = [key for key, _label in menu._MAIN_MENU]
+
+    assert keys.index("scan") == keys.index("settings") - 1

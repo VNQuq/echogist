@@ -22,10 +22,26 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   and re-pays full price. Fix: add `source_path: str` to `Summary`, write it in the JSON, and
   index on it; older JSON files without the field stay readable (treat as unknown).
   **Trigger for closure:** the first line of increment 2 (full bulk), because paying twice for the
-  same folder is not acceptable there. Not a blocker for increment 0 or 1.
+  same folder is not acceptable there. Not a blocker for increment 0 or 1. **Confirmed live by
+  increment 1 (2026-09-04):** the shipped scanner has no "already summarized" column and its cost
+  projection does not subtract work already paid for, so its dollar figure is labelled an upper
+  bound in the console.
+
+- **TD-23 — The scan projection constants are unmeasured** · LOW · created 2026-09-04
+  (bulk v3 increment 1). `config.ScanConfig` turns a file's DURATION into a token count with
+  `words_per_minute = 150` and `chars_per_word = 7` (`config/models.toml`, `[scan]`), because at
+  scan time nothing has been transcribed. Neither number is measured. Both are seeded HIGH on
+  purpose — CLAUDE.md requires the estimate to run high, and the figure is labelled an upper bound
+  in the console — but the SIZE of the margin is unknown, and a quote several times the real bill
+  is nearly as useless as one that undershoots. Real Russian lecture speech runs roughly 110-130
+  wpm at ~6 chars/word, so the shipped pair may be biased high by ~1.5x on top of the
+  all-Cyrillic token rate. **Trigger for closure:** the first scan of a folder that already holds
+  a transcript — compare the projected character count against `len(transcript_text)` and reseed
+  both values from the ratio. Cheap, offline, and it needs no code change, only the two numbers in
+  `models.toml`.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 is the first entry since. The other open forward item is
+branch `chore/close-tech-debt`); TD-22 and TD-23 are the entries since. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 

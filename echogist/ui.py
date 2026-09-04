@@ -101,6 +101,23 @@ class SpinnerHandle(Protocol):
     def done(self, *, ok: bool = True, message: str | None = None) -> None: ...
 
 
+def human_size(total: int) -> str:
+    """Bytes as a short human string — the "how much is this" proxy for a selection.
+
+    Lives here rather than in ``menu`` because ``menu`` imports ``scan`` for the scan
+    flow, so ``scan`` importing ``menu`` back for the formatter would be a cycle — and
+    two copies would render the same volume differently in two places.
+    """
+    size = float(total)
+    if size < 1024.0:
+        return f"{size:,.0f} B"
+    for unit in ("KB", "MB"):
+        size /= 1024.0
+        if size < 1024.0:
+            return f"{size:,.1f} {unit}"
+    return f"{size / 1024.0:,.1f} GB"
+
+
 @runtime_checkable
 class UI(Protocol):
     """Every interactive surface the menu touches. Production = rich+questionary;
@@ -117,6 +134,7 @@ class UI(Protocol):
     def pick_files(
         self, prompt: str, *, filetypes: Sequence[tuple[str, str]], initialdir: Path | None = None
     ) -> tuple[str, ...] | None: ...
+    def pick_dir(self, prompt: str, *, initialdir: Path | None = None) -> str | None: ...
     def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None: ...
     def info(self, message: str) -> None: ...
     def success(self, message: str) -> None: ...
@@ -369,6 +387,47 @@ class RichQuestionaryUI:
                 initialdir=str(initialdir) if initialdir else "",
             )
             return tuple(chosen) if chosen else ()
+        finally:
+            root.destroy()  # never leak the hidden root
+
+    def pick_dir(self, prompt: str, *, initialdir: Path | None = None) -> str | None:
+        """A chosen directory path, or None on a soft cancel (return to menu).
+
+        The folder sibling of :meth:`pick_file`, with the same split cancel semantics and
+        the same no-tkinter fallback. ``askdirectory`` takes no ``filetypes`` — a folder
+        has no extension to filter on — which is why this is its own seam rather than a
+        flag on ``pick_file``.
+        """
+        try:
+            chosen = self._native_open_dir(prompt, initialdir)
+        except KeyboardInterrupt as exc:  # rare: Ctrl-C through the Tk modal loop
+            raise EOFError from exc
+        if chosen is None:  # tkinter unavailable → in-console fallback
+            return self._path_fallback(prompt)
+        return chosen or None  # "" = native Cancel → return to menu
+
+    @staticmethod
+    def _native_open_dir(prompt: str, initialdir: Path | None) -> str | None:
+        """The native folder dialog's result (``""`` on cancel), or None when tkinter is
+        unavailable. Same lazy import and dual ImportError/TclError guard as
+        :meth:`_native_open`."""
+        try:
+            import tkinter
+            from tkinter import filedialog
+        except ImportError:
+            return None
+        try:
+            root = tkinter.Tk()
+        except tkinter.TclError:  # no usable display
+            return None
+        try:
+            root.withdraw()
+            root.wm_attributes("-topmost", True)
+            return filedialog.askdirectory(
+                title=prompt,
+                initialdir=str(initialdir) if initialdir else "",
+                mustexist=True,
+            )
         finally:
             root.destroy()  # never leak the hidden root
 
@@ -643,6 +702,12 @@ class StubUI:
             return (answer,)
         assert isinstance(answer, Sequence)  # a test queued the wrong shape
         return tuple(str(item) for item in answer) or None
+
+    def pick_dir(self, prompt: str, *, initialdir: Path | None = None) -> str | None:
+        """Pops the next queued answer, with :meth:`pick_file`'s three states."""
+        self.messages.append(("pick_dir", prompt))
+        answer = self._pop()
+        return None if answer is None else str(answer)
 
     def reveal_dir(self, path: Path, *, priority: int = REVEAL_AUDIO) -> None:
         """Record the reveal once per instance for the highest priority seen (mirrors the

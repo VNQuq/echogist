@@ -54,6 +54,10 @@ _DEFAULT_BLOCK_SECONDS = 60.0
 # lecture ≈ 3-4 phases, 6h ≈ 6-8); it is NOT a fixed cap. Sized so the validated
 # ~84k-token 3h lecture lands at ~4 phases.
 _DEFAULT_PHASE_TARGET_TOKENS = 24_000
+# Scan-time speech-rate constants (see ScanConfig). Seeded HIGH for Russian, per
+# CLAUDE.md's estimate-Cyrillic-high rule: the scan quote must never undershoot.
+_DEFAULT_WORDS_PER_MINUTE = 150.0
+_DEFAULT_CHARS_PER_WORD = 7.0
 
 # Synthesis step (TD-16 v2): synthesize ONE phase of the transcript into faithful,
 # readable prose — the transcript is ground truth, read directly (one hop). {language}
@@ -169,6 +173,25 @@ class ChunkConfig:
 
 
 @dataclass(frozen=True)
+class ScanConfig:
+    """Duration -> transcript-size constants for the scanner's cost projection (DATA).
+
+    The scanner prices a folder before anything is transcribed, so it has no text to
+    count: it turns each file's DURATION into a character count via these two numbers,
+    then into tokens. Both are seeded high (150 wpm against roughly 110-130 for real
+    Russian lecture speech, 7 chars/word against roughly 6) because the projection is an
+    UPPER BOUND — CLAUDE.md requires the estimate to run high, and an under-quote is the
+    one failure mode that costs the operator money they did not agree to.
+
+    Unmeasured as shipped. The first scan of a folder that already holds a transcript
+    calibrates both against the real character count.
+    """
+
+    words_per_minute: float = _DEFAULT_WORDS_PER_MINUTE
+    chars_per_word: float = _DEFAULT_CHARS_PER_WORD
+
+
+@dataclass(frozen=True)
 class TranscriptConfig:
     """Transcript rendering tunables (DATA, not code).
 
@@ -204,6 +227,7 @@ class ModelConfig:
     # Defaulted (it is the last field): the loader always sets it from the optional
     # [chunk] table; the default keeps minimal hand-built fixtures constructing.
     chunk: ChunkConfig = ChunkConfig()
+    scan: ScanConfig = ScanConfig()
 
     def tier(self, name: str) -> ModelTier:
         """Resolve a tier by name. Unknown/deprecated -> guided ConfigError (F5)."""
@@ -505,6 +529,22 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
             ),
         )
 
+    # [scan] is OPTIONAL on the same terms as [chunk] above.
+    scan_table = raw.get("scan")
+    if scan_table is None:
+        scan = ScanConfig()
+    elif not isinstance(scan_table, dict):
+        raise ConfigError(f"{_MODELS_FILENAME}: [scan] must be a table.")
+    else:
+        scan = ScanConfig(
+            words_per_minute=_optional_positive(
+                scan_table, "words_per_minute", "[scan]", _DEFAULT_WORDS_PER_MINUTE
+            ),
+            chars_per_word=_optional_positive(
+                scan_table, "chars_per_word", "[scan]", _DEFAULT_CHARS_PER_WORD
+            ),
+        )
+
     return ModelConfig(
         tiers=tiers,
         guard=guard,
@@ -512,6 +552,7 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
         asset=asset,
         transcript=transcript,
         chunk=chunk,
+        scan=scan,
     )
 
 
