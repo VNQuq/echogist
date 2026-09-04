@@ -119,3 +119,27 @@ def dated_artifact_path(
     stamp = (today or date.today()).isoformat()
     base = f"{stamp}-{sanitize_stem(stem, fallback=fallback)}"
     return dedup_path(directory, base, suffix, taken=taken)
+
+
+def resolve_source(path: Path) -> Path:
+    """``path.resolve()``, or the path itself when it cannot be resolved (a broken
+    junction) rather than aborting the caller.
+
+    The identity of a SOURCE file, shared by every stage that has to decide whether two
+    paths are the same recording: the scan's dedup key across a tree, and the summary's
+    ``source_path`` back-link (TD-22). Both sides must agree character for character or
+    the join silently misses and a paid summary is re-paid, so the rule lives here once.
+
+    Deliberately NOT casefolded, unlike ``menu._resume_key``. There the key identifies one
+    file the operator picked twice, and folding case only ever merges two spellings of the
+    same thing. Here the value is a dedup key across a whole tree, and on a case-SENSITIVE
+    filesystem ``Lecture.mp4`` and ``lecture.mp4`` are two different recordings: folding
+    them would drop one from the scan silently and, worse, hand it the other's cached
+    duration. The cost of not folding is the opposite and much cheaper — on Windows,
+    where ``resolve`` does not normalize case, one file reachable under two spellings can
+    probe twice. A redundant spawn is visible and harmless; a missing lecture is not.
+    """
+    try:
+        return path.resolve()
+    except OSError:
+        return path

@@ -167,6 +167,9 @@ def load_summary(json_path: Path) -> Summary:
         # artifact still re-renders (just without the block), never a KeyError.
         main_skill=str(raw.get("main_skill", "")),
         test_questions=_test_questions(raw.get("test_questions")),
+        # TD-22 back-link: absent in every .json written before it existed -> empty,
+        # which reads as "unknown source" and re-renders exactly as it always did.
+        source_path=str(raw.get("source_path", "")),
     )
 
 

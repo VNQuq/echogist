@@ -219,22 +219,12 @@ def _keep_dir(path: Path, seen: set[Path]) -> bool:
 
 
 def _resolve(path: Path) -> Path:
-    """``path.resolve()``, or the path itself when it cannot be resolved (a broken
-    junction) rather than aborting the whole walk.
+    """The scan's dedup key for a source file — :func:`naming.resolve_source`.
 
-    Deliberately NOT casefolded, unlike ``menu._resume_key``. There the key identifies one
-    file the operator picked twice, and folding case only ever merges two spellings of the
-    same thing. Here the value is a dedup key across a whole tree, and on a case-SENSITIVE
-    filesystem ``Lecture.mp4`` and ``lecture.mp4`` are two different recordings: folding
-    them would drop one from the scan silently and, worse, hand it the other's cached
-    duration. The cost of not folding is the opposite and much cheaper — on Windows,
-    where ``resolve`` does not normalize case, one file reachable under two spellings can
-    probe twice. A redundant spawn is visible and harmless; a missing lecture is not.
+    Kept as a local alias because the rule is shared with the summary back-link (TD-22)
+    and must stay one definition; see that function for why it does NOT casefold.
     """
-    try:
-        return path.resolve()
-    except OSError:
-        return path
+    return naming.resolve_source(path)
 
 
 # --------------------------------------------------------------------------- #

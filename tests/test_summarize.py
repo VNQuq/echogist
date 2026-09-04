@@ -143,6 +143,75 @@ def test_save_raw_result_illegal_title_sanitized(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# TD-22 — the source back-link, so a second bulk run skips what is already paid for
+# --------------------------------------------------------------------------- #
+def test_save_raw_result_stamps_resolved_source_path(tmp_path: Path) -> None:
+    src = tmp_path / "Lecture.mp4"
+    src.write_bytes(b"x")
+    out = tmp_path / "raw"
+    path = summarize.save_raw_result(_summary("Talk"), out, source_path=src)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # Resolved, not the path as handed in: the scan's key is resolved too, and the two
+    # strings must join exactly or the skip silently misses.
+    assert data["source_path"] == str(src.resolve())
+
+
+def test_save_raw_result_omitting_source_writes_the_pre_td22_shape(tmp_path: Path) -> None:
+    path = summarize.save_raw_result(_summary("Talk"), tmp_path)
+    assert json.loads(path.read_text(encoding="utf-8"))["source_path"] == ""
+
+
+def test_save_raw_result_resolves_an_indirect_source_to_the_same_key(tmp_path: Path) -> None:
+    """`folder/../folder/x.mp4` and `folder/x.mp4` are ONE recording, one summary."""
+    nested = tmp_path / "folder"
+    nested.mkdir()
+    src = nested / "x.mp4"
+    src.write_bytes(b"x")
+    indirect = nested / ".." / "folder" / "x.mp4"
+    direct = summarize.save_raw_result(_summary("A"), tmp_path / "raw", source_path=src)
+    round_about = summarize.save_raw_result(_summary("B"), tmp_path / "raw", source_path=indirect)
+    key_a = json.loads(direct.read_text(encoding="utf-8"))["source_path"]
+    key_b = json.loads(round_about.read_text(encoding="utf-8"))["source_path"]
+    assert key_a == key_b
+    assert summarize.summary_index(tmp_path / "raw") == {key_a}
+
+
+def test_summary_index_collects_every_stamped_source(tmp_path: Path) -> None:
+    out = tmp_path / "raw"
+    for name in ("one", "two"):
+        src = tmp_path / f"{name}.mp4"
+        src.write_bytes(b"x")
+        summarize.save_raw_result(_summary(name), out, source_path=src)
+    assert summarize.summary_index(out) == {
+        str((tmp_path / "one.mp4").resolve()),
+        str((tmp_path / "two.mp4").resolve()),
+    }
+
+
+def test_summary_index_is_empty_for_a_missing_directory(tmp_path: Path) -> None:
+    assert summarize.summary_index(tmp_path / "nope") == set()
+
+
+def test_summary_index_skips_unreadable_json_rather_than_raising(tmp_path: Path) -> None:
+    """A corrupt artifact must not abort the index — worst case is re-paying, loudly."""
+    out = tmp_path / "raw"
+    out.mkdir()
+    (out / "broken.json").write_text("{not json", encoding="utf-8")
+    (out / "list.json").write_text("[1, 2]", encoding="utf-8")  # JSON, but not an object
+    src = tmp_path / "good.mp4"
+    src.write_bytes(b"x")
+    summarize.save_raw_result(_summary("good"), out, source_path=src)
+    assert summarize.summary_index(out) == {str(src.resolve())}
+
+
+def test_summary_index_ignores_a_pre_td22_summary(tmp_path: Path) -> None:
+    """No back-link reads as "unknown source", never as "this source is covered"."""
+    out = tmp_path / "raw"
+    summarize.save_raw_result(_summary("old"), out)  # no source_path
+    assert summarize.summary_index(out) == set()
+
+
+# --------------------------------------------------------------------------- #
 # _default_caller — SDK adapter against a FAKE anthropic module (F2/F4/F5)
 # --------------------------------------------------------------------------- #
 class _FakeBlock:

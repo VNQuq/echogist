@@ -177,6 +177,12 @@ class Summary:
     main_themes: tuple[str, ...] = ()
     main_skill: str = ""
     test_questions: tuple[CheckQuestion, ...] = ()
+    # TD-22 back-link: the resolved source file this summary was made from, so a later
+    # run can ask "is this already summarized" and skip work already paid for. NOT an
+    # LLM field — the tool schema never sets it; :func:`save_raw_result` stamps it at
+    # save time. Empty in every .json written before TD-22 closed, which reads as
+    # "unknown source", never as "no summary exists".
+    source_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -295,7 +301,13 @@ def _fallback_title(source_stem: str, today: date | None) -> str:
 # --------------------------------------------------------------------------- #
 # F13 — persist the raw structured result BEFORE render
 # --------------------------------------------------------------------------- #
-def save_raw_result(summary: Summary, out_dir: Path, *, today: date | None = None) -> Path:
+def save_raw_result(
+    summary: Summary,
+    out_dir: Path,
+    *,
+    today: date | None = None,
+    source_path: Path | None = None,
+) -> Path:
     """Write the summary to ``out_dir/<title>.json`` (no date prefix, deduped). F13.
 
     Called BEFORE render so a render failure (fpdf2 edge, T7) never costs a re-pay:
@@ -305,12 +317,54 @@ def save_raw_result(summary: Summary, out_dir: Path, *, today: date | None = Non
     THIS file's stem (``json_path.stem``) for the ``.pdf``/``.md``, so the triplet
     shares one base. ``today`` is unused today but kept for a future dated-summary
     option and signature symmetry with the other artifact saves.
+
+    ``source_path`` is the media/transcript file this summary came from (TD-22). Passing
+    it stamps the back-link :func:`summary_index` reads back; omitting it writes the
+    pre-TD-22 shape, which indexes as "unknown source".
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = naming.summary_stem(summary.title, fallback="summary")
     path = naming.dedup_path(out_dir, stem, ".json")
+    if source_path is not None:
+        # TD-22: stamped here, not in the summarize call, because the back-link is
+        # provenance rather than model output. Resolved through the SAME rule the scan
+        # uses for its dedup key, or the two strings never join.
+        summary = replace(summary, source_path=str(naming.resolve_source(source_path)))
     path.write_text(_summary_json(summary), encoding="utf-8")
     return path
+
+
+def summary_index(raw_dir: Path) -> set[str]:
+    """Resolved source paths that already have a summary on disk (TD-22).
+
+    The read side of the ``source_path`` back-link: a bulk run over a folder asks this
+    which sources are already paid for and skips them, instead of re-quoting and
+    re-paying for work already done. Keys are ``str(naming.resolve_source(...))``, the
+    same form the scan produces, so the join is exact.
+
+    Deliberately tolerant and never raising: an unreadable, non-JSON or hand-edited file
+    is SKIPPED, and a ``.json`` written before TD-22 has no ``source_path`` at all. Every
+    such file therefore reads as "no record", so the worst case is re-summarizing
+    something already done — visible and merely wasteful. The opposite failure (claiming
+    a source is covered when it is not) would silently drop a lecture from a bulk run,
+    so this function never guesses a link it cannot read.
+    """
+    found: set[str] = set()
+    try:
+        entries = sorted(raw_dir.glob("*.json"))
+    except OSError:
+        return found
+    for entry in entries:
+        try:
+            raw = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        source = raw.get("source_path")
+        if isinstance(source, str) and source:
+            found.add(source)
+    return found
 
 
 def _summary_json(summary: Summary) -> str:

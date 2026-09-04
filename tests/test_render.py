@@ -303,6 +303,20 @@ def test_load_summary_round_trips_a_saved_json(tmp_path: Path) -> None:
     assert loaded == original  # exact reconstruction incl. synthesis + anchors
 
 
+def test_load_summary_round_trips_the_td22_source_back_link(tmp_path: Path) -> None:
+    """The back-link must survive disk, or a re-rendered summary stops matching its
+    source and the next bulk run re-pays for a lecture already summarized."""
+    src = tmp_path / "Lecture.mp4"
+    src.write_bytes(b"x")
+    json_path = summarize.save_raw_result(_summary(title="Talk"), tmp_path / "raw", source_path=src)
+    assert render.load_summary(json_path).source_path == str(src.resolve())
+
+
+def test_load_summary_of_a_pre_td22_json_has_an_empty_back_link(tmp_path: Path) -> None:
+    json_path = summarize.save_raw_result(_summary(title="Old"), tmp_path)
+    assert render.load_summary(json_path).source_path == ""
+
+
 def test_load_summary_bad_json_fails_loud(tmp_path: Path) -> None:
     bad = tmp_path / "broken.json"
     bad.write_text("{not valid json", encoding="utf-8")

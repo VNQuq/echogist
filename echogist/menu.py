@@ -389,7 +389,9 @@ def _run_summary(
 
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
-    json_path = summarize.save_raw_result(result.summary, summaries_dir / "raw")  # BEFORE render
+    json_path = summarize.save_raw_result(  # BEFORE render
+        result.summary, summaries_dir / "raw", source_path=source_path
+    )
     _clear_resume(resume_path)  # durable artifact exists — the within-run partial is spent
     try:
         out_path = deps.render(
