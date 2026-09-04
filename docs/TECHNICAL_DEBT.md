@@ -11,22 +11,6 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-22 — A summary has no back-link to its source file** · MEDIUM · created 2026-09-04
-  (`/plan-eng-review` of `docs/designs/bulk-v3.md`; operator chose "defer to debt" over "fix now").
-  `summarize.save_raw_result:311` names the artifact from the LLM-generated **title**
-  (`naming.summary_stem(summary.title, ...)`), and the `Summary` dataclass carries no field naming
-  the media/transcript file it came from. There is therefore no way to ask "does this source
-  already have a summary on disk". Two consequences, both in the bulk work: the scanner cannot
-  show a "already summarized" column (deliberately dropped from increment 1 for this reason), and
-  a second bulk run over the same folder cannot skip work that was already paid for — it quotes
-  and re-pays full price. Fix: add `source_path: str` to `Summary`, write it in the JSON, and
-  index on it; older JSON files without the field stay readable (treat as unknown).
-  **Trigger for closure:** the first line of increment 2 (full bulk), because paying twice for the
-  same folder is not acceptable there. Not a blocker for increment 0 or 1. **Confirmed live by
-  increment 1 (2026-09-04):** the shipped scanner has no "already summarized" column and its cost
-  projection does not subtract work already paid for, so its dollar figure is labelled an upper
-  bound in the console.
-
 - **TD-23 — The scan projection constants are unmeasured** · LOW · created 2026-09-04
   (bulk v3 increment 1). `config.ScanConfig` turns a file's DURATION into a token count with
   `words_per_minute = 150` and `chars_per_word = 7` (`config/models.toml`, `[scan]`), because at
@@ -38,7 +22,13 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   all-Cyrillic token rate. **Trigger for closure:** the first scan of a folder that already holds
   a transcript — compare the projected character count against `len(transcript_text)` and reseed
   both values from the ratio. Cheap, offline, and it needs no code change, only the two numbers in
-  `models.toml`.
+  `models.toml`. **The 2026-09-04 real-folder scan did NOT close this**, contrary to the plan:
+  all seven folders reported 0 transcript candidates, so the trigger condition was never met.
+  An arithmetic cross-check against the validated 2026-06-27 run (Sonnet, 2h58m57s, $0.5237;
+  economy is exactly a third of those prices, so ~$0.175) against the scan's own $0.093/hour
+  puts the projection ~1.6x high — inside the band this entry predicted, but not a measurement.
+  **The folder run does not depend on these constants**: it gates on the real transcripts
+  (`bulk.folder_estimate`), so only the pre-transcription scan quote is still affected.
 
 - **TD-24 — the scan quote is labelled an UPPER BOUND that the arithmetic does not guarantee** ·
   LOW · created 2026-09-04 (found by the increment-1 review army). `scan.project_file` prices
@@ -65,16 +55,31 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   transparency. Fix: prune on the RESOLVED path against the known `output/` directory rather than
   on the name, which means `walk` has to learn where that is. **Trigger for closure:** the first
   real scan on Windows, or the start of increment 2 — whichever comes first, since increment 2 is
-  where re-processing own output actually costs money.
+  where re-processing own output actually costs money. **Both triggers have now fired** (the
+  real Windows scan ran 2026-09-04; the folder run shipped the same day) and it is still open.
+  The scan found no evidence it bites on the real tree — exactly seven lecture files, no
+  EchoGist artifacts counted — so it is a live risk only if the run is pointed at a folder
+  containing a junction to `output/`.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since. The other open forward item is
+branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since, of which TD-22 is
+now closed and TD-23/24/25 remain open. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-22 — A summary has no back-link to its source file** · CLOSED 2026-09-04 (bulk v3
+  increment 2, commit `7000af4`). `Summary.source_path` carries the resolved source, stamped
+  by `save_raw_result` at save time rather than by the summarize call (the back-link is
+  provenance, not model output, and the tool schema never sets it). `summarize.summary_index`
+  reads the stamps back and `bulk.plan_run` uses it to skip a source that already has a
+  summary, so a second run over the same folder costs nothing — verified end to end against
+  seven finished lectures: zero paid calls. The resolve rule moved to `naming.resolve_source`
+  so the stamp and the scan's dedup key cannot drift apart. Older `.json` files have no field
+  and read as "unknown source", never as "covered".
 
 - **TD-9 — Cheap-call "press Enter to summarize" beat** ✓ CLOSED 2026-08-03 (was LOW, created 06-17;
   `chore/close-tech-debt`). `_run_summary` branches on `cost.requires_explicit_confirmation`: above threshold the

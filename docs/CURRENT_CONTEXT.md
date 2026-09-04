@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-09-04 — **bulk v3 increments 0 and 1 shipped and review-hardened; scanner unrun on real data.**
+**Updated:** 2026-09-04 — **bulk v3 increments 0, 1 and 2 shipped; real folder scanned; folder run unrun on real data.**
 **Authority:** [CLAUDE.md](../CLAUDE.md) — the hard constraints and the rationale live there, not here.
 **Max:** ≈ 60 lines.
 
@@ -44,54 +44,50 @@ lecture, K=4, $0.5237, 131/131 anchors resolve) — TD-16 entry.
   Windows-produced summary is only re-validatable in WSL against ITS transcript. **API key:**
   `ANTHROPIC_API_KEY` env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are Windows-only.
 
-## bulk v3 — increments 0 and 1 SHIPPED ([docs/designs/bulk-v3.md](./designs/bulk-v3.md))
+## bulk v3 — increments 0, 1, 2 SHIPPED ([docs/designs/bulk-v3.md](./designs/bulk-v3.md))
 
 Approved 2026-09-04 after /office-hours (3 rounds: 7, 6, 7) and /plan-eng-review (CLEAR). The design doc carries
 the spec; only what the code cannot tell you lives here.
 
-- **Increment 0 ✓** resume keyed on `blake2s(resolved source path, casefolded)`, old stem-keyed partials swept by
-  shape. **Increment 1 ✓** `scan.py` + menu row 4 `Scan a folder` (POSITIONAL keys — Settings/Exit renumbered).
+- **Increment 0 ✓** resume keyed on `blake2s(resolved source path, casefolded)`. **Increment 1 ✓** `scan.py` +
+  menu row 4 `Scan a folder`. A folder the walk cannot LIST is reported, not lost; cached numbers are INPUT and
+  are range-bounded; Ctrl-C MERGES the scan cache while a completed run REPLACES it (so it holds ONE root).
 - **Casefold is asymmetric ON PURPOSE.** `menu._resume_key` folds case (one file the operator picked twice, on
-  Windows). `scan._resolve` does NOT (a dedup key across a tree — folding made `Lecture.mp4` and `lecture.mp4`
-  one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
-- **A folder the walk cannot LIST is reported, not lost.** `os.walk`'s default `onerror` swallows the
-  `PermissionError` and yields nothing, so every file in an ACL/cloud-locked folder used to vanish from all three
-  buckets. `walk` takes `on_error`; the FOLDER goes to `unreadable` (its contents are unknowable by definition).
-- **Cached numbers are INPUT, not state.** `_valid_duration`/`_valid_kbps` reject non-finite, negative, bool and
-  >1000h values: a hand-edited negative duration produced a plausible, silently CHEAPER quote.
-- **Ctrl-C MERGES the scan cache, a completed run REPLACES it.** A cancel must never delete entries it had not
-  reached; a complete run rewriting from live results IS the eviction policy. Consequence, accepted: the cache
-  holds ONE scan root, so alternating folders re-probes.
-- **Increment 2 (the paid bulk) is NOT started and is GATED** on running the scanner against the real lecture
-  folder. Its file count and collision report decide whether the paid bulk is worth building at all.
-- **Increment 1b (mp3 re-encode rule, `dec-c3adfe5b`)** has a DRAFT spec at
-  [docs/designs/mp3-reencode-1b.md](./designs/mp3-reencode-1b.md) — written unattended, NOT reviewed, NOT
-  implemented. Two open questions in it need the operator: whether `target_kbps` is stored or derived from
-  `lame_quality`, and whether the 222 MiB clause still earns its keep next to the bitrate clause. It also
-  records a unit discrepancy: the threshold is specified in MiB but its justifying figure was computed in
-  decimal MB (207 vs 197 kbps at 2.5h).
-- **Both CRITICAL regressions are pinned:** cross-source summary prose (inc 0), cost estimate biased low (inc 1 —
-  the prompt overhead must land K times, not once). 588 tests green.
+  Windows). `naming.resolve_source` does NOT (a dedup key across a tree — folding made `Lecture.mp4` and
+  `lecture.mp4` one entry and dropped a real recording silently). Same word, opposite job; do not "unify" them.
+- **The real folder (Windows, 2026-09-04):** 7 files, one per folder, 23h43m, 8.0 GB, **0 duplicate names,
+  0 unreadable, 0 transcript candidates**, $2.20 upper bound at `economy`. It killed the case for increment 2's
+  naming machinery and did NOT calibrate TD-23 (no transcript to compare against — see that entry).
+- **Increment 2 ✓ the folder run** (`bulk.py`, menu row 5 `Summarize a folder`; POSITIONAL keys — Settings/Exit
+  are now 6/7). **Two phases:** TRANSCRIBE the whole folder (local, free), then ONE exact quote over the real
+  transcripts and ONE confirm, then the paid calls. No per-file gate; that is the babysitting it removes.
+  TD-23's duration→token constants are off this path; **TD-24 is NOT dissolved by it** — the output side is
+  still `output_tokens_estimate`, exactly as the single-file flow prices it.
+- **The collision machinery was NOT built.** `bulk.plan_run` instead refuses the one operation that is wrong
+  under a collision: reusing a saved transcript whose stem is ambiguous in either direction. Re-transcribing is
+  free and visible; summarizing one lecture from another's transcript is paid and silent. The SUMMARY skip has
+  no such limit — TD-22 joins it on the resolved source path, not a name.
+- **The folder run does not extract MP3s** (TD-12's kept-MP3 baseline is a SINGLE-file rule) and its plan is
+  SORTED, not in `os.walk` order, so a 7-lecture course plays back 1..7 and reproduces between runs.
+- **Increment 1b (mp3 re-encode, `dec-c3adfe5b`)** — DRAFT only at
+  [docs/designs/mp3-reencode-1b.md](./designs/mp3-reencode-1b.md), unreviewed and unimplemented. Two open
+  questions plus a MiB/MB unit discrepancy (207 vs 197 kbps at 2.5h). With the real durations known, the
+  222 MiB threshold works out to 206 kbps for the shortest lecture and 94 kbps for the longest.
+- **Pinned regressions:** cross-source summary prose (inc 0); cost estimate biased low (inc 1); the folder
+  gate asked ONCE not per file, and `folder_estimate` summing per-file quotes rather than flattening them into
+  one reconcile (inc 2 — flattening under-quotes by `files - 1` calls). 618 tests green.
 
 ## Next
 
-1. **Run the scanner on the real lecture folder (Windows).** The one gate on everything downstream: its file
-   count, hours, dollar figure and collision report decide whether increment 2 is worth building, and its first
-   run against a folder that already has a transcript calibrates TD-23's two unmeasured constants.
-2. **First live run of `check-models.py`** on a box with a key: seeds `config/model_names.json`, confirms the
-   real `GET /v1/models` shape. Run one is a pure baseline; the signal starts on run two.
-3. **T8 (P3):** offline LLM-judge groundedness eval — trigger-gated, eval-suite only, never per-run.
-
-## Blockers / debts / SoT
-
-- **Blockers:** none. **Debts:** [TECHNICAL_DEBT.md](./TECHNICAL_DEBT.md) — **TD-22..TD-25 open** (a summary has no
-  back-link to its source; `save_raw_result:311` names it from the LLM title, so bulk cannot skip already-paid
-  work — closes at the start of increment 2; **TD-23** projection constants unmeasured; **TD-24** the quote is labelled
-  an upper bound the output side does not formally guarantee — display-only, the real spend gate recomputes;
-  **TD-25** `output/` pruning is by name, so a Windows junction under another name leaks).
-  TD-1..21 shut 2026-08-03 (TD-7, TD-20 WONTFIX).
-- **Language rule (2026-09-04):** English is the language of the application — console, code, comments,
-  commits. Russian only for `README.md`, `docs/USAGE.md`, `CHANGELOG.md` and the generated summaries.
-- **SoT:** locked build spec [ENGINEERING_PLAN.md](./archive/ENGINEERING_PLAN.md) (TD-16 deviates,
-  operator-approved) · original SOW [`ТЗ`](./archive/ТЗ_аудио_резюме_приложение.md) · plan
-  `~/.claude/plans/elegant-prancing-journal.md` (eng-cleared).
+1. **Run the folder run on the real lecture folder (Windows).** Everything is shipped and green
+   in CI against stubs; it has never touched a real recording or the real API. Start it, let the
+   7 transcripts build, then read the ONE quote before confirming. Expect it near $1.40, not the
+   scan's $2.20 (that quote projects from duration; this one is computed from the real text).
+2. **Calibrate TD-23 from the first transcript** — compare the scan's projected character count
+   against `len(transcript_text)` and reseed `words_per_minute`/`chars_per_word` in
+   `config/models.toml`. Two numbers, no code change.
+3. **Decide TD-24** (soften the "UPPER BOUND" label, or price the scan's output at a real
+   ceiling) and **TD-25** (`output/` pruned by name, so a junction leaks). Both triggers fired.
+4. **Review the increment 1b draft** at `docs/designs/mp3-reencode-1b.md` — NOT approved, NOT
+   implemented, two open questions plus a MiB/MB unit discrepancy.
+5. **First live run of `scripts/check-models.py`** on a box with a key. Open from before.
