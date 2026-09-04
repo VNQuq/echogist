@@ -213,6 +213,27 @@ contradiction in core_idea rather than silently choosing one.
 # (phases do not overlap; only per-call prompt overhead is added). See TD-24.
 phase_target_tokens = 12000
 
+# TD-26 transcript hygiene — applied to the SYNTHESIS INPUT only; the saved transcript on
+# disk keeps every block, because it is the operator's ground truth against the recording.
+#
+# Whisper emits training-set subtitle boilerplate over silence, music, or a title card. On
+# the operator's real lecture that is six opening minutes of "Добро пожаловать на наш канал!"
+# plus a run of "Субтитры сделал <name>" mid-file — 10 of 198 blocks. The synthesis prompt
+# calls the transcript ground truth and forbids dropping material, so without this the model
+# faithfully summarizes a YouTube greeting as lecture content. That is fabrication entering
+# UPSTREAM of the model, where neither the groundedness contract nor the anchor validator
+# looks: the timecodes are real, only the words are invented.
+#
+# Both numbers are MEASURED on that transcript, not guessed. Across its 188 genuine speech
+# blocks the unique-word ratio never fell below 0.56 (median 0.71) and the word count never
+# below 15 (median 133); every boilerplate block sat at ratio 0.07-0.50. The floor sits in
+# that gap. Raise min_unique_word_ratio only if boilerplate survives; LOWER it if a real
+# block with heavy legitimate repetition (a chant, a drill, a counted exercise) gets cut.
+min_unique_word_ratio = 0.55
+# Word count under which a block cannot hold a minute of talk. Used ONLY for blocks touching
+# a detected loop, so a quiet moment surrounded by real speech is never cut on length alone.
+min_block_words = 15
+
 [scan]
 # The folder scanner prices summaries BEFORE anything is transcribed, so it turns each
 # file's duration into a character count with these two numbers. Both are seeded high on

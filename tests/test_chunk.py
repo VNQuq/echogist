@@ -94,3 +94,85 @@ def test_bin_blocks_is_self_defensive_on_degenerate_input() -> None:
     # helper must not divide by zero on a degenerate direct call.
     assert chunk._bin_blocks([], 3) == []
     assert chunk._bin_blocks([1, 2, 3], 0) == []
+
+
+# --------------------------------------------------------------------------- #
+# drop_degenerate_blocks (TD-26) — Whisper boilerplate never reaches the model
+# --------------------------------------------------------------------------- #
+def _speech(n: int, *, start_min: int = 0) -> list[str]:
+    """n blocks of varied, sentence-like text — a unique-word ratio well above the floor."""
+    return [
+        f"[00:{start_min + i:02d}:00] "
+        + " ".join(f"слово{i}{j}" for j in range(40))  # 40 distinct words, ratio 1.0
+        for i in range(n)
+    ]
+
+
+_LOOP = "Добро пожаловать на наш канал! Добро пожаловать на наш канал!"  # ratio 0.5
+_CREDIT = "Субтитры создавал SubsAuthor"  # 3 words, all distinct — ratio 1.0, but tiny
+
+
+def test_drops_a_repetition_loop() -> None:
+    text = "\n".join([f"[00:00:00] {_LOOP}", f"[00:01:00] {_LOOP}", *_speech(3, start_min=2)])
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert len(dropped) == 2
+    assert all(_LOOP in line for line in dropped)
+    assert len(kept.splitlines()) == 3
+
+
+def test_drops_a_short_credit_line_touching_a_loop() -> None:
+    """Rule B: the unique 3-word credit has ratio 1.0, so only adjacency catches it."""
+    text = "\n".join(
+        [
+            f"[00:00:00] {_CREDIT}",
+            f"[00:01:00] {_LOOP}",
+            f"[00:02:00] {_LOOP}",
+            *_speech(3, start_min=3),
+        ]
+    )
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert _CREDIT in dropped[0], "the credit line adjacent to the loop must go with it"
+    assert len(dropped) == 3
+    assert len(kept.splitlines()) == 3
+
+
+def test_keeps_a_short_block_surrounded_by_speech() -> None:
+    """A quiet minute is not boilerplate: length alone must never cut a block."""
+    quiet = "[00:02:00] Да, именно так."
+    text = "\n".join([*_speech(2), quiet, *_speech(2, start_min=3)])
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert dropped == ()
+    assert quiet in kept
+
+
+def test_keeps_a_block_that_is_mostly_real_speech() -> None:
+    """WHOLE blocks only — a stray credit glued to real talk keeps the real talk."""
+    mixed = "[00:01:00] " + _CREDIT + " " + " ".join(f"мысль{j}" for j in range(40))
+    text = "\n".join([*_speech(1), mixed, *_speech(1, start_min=2)])
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert dropped == ()
+    assert mixed in kept
+
+
+def test_all_boilerplate_is_returned_untouched_not_emptied() -> None:
+    """A transcript with no speech at all must not become an empty synthesis input."""
+    text = "\n".join(f"[00:0{i}:00] {_LOOP}" for i in range(3))
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert kept == text
+    assert dropped == ()
+
+
+def test_drop_is_configurable_off() -> None:
+    """A ratio floor of 0 disables Rule A, and with it Rule B's only seed."""
+    text = "\n".join([f"[00:00:00] {_LOOP}", *_speech(2, start_min=1)])
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig(min_unique_word_ratio=0.0))
+    assert dropped == ()
+    assert kept == text
+
+
+def test_kept_blocks_keep_their_timecodes_for_the_anchor_gate() -> None:
+    """Anchors are validated against the text the model saw, so surviving timecodes must
+    still parse — a dropped block simply stops being a citeable anchor."""
+    text = "\n".join([f"[00:00:00] {_LOOP}", *_speech(2, start_min=1)])
+    kept, _ = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert chunk.block_timecodes(kept) == ("[00:01:00]", "[00:02:00]")

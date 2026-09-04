@@ -81,33 +81,58 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   EchoGist artifacts counted — so it is a live risk only if the run is pointed at a folder
   containing a junction to `output/`.
 
-- **TD-26 — Whisper hallucinates filler over non-speech, and it is summarized as content** ·
-  MEDIUM · created 2026-09-04 (found while calibrating TD-23 on the first real transcript).
-  The real lecture-4 transcript opens with SIX consecutive minute-blocks of
-  `Субтитры создавал SubsAuthor` / `Добро пожаловать на наш канал!` — a well-known Whisper
-  failure mode where the decoder emits training-set subtitle boilerplate over silence, music, or
-  an intro screen. Twelve of the file's 198 blocks (~6%) carry it. This is not cosmetic: the
-  synthesis prompt says the transcript is ground truth and instructs the model to cover every
-  point and NOT to drop material, so the phase covering 00:00-00:06 will faithfully summarize a
-  YouTube greeting that the author never said. That collides head-on with fidelity properties
-  (1) grounded and (2) no fabrication — the fabrication enters via the transcript, upstream of
-  the LLM, where none of the current gates look. The anchor validator does not catch it either:
-  the timecodes are real, only the words are invented. **Fix candidates:** drop leading/trailing
-  blocks whose body is a repeated known-boilerplate phrase; or a general run-length filter on
-  identical consecutive block bodies (the top repeats here are 4x identical lines), which is
-  content-agnostic and catches the whole class. **Trigger for closure:** before the next paid
-  folder run — every one of the seven lectures is likely to carry the same intro artifact.
-  **Not yet measured on the other six transcripts.**
+- **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
+  **HIGH** · created 2026-09-04 (operator call, mid-session). The tree is fixed and flat:
+  `output/{audio,transcripts,summaries}`, with `summaries/raw/` and `summaries/raw/.resume`
+  underneath. Every run of every kind pours into the same three buckets, so a seven-lecture
+  course, a one-off recording and last month's experiment are indistinguishable once saved.
+  The operator asked mid-session for the folder run to write into a dated `date_bulk`
+  directory; that change was **deliberately CANCELLED and escalated to this entry** rather
+  than shipped, because the layout is load-bearing in ways a one-line path change would
+  quietly break, and the right fix is a decision about what an EchoGist *artifact release*
+  IS, not a new subdirectory.
+
+  **What makes it load-bearing** (why this is HIGH and not a cosmetic tidy):
+  1. **The transcript pool IS the checkpoint.** CLAUDE.md's recovery principle is
+     "artifact-based recovery, not a job engine" — durable state is the saved artifact. Re-runs
+     find prior work by looking in the FLAT `output/transcripts`. Move transcripts under a
+     per-run folder and the next run stops finding them: on the operator's real folder that is
+     ~3 hours of GPU time silently repeated.
+  2. **The summary skip joins on resolved source path, not location** (TD-22,
+     `summarize.summary_index`). It walks a known summaries directory. Any per-run split
+     requires the index to search ACROSS run folders or the "already summarized, not re-paid
+     for" guarantee — the one that protects money — silently stops holding.
+  3. **26 hardcoded path expressions.** `deps.base / "output" / "<sub>"` is written inline
+     across `menu.py` (12 sites), plus `provision.OUTPUT_SUBDIRS` and `scan._OUTPUT_DIR_NAME`.
+     There is no path module. Any layout change is a 26-site edit today, and `scan._keep_dir`
+     prunes on the literal name `output` (see TD-25), so the layout and the self-exclusion
+     rule are already coupled by a string.
+
+  **The actual question to answer** (this is a design decision, not a refactor): what is the
+  unit of release — a RUN (dated), a SOURCE COURSE (named after the input folder), or the
+  current flat pool with grouping left to the file manager? Each answers re-run semantics
+  differently: a dated unit re-transcribes or needs a cross-folder index; a named unit merges
+  two different courses that share a folder name; the flat pool is what exists and scales badly
+  past a few dozen files. Whatever wins, it must keep both guarantees above intact and should
+  land a real `paths` module so the layout has ONE definition.
+
+  **Trigger for closure:** before the operator's second real course goes through the folder
+  run — that is the point where a flat `summaries/` stops being navigable and the decision can
+  no longer be deferred. **Blocks nothing today**; the current flat layout is correct, just
+  unscalable. Sequence it AFTER the menu/logging work, since a `paths` module is easier to
+  land once the two-module menu has settled which flows exist.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-25 are the entries since, of which TD-22 is
-now closed and TD-23/24/25/26 remain open. The other open forward item is
+now closed and TD-23/24/25/27 remain open (TD-26 closed the same day it was opened). The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- TD-26 — Whisper boilerplate reached the summary · closed 2026-09-04 · `chunk.drop_degenerate_blocks` trims the synthesis INPUT only (the saved transcript stays verbatim ground truth); two measured, content-agnostic rules — a unique-word-ratio floor for the repetition loop, plus adjacency for the short credit line touching it. Drops 10 of 198 blocks on the real lecture with no false positives, and is reported to the operator rather than skipped silently.
 
 - **TD-22 — A summary has no back-link to its source file** · CLOSED 2026-09-04 (bulk v3
   increment 2, commit `7000af4`). `Summary.source_path` carries the resolved source, stamped

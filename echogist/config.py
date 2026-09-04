@@ -53,9 +53,15 @@ _DEFAULT_BLOCK_SECONDS = 60.0
 # target — ceil(total_tokens / phase_target_tokens) — so it SCALES with length (a 3h
 # lecture ≈ 3-4 phases, 6h ≈ 6-8); it is NOT a fixed cap. Sized so the validated
 # ~84k-token 3h lecture lands at ~4 phases.
-_DEFAULT_PHASE_TARGET_TOKENS = 24_000
+_DEFAULT_PHASE_TARGET_TOKENS = 12_000
 # Scan-time speech-rate constants (see ScanConfig). Seeded HIGH for Russian, per
 # CLAUDE.md's estimate-Cyrillic-high rule: the scan quote must never undershoot.
+# TD-26 transcript hygiene. Measured on the operator's real 3h22m RU lecture (198 blocks):
+# genuine speech blocks never fell below a 0.56 unique-word ratio (median 0.71) and never
+# below 15 words (median 133), while every Whisper boilerplate-loop block sat at 0.07-0.50.
+# The floor is set just under the observed speech minimum so the two classes stay separated.
+_DEFAULT_MIN_UNIQUE_WORD_RATIO = 0.55
+_DEFAULT_MIN_BLOCK_WORDS = 15
 _DEFAULT_WORDS_PER_MINUTE = 150.0
 _DEFAULT_CHARS_PER_WORD = 7.0
 
@@ -166,10 +172,19 @@ class ChunkConfig:
 
     ``phase_target_tokens`` is the target tokens per CONTIGUOUS, non-overlapping phase.
     K = ceil(total_tokens / phase_target_tokens), computed (scales with length), not a
-    cap: a 3h lecture lands at ~3-4 phases, a 6h one at ~6-8.
+    cap. Sized so a phase's faithful prose fits ``[summarize].max_output_tokens`` with
+    room to spare — see the rationale in ``models.toml``.
+
+    The other two are TD-26 transcript hygiene, applied to the synthesis INPUT only
+    (:func:`echogist.chunk.drop_degenerate_blocks`); the saved transcript on disk stays
+    verbatim. ``min_unique_word_ratio`` is the floor below which a block is a repetition
+    loop rather than speech; ``min_block_words`` is the length under which a block is too
+    short to carry a minute of talk, used only for blocks TOUCHING such a loop.
     """
 
     phase_target_tokens: int = _DEFAULT_PHASE_TARGET_TOKENS
+    min_unique_word_ratio: float = _DEFAULT_MIN_UNIQUE_WORD_RATIO
+    min_block_words: int = _DEFAULT_MIN_BLOCK_WORDS
 
 
 @dataclass(frozen=True)
@@ -527,6 +542,17 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
             phase_target_tokens=int(
                 _optional_positive(
                     chunk_table, "phase_target_tokens", "[chunk]", _DEFAULT_PHASE_TARGET_TOKENS
+                )
+            ),
+            min_unique_word_ratio=_optional_positive(
+                chunk_table,
+                "min_unique_word_ratio",
+                "[chunk]",
+                _DEFAULT_MIN_UNIQUE_WORD_RATIO,
+            ),
+            min_block_words=int(
+                _optional_positive(
+                    chunk_table, "min_block_words", "[chunk]", _DEFAULT_MIN_BLOCK_WORDS
                 )
             ),
         )

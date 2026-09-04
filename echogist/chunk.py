@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from .config import ChunkConfig
@@ -83,6 +83,94 @@ def _blocks(text: str) -> list[_Block]:
         last = start
         out.append(_Block(start=start, line=raw))
     return out
+
+
+# Below this a block is too short for the unique-word ratio to mean anything: a genuine
+# "Да. Да." is 50% unique and would look exactly like a loop. Blocks this small are judged
+# by Rule B (adjacency) instead, never by ratio.
+_MIN_WORDS_FOR_RATIO = 4
+
+# Trailing punctuation stripped before comparing words, so "канал!" and "канал" are one word.
+_WORD_PUNCT = ".,!?…:;—-\"'()[]«»"
+
+
+def _block_body(line: str) -> str:
+    """The spoken text of a block, without its leading ``[HH:MM:SS]`` timecode."""
+    return _TIMECODE_RE.sub("", line, count=1).strip() if _TIMECODE_RE.match(line) else line.strip()
+
+
+def _unique_word_ratio(words: Sequence[str]) -> float:
+    """Distinct words / total words, case- and punctuation-insensitive. 0.0 for no words.
+
+    The signature of a Whisper repetition loop: the decoder emits one phrase over and over
+    across a stretch of silence or music, so the block is long on words and short on
+    distinct ones. Real speech does not do this — measured floor 0.56 on a real RU lecture.
+    """
+    if not words:
+        return 0.0
+    distinct = {w.lower().strip(_WORD_PUNCT) for w in words}
+    return len(distinct) / len(words)
+
+
+def drop_degenerate_blocks(text: str, cfg: ChunkConfig) -> tuple[str, tuple[str, ...]]:
+    """Drop whole non-speech blocks from the SYNTHESIS INPUT. Returns (kept text, dropped).
+
+    TD-26. Whisper emits training-set subtitle boilerplate over silence, music or an intro
+    screen — on the operator's real lectures, minutes of ``Добро пожаловать на наш канал!``
+    and ``Субтитры создавал <name>`` before the speaker starts. The synthesis prompt treats
+    the transcript as ground truth and is told to cover everything and drop nothing, so
+    without this the model faithfully summarizes a YouTube greeting as lecture content:
+    fabrication that enters UPSTREAM of the model, where the groundedness contract and the
+    anchor validator cannot see it (the timecodes are real — only the words are invented).
+
+    Two content-agnostic rules, no phrase list (a phrase list only ever catches the
+    boilerplate someone already saw):
+
+    * **Rule A — the loop.** A block with enough words to judge whose unique-word ratio is
+      below ``cfg.min_unique_word_ratio`` is a repetition loop, not speech.
+    * **Rule B — the shoulder.** A block too short to hold a minute of talk
+      (``cfg.min_block_words``) that TOUCHES a Rule-A block is part of the same artifact,
+      applied outward until it stops spreading. This is what catches the single unique
+      credit line that opens the run (``Субтитры создавал ...``, 8 words, ratio 1.0) without
+      touching a legitimately quiet moment surrounded by real speech.
+
+    WHOLE blocks only — never an edit inside one. A block that is mostly real speech with a
+    stray credit glued to its front keeps all of it: losing a real sentence is worse than
+    keeping a stray phrase, and the operator's manual re-check is the backstop (CLAUDE.md
+    fidelity gate). Dropping every block is refused — a transcript with no speech at all is
+    returned untouched rather than emptied, so the caller never gets a silent empty input.
+
+    The SAVED transcript is not modified. It stays verbatim ground truth on disk for the
+    operator to check against the recording; only what is handed to the model is cleaned.
+    Callers must REPORT what came back in ``dropped`` — CLAUDE.md forbids a silent skip.
+    """
+    blocks = _blocks(text)
+    if not blocks:
+        return text, ()
+
+    words = [_block_body(b.line).split() for b in blocks]
+    drop = [
+        len(w) >= _MIN_WORDS_FOR_RATIO and _unique_word_ratio(w) < cfg.min_unique_word_ratio
+        for w in words
+    ]
+
+    # Rule B spreads outward from the Rule-A runs until nothing more is adjacent to a drop.
+    spreading = True
+    while spreading:
+        spreading = False
+        for i, w in enumerate(words):
+            if drop[i] or len(w) >= cfg.min_block_words:
+                continue
+            before = i > 0 and drop[i - 1]
+            after = i + 1 < len(drop) and drop[i + 1]
+            if before or after:
+                drop[i] = True
+                spreading = True
+
+    kept = [b.line for i, b in enumerate(blocks) if not drop[i]]
+    if not kept:  # a transcript that is ALL boilerplate: hand it back rather than empty it
+        return text, ()
+    return "\n".join(kept), tuple(b.line for i, b in enumerate(blocks) if drop[i])
 
 
 def block_timecodes(text: str) -> tuple[str, ...]:

@@ -178,6 +178,9 @@ def test_shipped_summarize_config_loads() -> None:
 def test_shipped_chunk_config_loads() -> None:
     cfg = load_model_config(REPO_MODELS)
     assert cfg.chunk.phase_target_tokens == 12_000  # TD-16 v2 phase-split target
+    # TD-26 hygiene floors, measured on a real RU lecture (speech never below 0.56 / 15).
+    assert cfg.chunk.min_unique_word_ratio == 0.55
+    assert cfg.chunk.min_block_words == 15
     # TD-16 v2 synthesis/reconcile prompts present, with their substitution tokens.
     assert "{language}" in cfg.summarize.synthesis_system_prompt
     assert "{interpretation}" in cfg.summarize.synthesis_system_prompt
@@ -187,7 +190,12 @@ def test_shipped_chunk_config_loads() -> None:
 def test_missing_chunk_table_uses_defaults(tmp_path: Path) -> None:
     # VALID_MODELS_TOML has no [chunk] / no synthesis_system_prompt -> code defaults apply.
     cfg = load_model_config(_write(tmp_path / "models.toml", VALID_MODELS_TOML))
-    assert cfg.chunk.phase_target_tokens == 24_000  # TD-16 v2 default applies
+    # The CODE default must track the shipped models.toml: a missing [chunk] table used to
+    # silently restore 24_000, i.e. the phase size that overflowed the output cap on a real
+    # lecture. Tie them together so the fallback path cannot reintroduce the bug.
+    assert cfg.chunk.phase_target_tokens == 12_000
+    assert cfg.chunk.min_unique_word_ratio == 0.55
+    assert cfg.chunk.min_block_words == 15
     # TD-16 v2 prompts default in when the keys are absent (not crashed).
     assert "{interpretation}" in cfg.summarize.synthesis_system_prompt
     assert "{language}" in cfg.summarize.reconcile_system_prompt

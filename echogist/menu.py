@@ -267,6 +267,27 @@ def _clear_resume(resume_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # The one summary sub-flow, shared by every summary-producing path
 # --------------------------------------------------------------------------- #
+def _report_dropped_blocks(ui: UI, dropped: Sequence[str], *, preview: int = 3) -> None:
+    """Say what :func:`chunk.drop_degenerate_blocks` removed from the synthesis input.
+
+    CLAUDE.md forbids a silent skip, and this one is worth seeing for its own sake: a long
+    boilerplate run at the head of a transcript usually means the recording opens on silence
+    or a title card, which is the operator's cue that the timecodes they are about to read
+    start later than the video does. A few examples, not the whole list — six identical
+    greeting lines say nothing the first one did not.
+    """
+    if not dropped:
+        return
+    ui.info(
+        f"Skipping {len(dropped)} non-speech block(s) before summarizing "
+        f"(repeated filler transcribed over silence; the saved transcript keeps them):"
+    )
+    for line in dropped[:preview]:
+        ui.info(f"    {line[:88]}")
+    if len(dropped) > preview:
+        ui.info(f"    ... and {len(dropped) - preview} more")
+
+
 def _run_summary(
     deps: Deps,
     settings: Settings,
@@ -301,6 +322,12 @@ def _run_summary(
     """
     ui = _ui(deps)
     tier = model_config.tier(settings.model_tier)  # ConfigError (F5) → loop backstop
+
+    # TD-26: strip Whisper's boilerplate loops (subtitle credits / channel greetings emitted
+    # over silence) from what the model reads. The file on disk keeps every block — this
+    # trims the synthesis INPUT only. Reported, never silent (CLAUDE.md: no silent skip).
+    transcript_text, dropped = chunk.drop_degenerate_blocks(transcript_text, model_config.chunk)
+    _report_dropped_blocks(ui, dropped)
 
     # TD-16 v2: split the transcript into K contiguous synthesis phases, locally + before
     # the wire. The same deterministic plan_phases is used inside summarize_auto, so the K
@@ -1041,10 +1068,17 @@ def _flow_bulk(deps: Deps) -> None:
         return
 
     # The gate — one exact quote over the real transcripts, one answer for the whole run.
+    # Quote the SAME text the run will send: _run_summary drops TD-26 boilerplate blocks per
+    # file, so pricing the raw transcript here would quote phases that never get summarized.
+    # The drops are reported per file during the run, not here — seven blocks of the same
+    # greeting listed before the gate is noise in front of the only number that matters.
     per_file = [
         [
             guard.estimate_input_tokens(phase.text)
-            for phase in chunk.plan_phases(with_text[src], model_config.chunk)
+            for phase in chunk.plan_phases(
+                chunk.drop_degenerate_blocks(with_text[src], model_config.chunk)[0],
+                model_config.chunk,
+            )
         ]
         for src in ordered
     ]
