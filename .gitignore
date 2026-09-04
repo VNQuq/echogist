@@ -52,6 +52,9 @@ config/model_names.json
 # Operator test clips — placed locally per tests/fixtures/audio/README.md, never committed
 tests/fixtures/audio/*
 !tests/fixtures/audio/README.md
+# Operator scratch — real transcripts/recordings copied in for local inspection and
+# calibration (e.g. reseeding the [scan] constants). Personal material, never committed.
+temp/
 
 # Data / logs / dumps
 data/
