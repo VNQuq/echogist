@@ -1,6 +1,7 @@
 # Current Context
 
-**Updated:** 2026-09-05 · v2.3.0 + 12 unreleased commits. Calibration: run 1 (7 RU lectures,
+**Updated:** 2026-09-05 · v2.3.0 + 15 unreleased commits. **The debt registry is empty of
+HIGH/MEDIUM entries — TD-27 closed, so v3.0 is now cuttable** (see Next). Calibration: run 1 (7 RU lectures,
 Haiku, **$2.4003**) seeded the cost model; run 2 (`КУРС2025`, 6 lectures, 18h18m,
 **balanced**, **$3.7246**) is the first Sonnet folder run, **0 CJK slips, 0 undrawable chars**.
 Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed TD-31 + TD-33.
@@ -29,6 +30,15 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
   `kill -9` as a fake artifact and poisoned dedup forever. One publish scheme,
   `naming.publish_text`, on EVERY durable write. **Casefold is asymmetric ON PURPOSE:**
   `_resume_key` folds, `naming.resolve_source` does not (folding dropped a recording).
+- **Grouping lives in the artifact's NAME, and the tree stays FLAT** (TD-27). A summary is
+  `<date>-<source stem>-<title>`; the date is the RUN's, taken ONCE per folder run (an 18h run
+  crosses midnight and would split a course in two). The source part truncates from the HEAD —
+  a download's noise is the site tag in front, the discriminator is the lecture number at the back.
+  The total cap is `naming._MAX_SUMMARY_STEM` and cannot rise alone: `render` re-runs
+  `summary_stem` over the base, so a longer stem splits the triplet silently. **Do not add a
+  subdirectory** — `transcript_sources`, `summary_index`, `_pick_transcript` and
+  `_sweep_stale_resumes` are all single-level `glob` and would silently find nothing.
+  `paths` is the ONE definition of the layout; it computes and never creates.
 - **Identity is CONTENT and lives in the transcript's NAME** (TD-31). `fp = sha256(size +
   head/tail 1 MiB)[:16]`; both joins key on it, so a move or rename costs nothing and two
   courses with identical filenames never share a transcript. **Taken ONCE from the original and
@@ -51,9 +61,9 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
 ## Next
 
 1. **Stub pipeline on Windows before the next push** (CLAUDE.md). WSL has no clip fixture and
-   no Whisper model, so it cannot run here. Four commits are waiting.
-2. **TD-27** is no longer a design question (TD-31 removed both index constraints): what is
-   left is a `paths` module over 26 hardcoded expressions.
-3. **v3.0, not v2.4.0** — 3.0 begins when the registry empties, and TD-31 already broke both
-   artifact formats, so nothing is releasable in between.
-4. TD-30 (needs a home now the header idea is dead); TD-29b; TD-29c; streaming; 1b.
+   no Whisper model, so it cannot run here. Seven commits are waiting.
+2. **v3.0 is the next move.** The registry's last HIGH is closed and TD-31 + TD-27 broke both
+   artifact formats, so nothing was releasable in between and 3.0 is the release that carries
+   them. Cut it with `scripts/release.py` per CLAUDE.md, never `/ship`.
+3. TD-30 (needs a home now the header idea is dead); TD-29b — **now louder**, a folder run
+   pointed at `output/` writes triple-dated names; TD-29c; streaming; 1b.

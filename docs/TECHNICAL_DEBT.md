@@ -37,59 +37,60 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 - **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05. `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
 
-- **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
-  **HIGH** · created 2026-09-04 (operator call, mid-session). The tree is fixed and flat:
-  `output/{audio,transcripts,summaries}`, with `summaries/raw/` and `summaries/raw/.resume`
-  underneath. Every run of every kind pours into the same three buckets, so a seven-lecture
-  course, a one-off recording and last month's experiment are indistinguishable once saved.
-  The operator asked mid-session for the folder run to write into a dated `date_bulk`
-  directory; that change was **deliberately CANCELLED and escalated to this entry** rather
-  than shipped, because the layout is load-bearing in ways a one-line path change would
-  quietly break, and the right fix is a decision about what an EchoGist *artifact release*
-  IS, not a new subdirectory.
-
-  **TD-31 removed two of the three constraints (2026-09-05).** Both indexes now join on the
-  recording's CONTENT fingerprint rather than on a name or a location, so:
-  1. ~~The flat transcript pool is the checkpoint and cannot be split~~ — `transcript_sources`
-     matches by fingerprint, so a transcript is found in any layout, and moving one between
-     layouts costs nothing.
-  2. ~~The summary skip walks a known summaries directory~~ — `summary_index` keys on the same
-     fingerprint, so the "already summarized, not re-paid for" guarantee holds across any split.
-  What remains is the third, and it is now the whole of the work:
-  3. **26 hardcoded path expressions.** `deps.base / "output" / "<sub>"` is written inline
-     across `menu.py` (12 sites), plus `provision.OUTPUT_SUBDIRS` and `scan._OUTPUT_DIR_NAME`.
-     There is no path module. Any layout change is a 26-site edit today, and `scan._keep_dir`
-     still prunes on the literal name `output` as its floor (TD-25 added the authoritative
-     resolved-path check on top, but did not remove the string), so the layout and the
-     self-exclusion rule are still coupled by a name a `paths` module should own.
-
-  **The actual question to answer** (this is a design decision, not a refactor): what is the
-  unit of release — a RUN (dated), a SOURCE COURSE (named after the input folder), or the
-  current flat pool with grouping left to the file manager? Since TD-31 this is a pure
-  ergonomics question: no layout can break a join any more, and a named unit no longer merges
-  two courses that share a folder name. It should still land a real `paths` module so the
-  layout has ONE definition.
-
-  **Trigger for closure:** before the operator's second real course goes through the folder
-  run — that is the point where a flat `summaries/` stops being navigable and the decision can
-  no longer be deferred. **Blocks nothing today**; the current flat layout is correct, just
-  unscalable. Sequence it AFTER the menu/logging work, since a `paths` module is easier to
-  land once the two-module menu has settled which flows exist.
-
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
-branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which only TD-27 remains open: TD-22, TD-25
-and TD-26 closed on 2026-09-04, and TD-23/TD-24 closed the day after the first full folder
-run, off that run's own audited numbers. TD-29 closed 2026-09-04 with the `notice` channel, which
-TD-28 then reused for its own renderer half on 2026-09-05. The other open forward item is
-T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
-not debt. TD-32 and TD-33 both came out of the operator's read of the six-file `КУРС2025`
-run on 2026-09-05 and both closed the same week; TD-31 closed 2026-09-05 with `dbdda98` and took
-TD-27's two load-bearing constraints with it, leaving TD-27 a path-module refactor rather than a
-design question.
+branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, and all of them are now
+closed: TD-22, TD-25 and TD-26 on 2026-09-04, TD-23/TD-24 the day after the first full folder
+run off that run's own audited numbers, and TD-27 on 2026-09-05. TD-29 closed 2026-09-04 with the
+`notice` channel, which TD-28 then reused for its own renderer half on 2026-09-05. The other open
+forward item is T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a
+P3 enhancement, not debt. TD-32 and TD-33 both came out of the operator's read of the six-file
+`КУРС2025` run on 2026-09-05 and both closed the same week; TD-31 closed 2026-09-05 with
+`dbdda98` and took TD-27's two load-bearing constraints with it, which is what left TD-27 answerable
+as an ergonomics question rather than a design one. **What remains open is TD-29b, TD-29c and TD-30
+only** — every HIGH and MEDIUM entry in the registry's history is closed.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
+  HIGH · closed 2026-09-05 (`5106175`, `383da25`, `61de114`). Opened as a design question —
+  what IS an EchoGist artifact release — after a mid-session request for a dated `date_bulk`
+  directory was cancelled rather than shipped. TD-31 removed two of its three constraints;
+  reading the REAL pool on disk answered the third and reframed the whole entry.
+  `transcripts/` reads perfectly, because TD-31 put the date, the source stem and the
+  identity in its NAME. `summaries/` did not read at all: 13 files named by the model's title
+  alone, no date, no lecture number, no way to tell two passes over one course apart, sorted
+  alphabetically by a Russian LLM title. **The machine's working files were better organised
+  than the operator's deliverables, and the entire difference was the filename.**
+  So the answer is: **the tree stays FLAT and the grouping lives in the NAME** — the same
+  move TD-31 made for the checkpoint. `naming.summary_artifact_stem` builds
+  `<date>-<source>-<title>`, and because render is handed `base=json_path.stem` that one call
+  names the whole `.json`/`.pdf`/`.md` triplet. **The source part truncates from the HEAD**,
+  the opposite of the title: a downloaded lecture is `[VideoSite.org] Модуль «Основы», занятие 2
+  12.03.24`, where the noise is an identical site tag at the front and the only discriminator
+  is at the back — a tail cut would give six lectures of a course one name, the exact defect
+  this closes. The total cap did not move off `_MAX_SUMMARY_STEM`, which is load-bearing
+  beyond MAX_PATH: `render` re-runs `summary_stem` over the base it is handed, so a longer
+  stem would come back SHORTER for the `.pdf` than the `.json` and split the triplet silently.
+  The date is the RUN's, taken once per folder run — these runs have gone 18 hours and one
+  started before midnight would otherwise split a course into two dated blocks.
+  **Rejected, and why.** *Subdirectories* (per course or per dated run): all four readers of
+  this tree — `scan.transcript_sources`, `summarize.summary_index`, `menu._pick_transcript`,
+  `menu._sweep_stale_resumes` — are single-level `glob`, so they would find zero files and
+  re-buy summaries already paid for; also the course name is carried nowhere (`root.name`
+  appears once, in a console prompt). *single vs bulk*: splits by how a run was launched, not
+  by what the artifact is — both paths call the same functions and write the same names, one
+  course lands on both sides the moment a file is run alone, and it fixes none of the
+  readability problems (all 13 files came from bulk runs).
+  The refactor half landed too: `paths` owns the layout, replacing 24 inline expressions and
+  the second spelling of `output` that `scan._keep_dir` used as its pruning floor — layout and
+  self-exclusion can no longer drift apart. It computes and never creates; provisioning reads
+  `all_dirs` from it. **No backfill:** the 13 existing summaries keep their names and
+  self-segregate anyway, since their stems start with a letter and every new one with a digit.
+  The joins were verified against the real pool AFTER the rename — `summary_index` 13,
+  `transcript_sources` 13, agreeing on 13 — because they key on the fingerprint stamped inside
+  the `.json`, never on a name.
 
 - **TD-33 — the loop detector could not tell a stuck decoder from a lecturer making a point** ·
   MEDIUM · closed 2026-09-05. Opened believing the unit was too coarse and the fix was sub-block
