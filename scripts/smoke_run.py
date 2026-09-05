@@ -40,6 +40,7 @@ from echogist import (  # noqa: E402
     extract,
     guard,
     naming,
+    paths,
     provision,
     render,
     summarize,
@@ -140,7 +141,7 @@ def run_smoke(
         emit(f"Clip is already an mp3; keeping {clip.name} as the audio artifact.")
         artifacts.append(clip)
     else:
-        mp3 = extract.extract_audio(clip, base / "output" / "audio", log=emit)
+        mp3 = extract.extract_audio(clip, paths.audio(base), log=emit)
         emit(f"Saved mp3: {mp3}")
         artifacts.append(mp3)
 
@@ -151,7 +152,7 @@ def run_smoke(
     # same artifacts the menu does, so it names them the same way.
     fingerprint = naming.source_fingerprint(clip)
     tpath = transcribe.save_transcript(
-        transcript, base / "output" / "transcripts", clip.stem, fingerprint=fingerprint
+        transcript, paths.transcripts(base), clip.stem, fingerprint=fingerprint
     )
     emit(f"Saved transcript: {tpath}")
     artifacts.append(tpath)
@@ -177,9 +178,9 @@ def run_smoke(
         api_key=api_key,
         log=emit,
     )
-    summaries_dir = base / "output" / "summaries"
+    summaries_dir = paths.summaries(base)
     json_path = summarize.save_raw_result(  # F13
-        result.summary, summaries_dir / "raw", fingerprint=fingerprint
+        result.summary, paths.summaries_raw(base), fingerprint=fingerprint
     )
     out_path = render.render(
         result.summary,

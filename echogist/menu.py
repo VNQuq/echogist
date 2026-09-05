@@ -64,7 +64,6 @@ import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
 from pathlib import Path
 from time import monotonic
 
@@ -76,6 +75,7 @@ from . import (
     folder,
     guard,
     naming,
+    paths,
     provision,
     render,
     scan,
@@ -456,12 +456,12 @@ def _run_summary(
         # shown estimate is the acknowledgment and the call just proceeds.
         ui.text("Press Enter to summarize, or Ctrl-C to cancel")
 
-    summaries_dir = deps.base / "output" / "summaries"
+    summaries_dir = paths.summaries(deps.base)
     # Artifact-resume (decision #2): completed phases persist to a STABLE per-source path
     # under raw/.resume/; a re-run reloads it and skips the phases already on disk (no job
     # engine — just "phase N on disk -> skip"). The transcript is the checkpoint; this is a
     # within-run partial that is deleted once the durable .json exists.
-    resume_dir = summaries_dir / "raw" / ".resume"
+    resume_dir = paths.resume(deps.base)
     _sweep_stale_resumes(resume_dir, ui)
     resume_path = resume_dir / (
         f"{_resume_key(source_path, language=settings.summary_language, tier=settings.model_tier)}"
@@ -523,7 +523,7 @@ def _run_summary(
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
     json_path = summarize.save_raw_result(  # BEFORE render
-        result.summary, summaries_dir / "raw", fingerprint=fingerprint
+        result.summary, paths.summaries_raw(deps.base), fingerprint=fingerprint
     )
     _clear_resume(resume_path)  # durable artifact exists — the within-run partial is spent
     try:
@@ -570,7 +570,7 @@ def _transcribe_to_checkpoint(
         ui.info(f"{len(transcript.segments)} segments transcribed (duration unknown).")
     tpath = transcribe.save_transcript(
         transcript,
-        deps.base / "output" / "transcripts",
+        paths.transcripts(deps.base),
         source.stem,
         fingerprint=fingerprint,
         block_seconds=model_config.transcript.block_seconds,
@@ -695,7 +695,7 @@ def _flow_local_file(deps: Deps) -> None:
     # progress). It is either the deliverable — a video "MP3 only" extraction, or an mp3
     # source re-encoded to a smaller VBR file (operator request) — or a kept-by-default
     # SECONDARY artifact on a video Summary/Transcript run.
-    audio_dir = deps.base / "output" / "audio"
+    audio_dir = paths.audio(deps.base)
 
     def _convert_to_mp3() -> None:
         label = "Re-encoding MP3" if is_mp3 else "Converting to MP3"
@@ -740,7 +740,7 @@ def _flow_local_file(deps: Deps) -> None:
         # TD-12 (Issue 2): reveal the transcripts folder here, in the transcript branch ONLY
         # — never in _transcribe_to_checkpoint, which also runs on the Summary path (that was
         # the original TD-14 bug where a Summary popped transcripts).
-        ui.reveal_dir(deps.base / "output" / "transcripts", priority=REVEAL_TRANSCRIPT)
+        ui.reveal_dir(paths.transcripts(deps.base), priority=REVEAL_TRANSCRIPT)
         return
     _run_summary(deps, settings, model_config, text, source, source.stem, fingerprint=fingerprint)
 
@@ -862,7 +862,7 @@ def _flow_mp3(deps: Deps, picked: list[Path] | None = None) -> None:
         f"{mode}. Ctrl-C stops the batch and keeps what is already converted."
     )
 
-    audio_dir = deps.base / "output" / "audio"
+    audio_dir = paths.audio(deps.base)
     cancelled = False
     try:
         with ui.progress("Converting to MP3", total=float(len(sources))) as bar:
@@ -931,7 +931,7 @@ def _flow_saved_transcript(deps: Deps) -> None:
     settings = config.load_settings(deps.settings_path)
     model_config = config.load_model_config()
 
-    chosen = _pick_transcript(deps, deps.base / "output" / "transcripts")
+    chosen = _pick_transcript(deps, paths.transcripts(deps.base))
     if chosen is None:
         return
     try:
@@ -1047,12 +1047,12 @@ def _preview_folder(deps: Deps, root: Path) -> tuple[ScanResult, bool]:
     # not mark all 500 files unreadable.
     exe = extract.default_ffmpeg_exe()
 
-    cache_path = deps.base / "output" / scan.CACHE_FILENAME
+    cache_path = paths.scan_cache(deps.base)
     cancelled = False
     try:
         with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
             result = scan.scan_tree(
-                root, cache_path=cache_path, exe=exe, exclude=deps.base / "output"
+                root, cache_path=cache_path, exe=exe, exclude=paths.output(deps.base)
             )
             spin.done(message=f"Scanned {len(result.files)} file(s).")
     except ScanCancelled as exc:
@@ -1064,7 +1064,7 @@ def _preview_folder(deps: Deps, root: Path) -> tuple[ScanResult, bool]:
         # before it could make one. Fail loud about what actually happened instead.
         ui.warn("Scan stopped before it read anything; nothing is known about this folder.")
         return result, cancelled
-    _report_scan(ui, result, model_config, tier, deps.base / "output" / "transcripts")
+    _report_scan(ui, result, model_config, tier, paths.transcripts(deps.base))
     if cancelled:
         ui.warn("Scan cancelled; the numbers above cover only what was read.")
     return result, cancelled
@@ -1139,7 +1139,7 @@ def _run_transcript_texts(
     if plan.ready:
         ui.info(f"Reusing {len(texts)} saved transcript(s).")
 
-    audio_dir = deps.base / "output" / "audio"
+    audio_dir = paths.audio(deps.base)
 
     def _step(source: Path) -> Path:
         # TD-12 symmetry: the MP3 is a SECONDARY artifact here exactly as it is on the
@@ -1200,11 +1200,11 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
             return
         root = picked
 
-    cache_path = deps.base / "output" / scan.CACHE_FILENAME
+    cache_path = paths.scan_cache(deps.base)
     try:
         with ui.spinner("Scanning (Ctrl-C stops and keeps what is already read)") as spin:
             result = scan.scan_tree(
-                root, cache_path=cache_path, exe=exe, exclude=deps.base / "output"
+                root, cache_path=cache_path, exe=exe, exclude=paths.output(deps.base)
             )
             spin.done(message=f"Found {len(result.files)} file(s).")
     except ScanCancelled:
@@ -1225,8 +1225,8 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
         )
         return
 
-    summaries_dir = deps.base / "output" / "summaries"
-    transcripts_dir = deps.base / "output" / "transcripts"
+    summaries_dir = paths.summaries(deps.base)
+    transcripts_dir = paths.transcripts(deps.base)
     # A transcript-only run must NOT skip on "already summarized": the operator is asking
     # for transcripts, and a file whose summary was bought last week may well have had its
     # transcript deleted since. Feeding an empty index leaves plan_run's OTHER skip — a
@@ -1240,7 +1240,9 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
     plan = folder.plan_run(
         [f.path for f in result.files],
         fingerprints=fingerprints,
-        summarized=summarize.summary_index(summaries_dir / "raw") if summarize_after else set(),
+        summarized=(
+            summarize.summary_index(paths.summaries_raw(deps.base)) if summarize_after else set()
+        ),
         transcripts=scan.transcript_sources(transcripts_dir),
     )
     if plan.summarized:
@@ -1663,20 +1665,6 @@ def _safe_error(ui: UI, message: str) -> None:
         print(message)
 
 
-def _session_log_path(base: Path) -> Path:
-    """Where this launch records itself: ``output/logs/YYYY-MM-DD-HHMMSS.log``.
-
-    One file per launch rather than one rolling file, so a run can be handed over or
-    re-read on its own without slicing a shared log apart. Nothing prunes these: they are
-    small plain text next to artifacts measured in gigabytes, and silently deleting the
-    record of a paid run is a worse failure than a folder with too many files in it.
-
-    Lives under ``output/`` with the artifacts it describes, which is also why it is named
-    here and not in :mod:`echogist.ui` — see TD-27 on that tree's layout as a whole.
-    """
-    return base / "output" / "logs" / f"{datetime.now():%Y-%m-%d-%H%M%S}.log"
-
-
 def run_menu(deps: Deps | None = None) -> int:
     """Run the interactive menu until the operator chooses Exit. Returns 0.
 
@@ -1696,7 +1684,7 @@ def run_menu(deps: Deps | None = None) -> int:
     deps = deps or Deps()
     if deps.ui is None:
         try:
-            ui = build_default_ui(_session_log_path(deps.base))
+            ui = build_default_ui(paths.session_log(deps.base))
         except NotInteractiveError as exc:
             print(str(exc))
             return 0

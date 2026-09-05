@@ -30,7 +30,11 @@ from . import cost, guard, naming
 from .config import ModelConfig, ModelTier
 from .cost import CostEstimate
 from .extract import ExtractError, Runner, _default_probe_runner, probe_media
+from .paths import OUTPUT_DIR_NAME, SCAN_CACHE_NAME
 from .ui import Choice, human_size
+
+# ``paths`` is imported BY NAME above, not as a module: it is bound as a local in two
+# comprehensions below (``collisions``, ``collision_rows``), which would shadow it there.
 
 # Extensions a directory expansion will feed to ffmpeg. Moved here from the folder runner
 # because this module owns the walker; ``folder`` has no copy and no re-export, so there is exactly
@@ -67,14 +71,10 @@ CONVERTIBLE_SUFFIXES = frozenset(
     }
 )
 
-# EchoGist's own artifact tree. Never counted as a source, wherever it turns up under the
-# scan root: without this, increment 2 would re-process its own extracted mp3s.
-_OUTPUT_DIR_NAME = "output"
-
 # The probe cache. Bumping the schema discards every entry rather than migrating it —
 # these are re-derivable in one ffmpeg spawn, so a migration would cost more than a
-# re-probe.
-CACHE_FILENAME = ".scan-cache.json"
+# re-probe. The NAME is the layout's (TD-27), the schema is this module's.
+CACHE_FILENAME = SCAN_CACHE_NAME
 _CACHE_SCHEMA = 2  # 2: entries carry the TD-31 source fingerprint
 
 # Windows file attributes marking a cloud placeholder: the file is listed in the
@@ -223,7 +223,11 @@ def walk(
 
 def _keep_dir(path: Path, seen: set[Path], excluded: str | None = None) -> bool:
     """Whether to descend into ``path``, recording it as visited when we do."""
-    if path.name.lower() == _OUTPUT_DIR_NAME:
+    # EchoGist's own artifact tree, never counted as a source wherever it turns up under
+    # the scan root: without this, increment 2 would re-process its own extracted mp3s.
+    # The name comes from the layout module (TD-27) so the tree and the rule that excludes
+    # it cannot drift apart.
+    if path.name.lower() == OUTPUT_DIR_NAME:
         return False
     resolved = _resolve(path)
     if excluded is not None and _norm(resolved) == excluded:  # TD-25: a junction to output/

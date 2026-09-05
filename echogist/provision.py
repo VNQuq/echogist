@@ -16,18 +16,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import gpu, model_asset
+from . import gpu, model_asset, paths
 from .config import ConfigError, load_model_config
-
-# ``summaries/raw`` holds the F13 recovery .json out of the operator's eye-line;
-# the readable .pdf/.md stay directly under ``summaries``.
-OUTPUT_SUBDIRS: tuple[str, ...] = (
-    "audio",
-    "transcripts",
-    "summaries",
-    "summaries/raw",
-    "logs",  # per-launch session transcripts (ui.RunLog)
-)
 
 Logger = Callable[[str], object]
 
@@ -43,8 +33,11 @@ def app_root() -> Path:
 
 
 def ensure_output_dirs(base: Path) -> list[Path]:
-    """Create every directory in ``OUTPUT_SUBDIRS`` — the recovery artifacts plus ``logs``."""
-    dirs = [base / "output" / sub for sub in OUTPUT_SUBDIRS]
+    """Create every directory :func:`echogist.paths.all_dirs` names (TD-27).
+
+    The layout lives in :mod:`echogist.paths`; this is the only place that creates it.
+    """
+    dirs = paths.all_dirs(base)
     for directory in dirs:
         directory.mkdir(parents=True, exist_ok=True)
     return dirs

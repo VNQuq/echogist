@@ -19,7 +19,6 @@ when the queue empties.
 from __future__ import annotations
 
 import ast
-import re
 from collections.abc import Sequence
 from dataclasses import replace
 from functools import partial
@@ -2197,15 +2196,6 @@ def test_phase_progress_still_reaches_the_scrollback(tmp_path: Path) -> None:
 
     assert "Synthesizing phase 1/2" in stub.log_text
     assert "Synthesizing phase 2/2" in stub.log_text
-
-
-def test_session_log_path_is_one_file_per_launch(tmp_path: Path) -> None:
-    first = menu._session_log_path(tmp_path)
-
-    assert first.parent == tmp_path / "output" / "logs"
-    assert first.suffix == ".log"
-    # Sortable, so the newest session is the last one in the folder listing.
-    assert re.match(r"^\d{4}-\d\d-\d\d-\d{6}$", first.stem)
 
 
 def test_a_finding_is_loud_while_the_phase_chatter_stays_muted(
