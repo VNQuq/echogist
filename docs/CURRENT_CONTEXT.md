@@ -55,6 +55,6 @@ rule, TECHNICAL_DEBT TD-16 for its validation.
    once transcripts carry identity the two flat indexes can be recursive and any layout is safe.
 2. **TD-27 (HIGH) — the `output/` release unit.** 24 path sites in `echogist/`; 18 mechanical,
    6 are flat-pool INDEXES and those are the work. TD-31 first. Named COURSE is the worst option.
-3. **TD-29c (MEDIUM)** — the CI gate CLAUDE.md declares does not exist. Workflow, or amend the
-   doc. Then **cut v2.4.0** (nothing changed an artifact format or a config contract).
+3. **Cut v2.4.0** — nothing changed an artifact format or a config contract. (TD-29c closed
+   down to MINOR: the gate is manual, verified never skipped, and CLAUDE.md now says so.)
 4. Prompt-sentence measurement next real run; TD-28 renderer half; TD-30; streaming; 1b.

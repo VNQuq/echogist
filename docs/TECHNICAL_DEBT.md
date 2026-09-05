@@ -4,7 +4,7 @@
 has a deadline or trigger for closure.
 
 **Principles.** (1) Debt ≠ forgotten — each item is deferred with a fixed date/condition. (2) Severity =
-HIGH (blocks next phase) / MEDIUM (degrades quality) / LOW (cosmetic). (3) On closing: status `closed` +
+HIGH (blocks next phase) / MEDIUM (degrades quality) / LOW (cosmetic) / MINOR (wording). (3) On closing: status `closed` +
 commit ref, kept in the compact one-liner form below; verbose history lives in git.
 
 ---
@@ -60,17 +60,7 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   summary-skip join fixed first — i.e. TD-31. **Trigger:** TD-31, or the first time it
   happens.
 
-- **TD-29c — the declared CI gate does not exist** · MEDIUM · created 2026-09-05.
-  `CLAUDE.md` states that every push to `main` passes ruff + mypy + tests and that the
-  pipeline runs end-to-end in CI against a stub summarizer. There is no `.github/`
-  directory in the entire history and no git hooks; the gate is run by hand every time.
-  The killswitch itself IS covered by tests (`test_cost.py` asserts no network import at
-  module top level, and the whole suite runs offline with no key in ~5s) — only the
-  enforcement is missing. **This is a hard-constraint violation, not a code defect, and
-  the fix is a policy choice the operator owns:** add a workflow, or amend CLAUDE.md to
-  say the gate is manual. Not added unilaterally because an untested workflow pushed to
-  the repo would fail on the runner (bundled ffmpeg, GPU-adjacent imports) and turn the
-  guardrail into noise.
+- **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05. `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
 
 - **TD-28 — a character the PDF cannot draw still reaches the PDF** · LOW (was MEDIUM) ·
   created 2026-09-04, HALVED the same day. Three of the seven summaries made `fpdf` report

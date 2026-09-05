@@ -19,7 +19,7 @@ Personal-use, Windows-only; developed in WSL2.
 - **Killswitch.** Live LLM calls are forbidden without a killswitch. `SUMMARIZE` is
   the only network stage; every stage left of it (incl. the token GUARD and cost
   estimate) is local and offline — no `count_tokens` or any network call. The
-  pipeline must run end-to-end in CI against a stub summarizer.
+  pipeline must run end-to-end against a stub summarizer, locally, before every push.
 - **Every push to `main` passes: ruff + mypy + tests.** One exception: a docs-only commit
   may land without the gate — nothing under `echogist/`, `tests/`, `scripts/` or `config/`
   touched. A commit that mixes docs with code is a code commit and passes the gate.
