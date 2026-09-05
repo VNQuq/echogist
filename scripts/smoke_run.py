@@ -180,7 +180,7 @@ def run_smoke(
     )
     summaries_dir = paths.summaries(base)
     json_path = summarize.save_raw_result(  # F13
-        result.summary, paths.summaries_raw(base), fingerprint=fingerprint
+        result.summary, paths.summaries_raw(base), source_stem=clip.stem, fingerprint=fingerprint
     )
     out_path = render.render(
         result.summary,

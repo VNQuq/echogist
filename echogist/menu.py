@@ -64,6 +64,7 @@ import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from time import monotonic
 
@@ -346,6 +347,7 @@ def _run_summary(
     source_stem: str,
     *,
     fingerprint: str | None,
+    run_date: date | None = None,
     gate: bool = True,
     on_cost: Callable[[cost.CostEstimate], None] | None = None,
 ) -> Path | None:
@@ -523,7 +525,11 @@ def _run_summary(
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
     json_path = summarize.save_raw_result(  # BEFORE render
-        result.summary, paths.summaries_raw(deps.base), fingerprint=fingerprint
+        result.summary,
+        paths.summaries_raw(deps.base),
+        source_stem=source_stem,
+        today=run_date,
+        fingerprint=fingerprint,
     )
     _clear_resume(resume_path)  # durable artifact exists — the within-run partial is spent
     try:
@@ -1333,6 +1339,11 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
     # file it belongs to the moment anything goes wrong.
     spent: dict[Path, cost.CostEstimate] = {}
     started = monotonic()
+    # ONE date for the whole run, taken here rather than per file: a folder run is hours
+    # long (the real ones have gone 18h), so a run started before midnight would name its
+    # first lectures one day and the rest the next — splitting a course into two blocks in
+    # the listing, which is precisely the grouping this naming exists to provide (TD-27).
+    run_date = date.today()
 
     def _summarize_step(source: Path) -> Path:
         def _record(actual: cost.CostEstimate) -> None:
@@ -1346,6 +1357,7 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
             source,
             source.stem,
             fingerprint=fingerprints.get(source),
+            run_date=run_date,
             gate=False,
             on_cost=_record,
         )

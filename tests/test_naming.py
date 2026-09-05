@@ -87,6 +87,91 @@ def test_summary_stem_reserved_and_trailing_dot_survive_truncation() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# summary_artifact_stem — TD-27: the deliverable says which recording and which run
+# --------------------------------------------------------------------------- #
+_DAY = date(2026, 9, 5)
+
+
+def _stem(title: str, source: str) -> str:
+    return naming.summary_artifact_stem(title, source, today=_DAY)
+
+
+def test_the_artifact_stem_leads_with_the_date_then_the_source() -> None:
+    """The order IS the feature: sorting a folder by name then groups by run, and inside a
+    run by lecture. A summary used to be named by the model's title alone."""
+    assert _stem("AI in 2026", "lecture3") == "2026-09-05-lecture3-AI in 2026"
+
+
+def test_the_source_part_is_cut_from_the_HEAD_so_the_lecture_number_survives() -> None:
+    """The direction is the whole point. A downloaded lecture carries an identical site tag at the
+    front and the only discriminator — lecture number and date — at the back. A tail cut
+    would give every file of a course one name, which is the defect this exists to fix."""
+    source = "[VideoSite.org] Модуль «Основы», занятие 2 12.03.24"
+    stem = _stem("Путь к переменам", source)
+
+    assert "занятие 2 12.03.24" in stem
+    assert "VideoSite" not in stem
+
+
+def test_two_lectures_of_one_course_never_collapse_to_one_name() -> None:
+    tag = "[VideoSite.org] Модуль «Основы», занятие "
+    a = _stem("Одинаковый заголовок", f"{tag}2 12.03.24")
+    b = _stem("Одинаковый заголовок", f"{tag}7 19.03.24")
+
+    assert a != b
+
+
+def test_the_whole_stem_stays_inside_the_cap_however_long_the_parts() -> None:
+    """The MAX_PATH pin, and the render pin: ``render`` re-runs ``summary_stem`` over the
+    base it is handed, so a stem past this cap would come back shorter for the .pdf than
+    for the .json and split the triplet silently."""
+    stem = _stem("word " * 60, "part " * 60)
+
+    assert len(stem) <= 100
+    assert stem.startswith("2026-09-05-")
+
+
+def test_a_short_source_hands_its_slack_to_the_title() -> None:
+    short = _stem("word " * 60, "l3")
+    long_source = _stem("word " * 60, "part " * 60)
+
+    assert len(short) <= 100
+    assert len(short.split("-", 2)[2]) > len(long_source.split("-", 2)[2])
+
+
+def test_the_title_is_cut_before_the_source_part() -> None:
+    """A clipped title is still useful prose and its full text is the document's first
+    line; a clipped date or source stem is not a shorter key, it is a wrong one."""
+    source = "Модуль Основы, занятие 3"
+    stem = _stem("word " * 60, source)
+
+    assert stem.startswith(f"2026-09-05-{source}-")
+
+
+def test_a_title_equal_to_the_source_is_not_repeated() -> None:
+    """The F10 path: with no model title, ``summarize._fallback_title`` names the document
+    after its source, which would otherwise render ``<date>-<source>-<source>``."""
+    assert _stem("Модуль Основы, занятие 1", "Модуль Основы, занятие 1") == (
+        "2026-09-05-Модуль Основы, занятие 1"
+    )
+
+
+def test_an_empty_title_leaves_no_dangling_separator_and_no_filler_word() -> None:
+    for title in ("", "   ", "///"):
+        stem = _stem(title, "lecture3")
+        assert stem == "2026-09-05-lecture3"
+        assert "summary" not in stem
+
+
+def test_illegal_characters_are_stripped_from_both_parts() -> None:
+    assert _stem("a/b:c?", "x:y") == "2026-09-05-x-y-a-b-c"
+
+
+def test_the_stem_defaults_to_today() -> None:
+    assert naming.summary_artifact_stem("Talk", "l3").startswith(date.today().isoformat())
+
+
+# --------------------------------------------------------------------------- #
 # dedup_path
 # --------------------------------------------------------------------------- #
 def test_dedup_path_free_name(tmp_path: Path) -> None:

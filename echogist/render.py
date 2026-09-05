@@ -1,8 +1,8 @@
 """T7 — render stage (fpdf2 PDF / Markdown, plan §3 / §7).
 
 The last stage. Turns the structured :class:`~echogist.summarize.Summary` into the
-kept artifact the operator actually reads: ``output/summaries/<title>.pdf`` (the
-default) or ``<title>.md``. It is LOCAL and offline — no network, no key — so it
+kept artifact the operator actually reads: ``output/summaries/<date>-<source>-<title>.pdf``
+(the default) or the same stem as ``.md``. It is LOCAL and offline — no network, no key — so it
 sits to the left of the killswitch like every stage except summarize.
 
 **The v2 document (TD-16).** The summary is the ordered ``synthesis`` phases (heading +
@@ -13,12 +13,13 @@ with the questions' reference answers: the two are deliberately at opposite ends
 reading a self-check question does not hand the reader its answer.
 
 **Grouping the triplet.** Summarize (T6) already wrote the raw
-``output/summaries/raw/<title>.json`` (F13). Render reuses THAT file's stem for the
-``.pdf``/``.md`` it writes to ``output/summaries/`` (the ``base`` argument is
-normally ``saved_json_path.stem``), so ``.json``/``.pdf``/``.md`` share one base
-name (the .json one level down); only the chosen extension is
-deduped here. The stem itself is the Windows-safe, length-capped
-:func:`naming.summary_stem`.
+``output/summaries/raw/<date>-<source>-<title>.json`` (F13, TD-27). Render reuses THAT
+file's stem for the ``.pdf``/``.md`` it writes to ``output/summaries/`` (the ``base``
+argument is normally ``saved_json_path.stem``), so ``.json``/``.pdf``/``.md`` share one
+base name (the .json one level down); only the chosen extension is deduped here. The
+stem itself comes from :func:`naming.summary_artifact_stem`, and the re-derivation here
+runs :func:`naming.summary_stem` over it — which is why that function's cap is the cap on
+the WHOLE artifact stem: a longer one would come back shorter here and split the triplet.
 
 **Cyrillic, no tofu.** The PDF embeds the **bundled** DejaVuSans (regular + bold)
 shipped under ``echogist/assets/fonts/`` — fpdf2's built-in fonts are Latin-1 only

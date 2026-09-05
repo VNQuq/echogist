@@ -15,6 +15,7 @@ import ast
 import json
 import sys
 import types
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -117,30 +118,45 @@ def _summary(title: str) -> Summary:
     )
 
 
-def test_save_raw_result_writes_titled_json_no_date_prefix(tmp_path: Path) -> None:
-    path = summarize.save_raw_result(_summary("AI in 2026"), tmp_path)
-    assert path == tmp_path / "AI in 2026.json"  # no date prefix (plan §3)
+_DAY = date(2026, 9, 5)
+
+
+def test_save_raw_result_writes_a_dated_source_titled_json(tmp_path: Path) -> None:
+    """TD-27, inverting this test's own former contract: a summary used to be named by the
+    model's title ALONE, which left summaries/ with no date, no lecture and a random sort
+    order. The tree stays flat; the grouping is here, in the name."""
+    path = summarize.save_raw_result(
+        _summary("AI in 2026"), tmp_path, source_stem="lecture3", today=_DAY
+    )
+    assert path == tmp_path / "2026-09-05-lecture3-AI in 2026.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["title"] == "AI in 2026"
     assert data["synthesis"] == [{"heading": "H", "prose": "prose", "anchors": ["[00:00:00]"]}]
 
 
 def test_save_raw_result_keeps_cyrillic_literal(tmp_path: Path) -> None:
-    path = summarize.save_raw_result(_summary("Состояние ИИ"), tmp_path)
-    assert path.name == "Состояние ИИ.json"
+    path = summarize.save_raw_result(
+        _summary("Состояние ИИ"), tmp_path, source_stem="Лекция 1", today=_DAY
+    )
+    assert path.name == "2026-09-05-Лекция 1-Состояние ИИ.json"
     assert "Состояние" in path.read_text(encoding="utf-8")  # not \\u-escaped
 
 
 def test_save_raw_result_dedups(tmp_path: Path) -> None:
-    p1 = summarize.save_raw_result(_summary("Talk"), tmp_path)
-    p2 = summarize.save_raw_result(_summary("Talk"), tmp_path)
-    assert p1.name == "Talk.json"
-    assert p2.name == "Talk-2.json"
+    """Rarer now that the name carries a date and a source, but not dead: re-summarizing
+    one recording twice in a day is exactly what the recovery flow does."""
+    p1 = summarize.save_raw_result(_summary("Talk"), tmp_path, source_stem="l3", today=_DAY)
+    p2 = summarize.save_raw_result(_summary("Talk"), tmp_path, source_stem="l3", today=_DAY)
+    assert p1.name == "2026-09-05-l3-Talk.json"
+    assert p2.name == "2026-09-05-l3-Talk-2.json"
 
 
 def test_save_raw_result_illegal_title_sanitized(tmp_path: Path) -> None:
-    path = summarize.save_raw_result(_summary("a/b:c?"), tmp_path)
-    assert path.name == "a-b-c.json"  # F9 illegal-char strip via naming.sanitize_stem
+    path = summarize.save_raw_result(
+        _summary("a/b:c?"), tmp_path, source_stem="a:b", today=_DAY
+    )
+    # F9 illegal-char strip via naming.sanitize_stem, on BOTH parts.
+    assert path.name == "2026-09-05-a-b-a-b-c.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -151,14 +167,16 @@ _FP = "0123456789abcdef"
 
 
 def test_save_raw_result_stamps_the_source_fingerprint(tmp_path: Path) -> None:
-    path = summarize.save_raw_result(_summary("Talk"), tmp_path / "raw", fingerprint=_FP)
+    path = summarize.save_raw_result(
+        _summary("Talk"), tmp_path / "raw", source_stem="l3", fingerprint=_FP
+    )
     assert json.loads(path.read_text(encoding="utf-8"))["source_fingerprint"] == _FP
 
 
 def test_save_raw_result_omitting_the_fingerprint_writes_an_unknown_source(
     tmp_path: Path,
 ) -> None:
-    path = summarize.save_raw_result(_summary("Talk"), tmp_path)
+    path = summarize.save_raw_result(_summary("Talk"), tmp_path, source_stem="l3")
     assert json.loads(path.read_text(encoding="utf-8"))["source_fingerprint"] == ""
 
 
@@ -171,7 +189,7 @@ def test_the_join_survives_the_recording_being_moved(tmp_path: Path) -> None:
     so none of that touches it.
     """
     out = tmp_path / "raw"
-    summarize.save_raw_result(_summary("Talk"), out, fingerprint=_FP)
+    summarize.save_raw_result(_summary("Talk"), out, source_stem="l3", fingerprint=_FP)
 
     moved = tmp_path / "somewhere else"
     out.rename(moved)
@@ -187,7 +205,7 @@ def test_a_re_encode_that_inherits_its_parent_is_not_re_bought(tmp_path: Path) -
     carries the PARENT's value instead, so it indexes as the same recording.
     """
     out = tmp_path / "raw"
-    summarize.save_raw_result(_summary("Original"), out, fingerprint=_FP)
+    summarize.save_raw_result(_summary("Original"), out, source_stem="l3", fingerprint=_FP)
 
     # The re-encoded file, carrying its parent's identity rather than its own bytes'.
     assert _FP in summarize.summary_index(out)
@@ -196,7 +214,7 @@ def test_a_re_encode_that_inherits_its_parent_is_not_re_bought(tmp_path: Path) -
 def test_summary_index_collects_every_stamped_source(tmp_path: Path) -> None:
     out = tmp_path / "raw"
     for name, fingerprint in (("one", _FP), ("two", "fedcba9876543210")):
-        summarize.save_raw_result(_summary(name), out, fingerprint=fingerprint)
+        summarize.save_raw_result(_summary(name), out, source_stem=name, fingerprint=fingerprint)
     assert summarize.summary_index(out) == {_FP, "fedcba9876543210"}
 
 
@@ -210,14 +228,14 @@ def test_summary_index_skips_unreadable_json_rather_than_raising(tmp_path: Path)
     out.mkdir()
     (out / "broken.json").write_text("{not json", encoding="utf-8")
     (out / "list.json").write_text("[1, 2]", encoding="utf-8")  # JSON, but not an object
-    summarize.save_raw_result(_summary("good"), out, fingerprint=_FP)
+    summarize.save_raw_result(_summary("good"), out, source_stem="l3", fingerprint=_FP)
     assert summarize.summary_index(out) == {_FP}
 
 
 def test_summary_index_ignores_a_summary_with_no_back_link(tmp_path: Path) -> None:
     """No back-link reads as "unknown source", never as "this source is covered"."""
     out = tmp_path / "raw"
-    summarize.save_raw_result(_summary("old"), out)  # no fingerprint
+    summarize.save_raw_result(_summary("old"), out, source_stem="l3")  # no fingerprint
     assert summarize.summary_index(out) == set()
 
 

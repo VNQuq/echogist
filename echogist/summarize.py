@@ -34,10 +34,11 @@ truncated, invalid tool JSON, so it is caught and surfaced (the operator raises 
 cap in models.toml) rather than parsed into a half-summary.
 
 **F13 ordering.** :func:`save_raw_result` persists the raw structured result as
-``output/summaries/raw/<title>.json`` (no date prefix, plan §3) and is meant to run
-BEFORE render — a render failure then never costs a re-pay (re-render from the
-``.json``). Exact cost comes from :class:`SummarizeResult` usage (``response.usage``),
-never ``count_tokens`` (that is a network call — see the guard).
+``output/summaries/raw/<date>-<source>-<title>.json`` (TD-27: the tree is flat and the
+grouping lives in the name) and is meant to run BEFORE render — a render failure then
+never costs a re-pay (re-render from the ``.json``). Exact cost comes from
+:class:`SummarizeResult` usage (``response.usage``), never ``count_tokens`` (that is a
+network call — see the guard).
 """
 
 from __future__ import annotations
@@ -329,10 +330,15 @@ def _test_questions(value: Any) -> tuple[CheckQuestion, ...]:
     return tuple(out)
 
 
-def _fallback_title(source_stem: str, today: date | None) -> str:
-    """F10: model returned no usable title -> ``<source-stem>-<date>`` (named, no crash)."""
-    stamp = (today or date.today()).isoformat()
-    return f"{naming.sanitize_stem(source_stem, fallback='summary')}-{stamp}"
+def _fallback_title(source_stem: str) -> str:
+    """F10: model returned no usable title -> the source stem (named, no crash).
+
+    The date used to be appended here. It moved into the artifact's NAME (TD-27,
+    :func:`naming.summary_artifact_stem`), and this value is the document's HEADING —
+    where ``Модуль Основы, занятие 3`` reads better than the same thing with a date
+    stapled on, and where the date would then appear twice on one line.
+    """
+    return naming.sanitize_stem(source_stem, fallback="summary")
 
 
 # --------------------------------------------------------------------------- #
@@ -342,25 +348,36 @@ def save_raw_result(
     summary: Summary,
     out_dir: Path,
     *,
+    source_stem: str,
     today: date | None = None,
     fingerprint: str | None = None,
 ) -> Path:
-    """Write the summary to ``out_dir/<title>.json`` (no date prefix, deduped). F13.
+    """Write the summary to ``out_dir/<date>-<source>-<title>.json``, deduped. F13.
 
     Called BEFORE render so a render failure (fpdf2 edge, T7) never costs a re-pay:
     the menu re-renders from this ``.json`` (:func:`echogist.render.load_summary`).
-    The title is the filename stem (:func:`naming.summary_stem` — F9 illegal-char
-    strip + Windows MAX_PATH truncation + ``-2``/``-3`` dedup). T7's render reuses
-    THIS file's stem (``json_path.stem``) for the ``.pdf``/``.md``, so the triplet
-    shares one base. ``today`` is unused today but kept for a future dated-summary
-    option and signature symmetry with the other artifact saves.
+    :func:`naming.summary_artifact_stem` builds the name — F9 illegal-char strip, Windows
+    MAX_PATH cap, then ``-2``/``-3`` dedup. T7's render reuses THIS file's stem
+    (``json_path.stem``) for the ``.pdf``/``.md``, so the triplet shares one base and this
+    one call names all three.
+
+    ``source_stem`` is the RECORDING's stem, and it is required rather than defaulted:
+    a summary named without it is exactly the unnavigable artifact TD-27 is about, and
+    every one of the three call sites is a direct call mypy can see, so a missing argument
+    is a type error rather than a silent fallback.
+
+    ``today`` is the RUN's date, not each file's: a folder run is hours long and one
+    started before midnight would otherwise scatter a course across two dated blocks,
+    which is the grouping this naming exists to provide.
 
     ``fingerprint`` is the TD-31 identity of the recording this summary came from. Passing
     it stamps the back-link :func:`summary_index` reads back; omitting it writes a summary
-    that indexes as "unknown source" and will be re-bought on the next run.
+    that indexes as "unknown source" and will be re-bought on the next run. **The join is
+    on that stamped value, never on the name** — renaming every artifact, as TD-27 did,
+    cannot disturb the "already paid for" skip.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = naming.summary_stem(summary.title, fallback="summary")
+    stem = naming.summary_artifact_stem(summary.title, source_stem, today=today)
     path = naming.dedup_path(out_dir, stem, ".json")
     if fingerprint is not None:
         # Stamped here, not in the summarize call, because the back-link is provenance
@@ -1288,7 +1305,7 @@ def synthesize_summary(
         # than a call that came back short.
         notice("Reconcile returned no title; naming the document after the source file.")
     summary = Summary(
-        title=title or _fallback_title(source_stem, today),
+        title=title or _fallback_title(source_stem),
         core_idea=core_idea,
         # #1: phases are contiguous and NON-overlapping, so there are no overlap-duplicates
         # to merge — concatenate. Cross-phase text dedup would only collapse genuinely

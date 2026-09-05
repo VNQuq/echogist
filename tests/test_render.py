@@ -12,6 +12,7 @@ F13 ``load_summary`` round-trip, Cyrillic survival, and the failure paths.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -276,18 +277,24 @@ def test_dedup_adds_numeric_suffix(tmp_path: Path) -> None:
 
 def test_base_argument_groups_with_the_saved_json(tmp_path: Path) -> None:
     # The pipeline passes base=saved_json.stem so the triplet shares one name even
-    # when the .json itself was deduped to "Talk-2".
-    summarize.save_raw_result(_summary(title="Talk"), tmp_path)  # occupies "Talk.json"
-    json_path2 = summarize.save_raw_result(_summary(title="Talk"), tmp_path)
-    assert json_path2.stem == "Talk-2"
+    # when the .json itself was deduped to "-2".
+    day = date(2026, 9, 5)
+    summarize.save_raw_result(_summary(title="Talk"), tmp_path, source_stem="l3", today=day)
+    json_path2 = summarize.save_raw_result(
+        _summary(title="Talk"), tmp_path, source_stem="l3", today=day
+    )
+    assert json_path2.stem == "2026-09-05-l3-Talk-2"
     pdf_like = render.render(_summary(title="Talk"), tmp_path, "md", base=json_path2.stem)
-    assert pdf_like.name == "Talk-2.md"
+    assert pdf_like.name == "2026-09-05-l3-Talk-2.md"
 
 
 def test_long_title_is_truncated_consistently_across_json_and_render(tmp_path: Path) -> None:
-    long_title = "word " * 60  # ~300 chars, well over the MAX_PATH-safe cap
-    s = _summary(title=long_title)
-    json_path = summarize.save_raw_result(s, tmp_path)
+    """The load-bearing one. ``render`` re-runs ``naming.summary_stem`` over the ``base``
+    it is handed, so if the artifact stem could exceed that function's cap the .pdf would
+    come back SHORTER than the .json and the triplet would split — silently, with mypy and
+    the suite green. Both parts are pathological here, which is what pins the total cap."""
+    s = _summary(title="word " * 60)  # ~300 chars, well over the MAX_PATH-safe cap
+    json_path = summarize.save_raw_result(s, tmp_path, source_stem="stem " * 60)
     md_path = render.render(s, tmp_path, "md", base=json_path.stem)
     assert len(json_path.stem) <= 100
     assert md_path.stem == json_path.stem  # same truncated base -> grouped triplet
@@ -298,7 +305,7 @@ def test_long_title_is_truncated_consistently_across_json_and_render(tmp_path: P
 # --------------------------------------------------------------------------- #
 def test_load_summary_round_trips_a_saved_json(tmp_path: Path) -> None:
     original = _summary(title="Состояние ИИ", language="ru")
-    json_path = summarize.save_raw_result(original, tmp_path)
+    json_path = summarize.save_raw_result(original, tmp_path, source_stem="l3")
     loaded = render.load_summary(json_path)
     assert loaded == original  # exact reconstruction incl. synthesis + anchors
 
@@ -308,13 +315,13 @@ def test_load_summary_round_trips_the_source_back_link(tmp_path: Path) -> None:
     source and the next bulk run re-pays for a lecture already summarized."""
     fingerprint = "0123456789abcdef"
     json_path = summarize.save_raw_result(
-        _summary(title="Talk"), tmp_path / "raw", fingerprint=fingerprint
+        _summary(title="Talk"), tmp_path / "raw", source_stem="l3", fingerprint=fingerprint
     )
     assert render.load_summary(json_path).source_fingerprint == fingerprint
 
 
 def test_load_summary_without_a_back_link_reads_as_unknown_source(tmp_path: Path) -> None:
-    json_path = summarize.save_raw_result(_summary(title="Old"), tmp_path)
+    json_path = summarize.save_raw_result(_summary(title="Old"), tmp_path, source_stem="l3")
     assert render.load_summary(json_path).source_fingerprint == ""
 
 

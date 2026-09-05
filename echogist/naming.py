@@ -59,27 +59,110 @@ def sanitize_stem(stem: str, *, fallback: str) -> str:
 # MAX_PATH once the output dir + ".json"/".pdf"/".md" are appended. The .json
 # (T6) and the .pdf/.md (T7) all derive their name from this, so capping here
 # keeps the whole triplet inside the limit and grouped under one base.
+#
+# The binding path is the raw .json MID-PUBLISH, not the .pdf — publish_text writes a
+# ``.part`` sibling — so with S = 100 the budget is:
+#     "\output\summaries\raw\" (22) + S + worst-case "-99" (3) + ".json.part" (10) = 135
+#     MAX_PATH 260 counts the terminating NUL, so 259 - 135 = 124 chars for the app root.
+# TD-27 grew the stem from <title> to <date>-<source>-<title> WITHOUT moving this number:
+# the parts share the 100, so the root budget is exactly what it has always been.
 _MAX_SUMMARY_STEM = 100
 
+# Of that 100, the ceiling on the source part. Measured, not guessed: the real transcripts
+# in this pool run 27-54 characters, so the worst real case fits uncut and a short source
+# hands its slack to the title.
+_MAX_SOURCE_PART = 45
 
-def summary_stem(title: str, *, fallback: str) -> str:
+
+def summary_stem(title: str, *, fallback: str, limit: int = _MAX_SUMMARY_STEM) -> str:
     """Windows-safe, length-capped stem for the summary triplet (.json/.pdf/.md).
 
-    Sanitizes (F9 illegal-char strip) then truncates to ``_MAX_SUMMARY_STEM``.
-    Prefers to cut on the last word boundary inside the cap (so the name stays
-    readable) and re-strips trailing dashes/spaces so the cut never leaves a
-    dangling separator. An empty/all-illegal title still yields ``fallback``.
+    Sanitizes (F9 illegal-char strip) then truncates to ``limit``. Prefers to cut on
+    the last word boundary inside the cap (so the name stays readable) and re-strips
+    trailing dashes/spaces so the cut never leaves a dangling separator. An
+    empty/all-illegal title still yields ``fallback``.
+
+    ``limit`` defaults to the whole budget, which is what :func:`echogist.render.render`
+    passes when it re-derives the stem it was handed. :func:`summary_artifact_stem` passes
+    the remainder left after the date and the source part.
     """
     stem = sanitize_stem(title, fallback=fallback)
-    if len(stem) <= _MAX_SUMMARY_STEM:
+    if len(stem) <= limit:
         return stem
-    cut = stem[:_MAX_SUMMARY_STEM]
+    cut = stem[:limit]
     pivot = cut.rfind(" ")
-    if pivot >= _MAX_SUMMARY_STEM // 2:  # break on a space only if it isn't too early
+    if pivot >= limit // 2:  # break on a space only if it isn't too early
         cut = cut[:pivot]
     # Re-sanitize the cut: truncation can re-expose a trailing dot or land on a
     # reserved name, both of which sanitize_stem handles in one place.
     return sanitize_stem(cut, fallback=fallback)
+
+
+def _source_part(source_stem: str, *, fallback: str) -> str:
+    """The source stem, capped — truncated from the HEAD, not the tail.
+
+    The opposite direction from :func:`summary_stem`, and the direction is the whole
+    point. A downloaded lecture is named ``[VideoSite.org] Модуль «Основы», занятие 2
+    12.03.24``: the noise is the site tag at the FRONT, identical on every file of the
+    course, and the only discriminator — the lecture number and date — is at the BACK. A
+    tail cut yields ``[VideoSite.org] Модуль «Основы»,`` and gives six lectures one
+    name, which is the exact defect TD-27 exists to fix.
+
+    Snaps forward to a word boundary when that does not eat too much, so the kept tail
+    starts on a word rather than mid-syllable.
+    """
+    stem = sanitize_stem(source_stem, fallback=fallback)
+    if len(stem) <= _MAX_SOURCE_PART:
+        return stem
+    cut = stem[-_MAX_SOURCE_PART:]
+    pivot = cut.find(" ")
+    if pivot != -1 and len(cut) - pivot - 1 >= _MAX_SOURCE_PART // 2:
+        cut = cut[pivot + 1 :]
+    return sanitize_stem(cut, fallback=fallback)
+
+
+def summary_artifact_stem(
+    title: str,
+    source_stem: str,
+    *,
+    fallback: str = "summary",
+    today: date | None = None,
+) -> str:
+    """``<YYYY-MM-DD>-<source>-<title>`` — the summary triplet's base (TD-27).
+
+    The counterpart of :func:`transcript_path` for the deliverable. Before this, a summary
+    was named by the model's title ALONE, which left ``output/summaries/`` unreadable: no
+    date, no lecture number, no way to tell two passes over one course apart, and a sort
+    order that is alphabetical by a Russian LLM title, i.e. random. The tree stays flat and
+    the grouping lives here, in the name — the same move TD-31 made for the checkpoint's
+    identity.
+
+    **What gets cut, in order.** The date is never cut: it is the sort key. The source part
+    is cut second and from the head (see :func:`_source_part`). The title is cut FIRST,
+    from the tail, because it is descriptive prose that stays useful clipped and its full
+    text is the document's own first line — whereas a clipped date or source stem is not a
+    shorter navigational key, it is a wrong one. A short source hands its slack to the
+    title.
+
+    **The total is capped at the same ``_MAX_SUMMARY_STEM`` the title alone used to have**,
+    and that matters beyond MAX_PATH: :func:`echogist.render.render` re-runs
+    :func:`summary_stem` over the ``base`` it is handed, so a stem longer than the cap
+    would come back SHORTER for the ``.pdf`` than for the ``.json`` and split the triplet,
+    silently, with the suite green.
+
+    The title part is omitted when it is empty or equals the source — the F10 fallback
+    title is built from the source stem (:func:`echogist.summarize._fallback_title`), and
+    without this it would render ``<date>-<source>-<source>``.
+    """
+    stamp = (today or date.today()).isoformat()
+    source = _source_part(source_stem, fallback=fallback)
+    remaining = _MAX_SUMMARY_STEM - len(stamp) - 1 - len(source) - 1
+    # fallback="" on purpose: an empty or all-illegal title drops the part instead of
+    # inserting the filler word, which would read as a title the model never wrote.
+    part = summary_stem(title, fallback="", limit=max(remaining, 0)) if remaining > 0 else ""
+    if not part or part == source:
+        return f"{stamp}-{source}"
+    return f"{stamp}-{source}-{part}"
 
 
 def dedup_path(

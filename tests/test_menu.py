@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import date
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -1108,6 +1109,30 @@ def test_saved_transcript_pick_by_arrow(tmp_path: Path) -> None:
     assert "Done — summary written to" in stub.log_text
 
 
+def test_the_recovery_flow_names_the_summary_after_the_recording(tmp_path: Path) -> None:
+    """The seam TD-27 depends on. ``_run_summary`` takes ``source_stem: str``, so handing
+    it the transcript's WHOLE filename is type-correct and mypy-invisible — and it produces
+    a perfectly valid-looking file with the checkpoint's date and fingerprint baked into a
+    document's name. Same class of silent pass TD-28 and TD-29 each had to pin, except the
+    invisible thing here is a value rather than an unwired kwarg."""
+    tdir = tmp_path / "output" / "transcripts"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "2026-06-16-Модуль Основы, занятие 3-0123456789abcdef.txt").write_text(
+        "hello world", encoding="utf-8"
+    )
+    deps, _, _ = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    saved = list((tmp_path / "output" / "summaries" / "raw").glob("*.json"))
+    assert len(saved) == 1
+    name = saved[0].name
+    assert "0123456789abcdef" not in name, "the checkpoint's identity is not a document name"
+    assert "2026-06-16" not in name, "the checkpoint's date is not the summary's date"
+    assert "Модуль Основы, занятие 3" in name
+    assert name.startswith(date.today().isoformat())
+
+
 def test_saved_transcript_cancel_returns_to_menu(tmp_path: Path) -> None:
     _seed_transcript(tmp_path)
     deps, _, calls = _make_deps(tmp_path, ["single", "transcript", "__cancel__", "exit"])
@@ -1965,6 +1990,7 @@ def test_bulk_flow_skips_a_file_that_already_has_a_summary(
     summarize.save_raw_result(
         _summary(),
         tmp_path / "output" / "summaries" / "raw",
+        source_stem=done.stem,
         fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(
@@ -1987,6 +2013,7 @@ def test_bulk_flow_with_nothing_left_to_do_never_reaches_the_gate(
     summarize.save_raw_result(
         _summary(),
         tmp_path / "output" / "summaries" / "raw",
+        source_stem=done.stem,
         fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "summary", False, "exit"])
@@ -2126,6 +2153,7 @@ def test_folder_transcript_run_does_not_skip_an_already_summarized_file(
     summarize.save_raw_result(
         _summary(),
         tmp_path / "output" / "summaries" / "raw",
+        source_stem=done.stem,
         fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "transcript", False, "exit"])
