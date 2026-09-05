@@ -5,7 +5,7 @@ Haiku, **$2.4003**) seeded the cost model; run 2 (`КУРС2025`, 6 lectures, 18
 **balanced**, **$3.7246**) is the first Sonnet folder run, **0 CJK slips, 0 undrawable chars**.
 Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed TD-31 + TD-33.
 **Authority:** [CLAUDE.md](../CLAUDE.md); TECHNICAL_DEBT TD-16 for the v2 rule's validation.
-**Max: 60 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.
+**Max: ~88 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.
 
 ## Live invariants — break one and something regresses silently
 
@@ -45,17 +45,16 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
   files say 0.2805 — UNRESOLVED (stitched log). Token estimate: 3 rates by script.
 - **Key:** env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are
   Windows-only; `/mnt/c/Users/operator/Documents/echogist/output/` reads that tree from here.
+  **The real pool is migrated (2026-09-05):** 13/13 summaries and 13/13 transcripts carry
+  their fingerprint, both indexes agree on all 13, nothing on disk is pre-TD-31 any more.
 
 ## Next
 
-1. **Backfill the 13 existing summaries.** They carry `source_path`; the index reads
-   `source_fingerprint`, so `summary_index` over the real `raw/` returns **0** — a re-run would
-   re-transcribe 41h AND re-buy all 13 (~$6.12). All 13 sources are on disk: one offline script
-   (`source_path` → fingerprint → write field, rename transcripts) fixes it. Data, not code.
-2. **Stub pipeline on Windows before the next push** (CLAUDE.md). WSL has no clip fixture and
-   no Whisper model, so it cannot run here.
-3. **TD-27** is no longer a design question (TD-31 removed both index constraints): what is
+1. **Stub pipeline on Windows before the next push** (CLAUDE.md). WSL has no clip fixture and
+   no Whisper model, so it cannot run here. Four commits are waiting.
+2. **TD-27** is no longer a design question (TD-31 removed both index constraints): what is
    left is a `paths` module over 26 hardcoded expressions.
-4. **v3.0, not v2.4.0** — 3.0 begins when the registry empties, and TD-31 already broke both
+3. **v3.0, not v2.4.0** — 3.0 begins when the registry empties, and TD-31 already broke both
    artifact formats, so nothing is releasable in between.
-5. TD-30 (needs a home now the header idea is dead); TD-29b; TD-29c; streaming; 1b.
+4. TD-30 (needs a home now the header idea is dead); TD-29b; TD-29c; streaming; 1b.
+5. `scripts/backfill_td31.py` is spent — delete it once you are sure the pool is right.
