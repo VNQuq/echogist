@@ -16,10 +16,10 @@ drift into offering something the other cannot produce:
     that failed (F2/F4/F5) re-runs from here without re-transcribing.
 
 * **2. Folder** — every file under one folder, picked ONCE and handed to the action, so
-  a preview and the run that follows it cannot end up on different trees.
+  the preview and the run that follows it cannot end up on different trees. The preview
+  is not a row to choose: picking the folder RUNS it, so what is in the tree and what it
+  would cost are on screen before the action is asked for.
 
-  * *Preview only* — the read-only walk: what is in the folder and what it would cost.
-    Free, offline, the only row here that cannot spend anything.
   * *MP3 only* — the bounded conversion pool over the folder's contents.
   * *Transcript* — the folder run stopped after its free local phase; no gate, no wire.
   * *Summary* — the two-phase folder run: transcribe everything, then ONE exact quote
@@ -901,16 +901,26 @@ def _flow_saved_transcript(deps: Deps) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Scan
+# Folder preview
 # --------------------------------------------------------------------------- #
-# Printed on entry rather than carried on the menu row: ``Choice`` is a value and a
-# ONE-LINE label (``ui.py``), so a multi-line hint is not renderable in the menu itself.
+# Printed on entry: the preview has no menu row to carry it, and ``Choice`` is a value and
+# a ONE-LINE label (``ui.py``) anyway, so a multi-line hint was never renderable there.
 _SCAN_HINT = (
     "Walks a folder and every folder under it, counts what is there, and prices the "
     "summaries before you spend anything. Reads only. Writes nothing but its own cache. "
     "Tells you which files share a name, which is the one thing that will silently "
     "corrupt a paid run later."
 )
+
+
+def _found_nothing(result: ScanResult) -> bool:
+    """True when the walk turned up no media at all — not even a file it could not read.
+
+    A file that failed to probe still COUNTS as media: MP3-only never needed a duration,
+    so an unreadable tree is a report, not a dead end. Shared with :func:`_flow_folder` so
+    "nothing here" means one thing in the report and in the decision to stop.
+    """
+    return not result.files and not result.unreadable and not result.placeholders
 
 
 def _report_scan(
@@ -921,7 +931,7 @@ def _report_scan(
     transcripts_dir: Path,
 ) -> None:
     """Render one scan: the per-folder table, the totals, then the two problem lists."""
-    if not result.files and not result.unreadable and not result.placeholders:
+    if _found_nothing(result):
         ui.warn("No media files found under that folder.")
         return
 
@@ -950,17 +960,20 @@ def _report_scan(
         ui.table("Cloud placeholders (not downloaded, not probed)", scan.placeholder_rows(result))
 
 
-def _flow_scan(deps: Deps, root: Path | None = None) -> None:
-    """Menu 'scan' — walk a folder and report what is in it. Read-only, offline, free.
+def _preview_folder(deps: Deps, root: Path) -> ScanResult:
+    """Walk a folder and report what is in it. Read-only, offline, free.
 
-    Nothing here converts, transcribes or summarizes, and no network call is possible on
-    this path: the whole point is to see the library and the price before committing to
-    either. The only write is the probe cache under ``output/``.
+    Not an action the operator picks: :func:`_flow_folder` runs this the moment a folder is
+    selected, so the library and the price are on screen BEFORE the question about what to
+    produce. Nothing here converts, transcribes or summarizes, and no network call is
+    possible on this path. The only write is the probe cache under ``output/``, which is
+    also what keeps the automatic preview cheap — the run that follows re-walks the same
+    tree and reads the same cache.
 
-    Ctrl-C aborts to the menu with whatever was already probed, rather than exiting the
-    app: a cold scan of a large tree is minutes of ffmpeg spawns, and throwing away both
-    the report and the cache for a keystroke would be the same mistake the batch flow
-    already refuses to make.
+    Ctrl-C aborts the walk with whatever was already probed, rather than exiting the app:
+    a cold scan of a large tree is minutes of ffmpeg spawns, and throwing away both the
+    report and the cache for a keystroke would be the same mistake the batch flow already
+    refuses to make. The caller still gets the partial result and still asks its question.
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start this flow on a clean screen
@@ -969,15 +982,9 @@ def _flow_scan(deps: Deps, root: Path | None = None) -> None:
     model_config = config.load_model_config()
     tier = model_config.tier(settings.model_tier)
 
-    # Resolved ONCE, before the walk, and deliberately before the picker: a missing or
-    # corrupt ffmpeg must fail loud one time, not mark all 500 files unreadable.
+    # Resolved ONCE, before the walk: a missing or corrupt ffmpeg must fail loud one time,
+    # not mark all 500 files unreadable.
     exe = extract.default_ffmpeg_exe()
-
-    if root is None:
-        picked = _pick_folder(ui, "Select a folder to scan")
-        if picked is None:
-            return
-        root = picked
 
     cache_path = deps.base / "output" / scan.CACHE_FILENAME
     cancelled = False
@@ -994,6 +1001,7 @@ def _flow_scan(deps: Deps, root: Path | None = None) -> None:
     _report_scan(ui, result, model_config, tier, deps.base / "output" / "transcripts")
     if cancelled:
         ui.warn("Scan cancelled; the numbers above cover only what was read.")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -1379,14 +1387,6 @@ _SINGLE_SOURCE_CHOICES: tuple[Choice, ...] = (
     ("__back__", "← Back"),
 )
 
-# The folder module's actions ARE _ACTION_CHOICES plus a free preview, which is what the
-# old "Scan a folder" row was: read-only, offline, and the only way to see the price of a
-# folder before committing. It leads because looking is what you do before spending.
-_FOLDER_ACTION_CHOICES: tuple[Choice, ...] = (
-    ("scan", "Preview only (free — what is in it, and what it would cost)"),
-    *_ACTION_CHOICES,
-)
-
 
 def _flow_single(deps: Deps) -> None:
     """The single-file module: one recording, or one transcript already on disk.
@@ -1408,14 +1408,21 @@ def _flow_single(deps: Deps) -> None:
 def _flow_folder(deps: Deps) -> None:
     """The folder module: every file under one folder, same outputs as a single file.
 
-    The folder is picked ONCE, here, and handed to whichever action runs — so a preview and
-    the run that follows it are guaranteed to be looking at the same tree, which they were
-    not when they were two separate menu rows each with their own picker.
+    The folder is picked ONCE, here, and handed to whichever action runs — so the preview
+    and the run that follows it are guaranteed to be looking at the same tree, which they
+    were not when they were two separate menu rows each with their own picker.
 
-    The actions map onto work that already existed: ``scan`` is the read-only walk,
-    ``summary`` is the two-phase folder run, ``transcript`` is that same run stopped after
-    its free local phase, and ``mp3`` is the conversion pool pointed at a folder instead of
-    a hand-picked list (``folder.expand_selection`` has always accepted directories).
+    **The preview is automatic** (operator, 2026-09-05). It used to be the first row of the
+    action list, which put the count and the projected price one choice AFTER the decision
+    they exist to inform. Now picking a folder runs it, and the action question is asked
+    against a report that is already on screen. It is still free, still offline, still the
+    only thing here that cannot spend anything — it just is not a thing to choose any more.
+
+    A folder with nothing in it returns to the menu instead of asking what to produce from
+    nothing. The remaining actions map onto work that already existed: ``summary`` is the
+    two-phase folder run, ``transcript`` is that same run stopped after its free local
+    phase, and ``mp3`` is the conversion pool pointed at a folder instead of a hand-picked
+    list (``folder.expand_selection`` has always accepted directories).
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start the module on a clean screen
@@ -1427,12 +1434,15 @@ def _flow_folder(deps: Deps) -> None:
     root = _pick_folder(ui, "Select a folder")
     if root is None:
         return
-    action = ui.select(f"What should EchoGist produce for '{root.name}'?", _FOLDER_ACTION_CHOICES)
+    result = _preview_folder(deps, root)
+    if _found_nothing(result):
+        # _report_scan already said so. Asking "what should I produce?" about an empty tree
+        # would offer three runs that can only report the same emptiness back.
+        return
+    action = ui.select(f"What should EchoGist produce for '{root.name}'?", _ACTION_CHOICES)
     if action == "__back__":  # TD-13: back out to the main menu, do nothing
         return
-    if action == "scan":
-        _flow_scan(deps, root)
-    elif action == "mp3":
+    if action == "mp3":
         _flow_mp3(deps, [root])
     elif action == "transcript":
         _flow_run(deps, root, summarize_after=False)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from echogist.ui import (
     REVEAL_AUDIO,
     REVEAL_SUMMARY,
     REVEAL_TRANSCRIPT,
+    Choice,
     RichQuestionaryUI,
     StubUI,
 )
@@ -1049,15 +1051,17 @@ def test_batch_expands_a_typed_directory(tmp_path: Path) -> None:
 
 
 def test_batch_empty_directory_returns_to_menu(tmp_path: Path) -> None:
+    # Caught one step earlier since the preview became automatic: the walk says the folder
+    # is empty and the action is never asked for, so the converter is never reached.
     empty = tmp_path / "empty"
     empty.mkdir()
     spy = _spy_batch()
-    deps, stub, _ = _make_deps(tmp_path, ["folder", str(empty), "mp3", "exit"], convert_many=spy)
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(empty), "exit"], convert_many=spy)
 
     assert menu.run_menu(deps) == 0
 
     assert spy.seen == {}
-    assert "Nothing convertible" in stub.log_text
+    assert "No media files found" in stub.log_text
 
 
 def test_batch_never_transcribes_or_summarizes(tmp_path: Path) -> None:
@@ -1518,7 +1522,7 @@ def test_scan_flow_reports_folders_totals_and_costs_nothing(
     library = tmp_path / "library"
     _lecture(library / "Course-1", "one.mp4")
     _lecture(library / "Course-1", "two.mp4")
-    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1541,7 +1545,7 @@ def test_scan_flow_surfaces_duplicate_names(
     library = tmp_path / "library"
     _lecture(library / "A", "lecture.mp4")
     _lecture(library / "B", "lecture.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
 
     menu.run_menu(deps)
 
@@ -1558,7 +1562,7 @@ def test_scan_flow_never_counts_echogists_own_output(
     _offline_scan(monkeypatch)
     _lecture(tmp_path / "output" / "audio", "2026-01-01-lecture.mp3")
     _lecture(tmp_path, "lecture.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path), "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path), "__back__", "exit"])
 
     menu.run_menu(deps)
 
@@ -1575,7 +1579,7 @@ def test_scan_flow_cancelled_still_reports_what_it_read(
     library = tmp_path / "library"
     _lecture(library, "a.mp4")
     _lecture(library, "b.mp4")
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
 
     assert menu.run_menu(deps) == 0  # back to the menu, then a normal exit
 
@@ -1587,7 +1591,7 @@ def test_scan_flow_returns_to_the_menu_on_a_bad_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _offline_scan(monkeypatch)
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path / "ghost"), "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(tmp_path / "ghost"), "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1598,7 +1602,7 @@ def test_scan_flow_soft_cancels_when_no_folder_is_picked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _offline_scan(monkeypatch)
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", None, "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", None, "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1630,7 +1634,7 @@ def test_an_empty_folder_says_so_instead_of_drawing_an_empty_table(
     _offline_scan(monkeypatch)
     empty = tmp_path / "empty"
     empty.mkdir()
-    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(empty), "scan", "exit"])
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(empty), "exit"])
 
     assert menu.run_menu(deps) == 0
 
@@ -1669,24 +1673,63 @@ def test_main_menu_is_two_modules_then_settings_and_exit() -> None:
     assert [key for key, _label in menu._MAIN_MENU] == ["single", "folder", "settings", "exit"]
 
 
-def test_every_single_file_output_is_offered_for_a_folder_too() -> None:
-    """The point of the two-module menu: the folder module is not a reduced one. Whatever
-    EchoGist can produce from one recording it can produce from a folder of them, off the
-    SAME choice list — so the two can never drift into offering different things."""
-    single = {key for key, _label in menu._ACTION_CHOICES} - {"__back__"}
-    folder = {key for key, _label in menu._FOLDER_ACTION_CHOICES} - {"__back__"}
+def test_the_preview_runs_on_the_pick_not_on_a_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator 2026-09-05: the count and the price are what the action choice is FOR, so
+    they have to be on screen before it is asked, not one row inside it."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library / "Course-1", "one.mp4")
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
 
-    assert single <= folder
-    # ...plus the free preview, which only makes sense at folder scale.
-    assert folder - single == {"scan"}
+    assert menu.run_menu(deps) == 0
+
+    kinds = [(kind, text) for kind, text in stub.messages if kind in {"table", "select"}]
+    totals = kinds.index(("table", "Totals"))
+    action = kinds.index(("select", "What should EchoGist produce for 'library'?"))
+    assert totals < action  # the report, THEN the question it informs
+    # The operator never asked for a preview and never spent anything to get one.
+    assert "Preview only" not in stub.log_text
+    assert calls == {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
 
-def test_preview_leads_the_folder_actions() -> None:
-    """Looking is what you do before spending, and it is the only free row here."""
-    keys = [key for key, _label in menu._FOLDER_ACTION_CHOICES]
+def test_an_empty_folder_never_reaches_the_action_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three ways to produce nothing out of nothing is not a question worth asking."""
+    _offline_scan(monkeypatch)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(empty), "exit"])
 
-    assert keys[0] == "scan"
-    assert keys[-1] == "__back__"
+    assert menu.run_menu(deps) == 0
+
+    assert not [m for m in stub.messages if m[0] == "select" and "produce for" in m[1]]
+
+
+def test_the_folder_module_offers_exactly_the_single_file_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the two-module menu: the folder module is not a reduced one, and now
+    not an extended one either. Whatever EchoGist can produce from one recording it can
+    produce from a folder of them, off the SAME list — one object, so they cannot drift."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
+    offered: dict[str, tuple[Choice, ...]] = {}
+    inner = stub.select
+
+    def record(prompt: str, choices: Sequence[Choice]) -> str:
+        offered[prompt] = tuple(choices)
+        return inner(prompt, choices)
+
+    monkeypatch.setattr(stub, "select", record)
+
+    assert menu.run_menu(deps) == 0
+
+    assert offered["What should EchoGist produce for 'library'?"] == menu._ACTION_CHOICES
 
 
 # --------------------------------------------------------------------------- #
