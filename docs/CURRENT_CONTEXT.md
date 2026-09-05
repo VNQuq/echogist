@@ -1,11 +1,11 @@
 # Current Context
 
-**Updated:** 2026-09-05 · v2.3.0 + 8 unreleased commits, unpushed. The calibration fixture for
-everything below is the first full folder run: 7 RU lectures, 23h43m, Haiku, 59 calls,
-**$2.4003**, 0 failures, all anchors validated. Since it: cost model rebuilt, PDF styling,
-`folder.py` merge, 3 CJK slips diagnosed, then a 4-agent review of the range whose fixes are
-the 4 commits after `cd50e43`. **Authority:** [CLAUDE.md](../CLAUDE.md) for the v2 pipeline
-rule, TECHNICAL_DEBT TD-16 for its validation.
+**Updated:** 2026-09-05 · v2.3.0 + 9 unreleased commits, PUSHED. Calibration fixture: the first
+full folder run — 7 RU lectures, 23h43m, Haiku, 59 calls, **$2.4003**, 0 failures, all anchors
+validated. Since it: cost model rebuilt, PDF styling, `folder.py` merge, 3 CJK slips diagnosed, a
+4-agent review whose fixes are the 4 commits after `cd50e43`, then TD-28's renderer half
+(`f2331b8`). One open debt left: TD-27. **Authority:** [CLAUDE.md](../CLAUDE.md) for the v2
+pipeline rule, TECHNICAL_DEBT TD-16 for its validation.
 **Max: 60 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.
 
 ## Live invariants — break one and something regresses silently
