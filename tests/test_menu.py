@@ -127,11 +127,18 @@ def _make_deps(
         *,
         base: str | None = None,
         log: Any = print,
+        notice: Any = print,
         **_kw: Any,
     ) -> Path:
         calls["render"] += 1
         if render_error:
             raise RenderError("layout blew up")
+        # TD-28: the real stage announces a character the PDF font cannot draw here.
+        # ``notice`` is taken EXPLICITLY for the same reason as in the summarize stub —
+        # RenderFn is Callable[..., Path], so an unwired channel would pass mypy and be
+        # swallowed by **_kw, and the suite would stay green while the warning went
+        # nowhere. Emitted unconditionally so a test can see WHERE it landed.
+        notice("The PDF font cannot draw 1 character ('催').")
         return Path(out_dir) / f"{base}.{fmt}"
 
     stub = StubUI(answers)
@@ -1405,6 +1412,17 @@ def test_render_failure_after_paid_call_keeps_json(tmp_path: Path) -> None:  # F
     assert "re-render it later" in stub.log_text
     # The raw result was persisted BEFORE render, so no re-pay is needed.
     assert list((tmp_path / "output" / "summaries" / "raw").glob("*.json"))
+
+
+def test_render_notice_reaches_the_loud_channel(tmp_path: Path) -> None:  # TD-28
+    # The render stage gets its own `notice`, wired to ui.warn — the same channel as a
+    # dropped anchor. Asserted at the SEAM because RenderFn is Callable[..., Path]: if the
+    # menu stopped passing it, the stage would fall back to bare print() and the operator
+    # would never see that the document has a blank where a character should be.
+    _seed_transcript(tmp_path)
+    deps, stub, _ = _make_deps(tmp_path, ["single", "transcript", "0", "exit"])
+    assert menu.run_menu(deps) == 0
+    assert [m for m in stub.messages if m[0] == "warn" and "cannot draw" in m[1]]
 
 
 def test_summarize_error_returns_to_menu(tmp_path: Path) -> None:  # F2/F4/F5

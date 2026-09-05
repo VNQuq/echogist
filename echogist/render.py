@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -232,6 +233,7 @@ def render(
     *,
     base: str | None = None,
     log: Logger = print,
+    notice: Logger = print,
 ) -> Path:
     """Write ``summary`` to ``out_dir/<base>.<fmt>`` (deduped); return the path.
 
@@ -243,6 +245,10 @@ def render(
     for an already-safe json stem, but it means a raw ``base`` from any caller can
     never reintroduce a path-traversal/reserved-name hole. Only the chosen
     extension is deduped here. Offline; the PDF path embeds DejaVuSans for Cyrillic.
+
+    Two channels, as everywhere else: ``log`` is progress chatter, ``notice`` is what the
+    operator must act on — here, a character the embedded font cannot draw (TD-28). The
+    Markdown path has no font and never uses it.
     """
     fmt = fmt.lower()
     if fmt not in ("pdf", "md"):
@@ -257,7 +263,7 @@ def render(
     if fmt == "md":
         out_path.write_text(_markdown(summary), encoding="utf-8")
     else:
-        _render_pdf(summary, out_path)
+        _render_pdf(summary, out_path, notice=notice)
     return out_path
 
 
@@ -464,7 +470,108 @@ def _font_file(path: Path) -> str:
     return str(path)
 
 
-def _render_pdf(summary: Summary, out_path: Path) -> None:
+#: How much text either side of an undrawable character is quoted back. Same window as
+#: :mod:`echogist.alphabet` uses for a script finding, for the same reason: enough to
+#: recognize the sentence, short enough that the finding stays one console line.
+_UNDRAWABLE_CONTEXT = 30
+
+#: How many distinct undrawable characters are quoted before the rest are counted.
+_MAX_UNDRAWABLE = 5
+
+
+@lru_cache(maxsize=4)
+def _font_charset(path: str) -> frozenset[str]:
+    """Every character the TTF at ``path`` can draw, or an EMPTY set if it cannot be read.
+
+    ``fontTools`` is how fpdf2 itself reads a cmap — it is fpdf2's own locked dependency,
+    not a new one — so this stays inside the lazy PDF seam and adds nothing to the
+    install. Cached because the bundled font is fixed for the process's whole life.
+
+    An unreadable font returns ``frozenset()``, which the caller reads as "coverage
+    unknown, report nothing" (the same fail-soft convention as
+    :func:`echogist.alphabet.foreign_findings`'s empty ``allowed``). A check that cannot
+    run must stay silent; the render itself is fpdf2's business and still happens.
+    """
+    # Imported OUTSIDE the try: naming TTLibError in the except clause while binding it
+    # inside would raise NameError instead of the failure it is there to catch. It is
+    # guaranteed importable — the caller only gets here after ``import fpdf`` succeeded,
+    # and fpdf2 reads every font it embeds with this exact module.
+    from fontTools.ttLib import TTFont, TTLibError
+
+    try:
+        with TTFont(path, fontNumber=0, lazy=True) as font:
+            return frozenset(chr(codepoint) for codepoint in font.getBestCmap())
+    except (OSError, ValueError, KeyError, TTLibError):
+        return frozenset()
+
+
+def _undrawable(text: str, drawable: frozenset[str]) -> tuple[tuple[str, str], ...]:
+    """Each DISTINCT character of ``text`` the font cannot draw, with its first context.
+
+    Distinct, not every occurrence: a Chinese morpheme repeated across a lecture is one
+    fact about the document, and the operator needs the character and one place to look
+    at it, not forty. Order is first appearance. Whitespace is skipped: a newline is in
+    no cmap and is not a hole in the page.
+
+    Empty ``drawable`` means the font could not be read: no findings (see
+    :func:`_font_charset`).
+    """
+    if not drawable:
+        return ()
+    found: dict[str, str] = {}
+    for index, char in enumerate(text):
+        if char in drawable or char in found or char.isspace():
+            continue
+        found[char] = _quote(text, index)
+    return tuple(found.items())
+
+
+def _quote(text: str, index: int) -> str:
+    """``text[index]`` with its surroundings, whitespace collapsed to one line."""
+    left = max(0, index - _UNDRAWABLE_CONTEXT)
+    right = min(len(text), index + 1 + _UNDRAWABLE_CONTEXT)
+    return " ".join(text[left:right].split())
+
+
+def _report_undrawable(summary: Summary, notice: Logger) -> None:
+    """Announce every character of ``summary`` the PDF font cannot draw. Never blocks.
+
+    **TD-28, the renderer half.** fpdf2 does notice a missing glyph, but it says so
+    through its own ``logging`` warning at output time — off EchoGist's channels, after
+    the page is composed, and it scrolls past. The document then reaches the operator
+    with a blank where a character should be and nothing they were meant to read. This
+    says it FIRST, on the same loud ``notice`` channel as a dropped anchor and a foreign
+    script, before the file is written.
+
+    It reports and returns; it never raises and never substitutes a character. Refusing
+    the PDF over one glyph would throw away a summary already paid for, and guessing a
+    replacement would be exactly the silent rewriting the pipeline exists to prevent —
+    the same division of labour as :func:`echogist.summarize.report_foreign_scripts`: the
+    machine states the fact, the human decides. Markdown is unaffected (no font).
+
+    The corpus is the Markdown rendering of the same document — the identical strings the
+    PDF draws, labels included. Coverage is the INTERSECTION of the regular and bold
+    faces, so a character only the heading face lacks still counts as a hole; the sole
+    PDF-exclusive glyph is the ``•`` bullet, which DejaVuSans carries.
+    """
+    drawable = _font_charset(str(_FONT_REGULAR)) & _font_charset(str(_FONT_BOLD))
+    missing = _undrawable(_markdown(summary), drawable)
+    if not missing:
+        return
+    chars = ", ".join(f"'{char}'" for char, _ in missing[:_MAX_UNDRAWABLE])
+    what = "1 character" if len(missing) == 1 else f"{len(missing)} characters"
+    notice(
+        f"The PDF font cannot draw {what} ({chars}) — each is BLANK in the document, "
+        "not substituted. The text is kept as written; check it:"
+    )
+    for char, context in missing[:_MAX_UNDRAWABLE]:
+        escape = char.encode("unicode-escape").decode()
+        notice(f"  '{char}' ({escape})  ...{context}...")
+    if len(missing) > _MAX_UNDRAWABLE:
+        notice(f"  ...and {len(missing) - _MAX_UNDRAWABLE} more.")
+
+
+def _render_pdf(summary: Summary, out_path: Path, *, notice: Logger = print) -> None:
     """Render the summary to a PDF at ``out_path`` with the embedded Unicode font.
 
     ``fpdf`` is imported lazily (the module stays import-clean if the wheel is
@@ -494,6 +601,9 @@ def _render_pdf(summary: Summary, out_path: Path) -> None:
 
         _title(pdf, summary.title)
         _pdf_synthesis_body(pdf, summary, lab)
+        # TD-28: say what the page will be missing BEFORE the file exists, on the loud
+        # channel. fpdf2's own warning lands on a logger, after layout, and scrolls past.
+        _report_undrawable(summary, notice)
         pdf.output(str(out_path))
     except RenderError:
         raise

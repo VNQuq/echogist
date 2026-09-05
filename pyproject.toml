@@ -28,9 +28,10 @@ warn_redundant_casts = true
 files = ["echogist", "tests", "scripts/measure_model.py", "scripts/smoke_run.py", "scripts/release.py", "scripts/check-models.py"]
 
 # Runtime wheels are GPU/native and not installed in the dev/CI venv; they are
-# imported lazily inside functions, so stub-less imports are fine to ignore.
+# imported lazily inside functions, so stub-less imports are fine to ignore. fontTools
+# (fpdf2's own dependency, read for the font cmap in render) ships no py.typed marker.
 [[tool.mypy.overrides]]
-module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "imageio_ffmpeg", "huggingface_hub"]
+module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "fontTools.*", "imageio_ffmpeg", "huggingface_hub"]
 ignore_missing_imports = true
 
 # echogist.menu lands in T9; until then __main__ imports it lazily.

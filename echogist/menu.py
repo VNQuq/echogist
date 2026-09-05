@@ -510,6 +510,7 @@ def _run_summary(
             settings.output_format,
             base=json_path.stem,  # json/pdf/md share one stem
             log=ui.info,
+            notice=ui.warn,  # TD-28: an undrawable character is loud, like a dropped anchor
         )
     except RenderError as exc:  # F13 — saved, re-render without re-paying
         ui.error(

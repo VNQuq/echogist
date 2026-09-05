@@ -1,6 +1,6 @@
 # Current Context
 
-**Updated:** 2026-09-05 · v2.3.0 + 5 unreleased commits, unpushed. The calibration fixture for
+**Updated:** 2026-09-05 · v2.3.0 + 8 unreleased commits, unpushed. The calibration fixture for
 everything below is the first full folder run: 7 RU lectures, 23h43m, Haiku, 59 calls,
 **$2.4003**, 0 failures, all anchors validated. Since it: cost model rebuilt, PDF styling,
 `folder.py` merge, 3 CJK slips diagnosed, then a 4-agent review of the range whose fixes are
@@ -14,10 +14,10 @@ rule, TECHNICAL_DEBT TD-16 for its validation.
   walk's file LIST, not the root (`expand_selection` walks one level and silently converted only
   the top of a course tree). An interrupted walk is silent about the folder, never a verdict;
   an empty PLAN means "already done" only if there were files to plan.
-- **Two channels out of `summarize`** (TD-29). `log` = phase chatter, muted; `notice` = what
-  the operator must act on, loud: a DROPPED anchor, a foreign script. **Do not merge them**,
-  do not sniff text in `menu._progress`, and pass `notice=` to EVERY `validate_anchors` call —
-  the per-phase one is where anchors are actually dropped.
+- **Two channels, from `summarize` AND `render`** (TD-29, TD-28). `log` = chatter, muted;
+  `notice` = what the operator must act on, loud: a DROPPED anchor, a foreign script, a
+  character the font cannot draw. **Do not merge them**, do not sniff text in `menu._progress`,
+  and pass `notice=` to EVERY `validate_anchors` call — the per-phase one drops the anchors.
 - **The script check is an instrument** ([design](./designs/script-check.md)): it MEASURES
   whether the prompt sentence works, so keep it after the sentence lands. Notation (µ, ℓ, 𝑥,
   Greek) is not a script — TD-30.
@@ -57,4 +57,4 @@ rule, TECHNICAL_DEBT TD-16 for its validation.
    6 are flat-pool INDEXES and those are the work. TD-31 first. Named COURSE is the worst option.
 3. **Cut v2.4.0** — nothing changed an artifact format or a config contract. (TD-29c closed
    down to MINOR: the gate is manual, verified never skipped, and CLAUDE.md now says so.)
-4. Prompt-sentence measurement next real run; TD-28 renderer half; TD-30; streaming; 1b.
+4. Prompt-sentence measurement next real run; TD-30 (needs TD-31's format); streaming; 1b.

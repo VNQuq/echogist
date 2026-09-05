@@ -426,3 +426,59 @@ def test_pdf_missing_fpdf_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(RenderError, match="fpdf2 is not installed"):
         render.render(_summary(), tmp_path, "pdf")
+
+
+# --------------------------------------------------------------------------- #
+# TD-28 (renderer half) — a character the font cannot draw is ANNOUNCED, loudly,
+# before the file exists. It is never substituted and never blocks the render.
+# --------------------------------------------------------------------------- #
+def test_font_charset_reads_the_bundled_font() -> None:
+    drawable = render._font_charset(str(render._FONT_REGULAR))
+    assert "ж" in drawable and "•" in drawable  # Cyrillic + the PDF bullet
+    assert "催" not in drawable  # the morpheme from the first real folder run
+
+
+def test_font_charset_of_an_unreadable_file_is_empty(tmp_path: Path) -> None:
+    # Coverage unknown must mean "report nothing", not "report everything".
+    bogus = tmp_path / "not-a-font.ttf"
+    bogus.write_text("plainly not a TTF", encoding="utf-8")
+    assert render._font_charset(str(bogus)) == frozenset()
+
+
+def test_undrawable_reports_each_distinct_character_once_with_context() -> None:
+    text = "как催化剂для перехода и催again"
+    found = render._undrawable(text, frozenset("какдляперехода иagin"))
+    assert [char for char, _ in found] == ["催", "化", "剂"]  # distinct, first-seen order
+    assert "как催化剂для" in dict(found)["催"]
+
+
+def test_undrawable_ignores_whitespace_and_an_unknown_charset() -> None:
+    assert render._undrawable("a\nb\tc", frozenset("abc")) == ()
+    assert render._undrawable("催", frozenset()) == ()  # fail-soft: font unreadable
+
+
+def test_pdf_announces_an_undrawable_character_and_still_writes(tmp_path: Path) -> None:
+    pytest.importorskip("fpdf")
+    said: list[str] = []
+    summary = replace(_summary(title="Slip"), core_idea="как催化剂для перехода")
+    path = render.render(summary, tmp_path, "pdf", log=lambda _m: None, notice=said.append)
+    assert path.exists() and path.read_bytes().startswith(b"%PDF")  # paid work is kept
+    assert any("cannot draw" in line and "'催'" in line for line in said)
+    assert any("\\u50ac" in line for line in said)  # the codepoint, for a blank glyph
+    assert any("как催化剂для перехода" in line for line in said)  # where to look
+
+
+def test_pdf_says_nothing_when_every_character_is_drawable(tmp_path: Path) -> None:
+    pytest.importorskip("fpdf")
+    said: list[str] = []
+    summary = _summary(title="Состояние ИИ", language="ru")
+    render.render(summary, tmp_path, "pdf", log=lambda _m: None, notice=said.append)
+    assert said == []  # an instrument that cries at correct text stops being read
+
+
+def test_markdown_never_touches_the_font_check(tmp_path: Path) -> None:
+    # Markdown has no font, so a CJK morpheme is not a rendering fact there.
+    said: list[str] = []
+    summary = replace(_summary(title="Slip"), core_idea="как催化剂для перехода")
+    render.render(summary, tmp_path, "md", log=lambda _m: None, notice=said.append)
+    assert said == []
