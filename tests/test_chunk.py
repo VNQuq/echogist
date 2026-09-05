@@ -100,7 +100,7 @@ def test_bin_blocks_is_self_defensive_on_degenerate_input() -> None:
 # drop_degenerate_blocks (TD-26) — Whisper boilerplate never reaches the model
 # --------------------------------------------------------------------------- #
 def _speech(n: int, *, start_min: int = 0) -> list[str]:
-    """n blocks of varied, sentence-like text — a unique-word ratio well above the floor."""
+    """n blocks of varied, sentence-like text — nothing repeats, so coverage is 0.0."""
     return [
         f"[00:{start_min + i:02d}:00] "
         + " ".join(f"слово{i}{j}" for j in range(40))  # 40 distinct words, ratio 1.0
@@ -108,8 +108,8 @@ def _speech(n: int, *, start_min: int = 0) -> list[str]:
     ]
 
 
-_LOOP = "Добро пожаловать на наш канал! Добро пожаловать на наш канал!"  # ratio 0.5
-_CREDIT = "Субтитры создавал SubsAuthor"  # 3 words, all distinct — ratio 1.0, but tiny
+_LOOP = "Добро пожаловать на наш канал! Добро пожаловать на наш канал!"  # coverage 0.6
+_CREDIT = "Субтитры создавал SubsAuthor"  # 3 words, nothing repeats — coverage 0.0, but tiny
 
 
 def test_drops_a_repetition_loop() -> None:
@@ -121,7 +121,7 @@ def test_drops_a_repetition_loop() -> None:
 
 
 def test_drops_a_short_credit_line_touching_a_loop() -> None:
-    """Rule B: the unique 3-word credit has ratio 1.0, so only adjacency catches it."""
+    """Rule B: the 3-word credit repeats nothing, so only adjacency catches it."""
     text = "\n".join(
         [
             f"[00:00:00] {_CREDIT}",
@@ -163,11 +163,63 @@ def test_all_boilerplate_is_returned_untouched_not_emptied() -> None:
 
 
 def test_drop_is_configurable_off() -> None:
-    """A ratio floor of 0 disables Rule A, and with it Rule B's only seed."""
+    """A coverage ceiling above 1.0 disables Rule A, and with it Rule B's only seed."""
     text = "\n".join([f"[00:00:00] {_LOOP}", *_speech(2, start_min=1)])
-    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig(min_unique_word_ratio=0.0))
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig(max_loop_coverage=1.01))
     assert dropped == ()
     assert kept == text
+
+
+# --------------------------------------------------------------------------- #
+# TD-33 — the discriminator tells a stuck decoder from a lecturer making a point
+# --------------------------------------------------------------------------- #
+#: A Socratic drill from the operator's real lecture 1 at [01:12:24]. The answer IS a
+#: repeated phrase, five times, because that is the teaching device. The unique-word ratio
+#: this replaced scored it 0.550 against a 0.55 floor and deleted the whole minute.
+_RHETORICAL = (
+    "Главный проект? Буквально что? Сил, опыта, терпения? Пока я по десять часов "
+    "в неделю трачу на дорогу. Сил, опыта, терпения, правильно? Да, сил, опыта, "
+    "терпения. Чтобы начать несколько проектов. Чего не хватает? Того же самого. "
+    "Сил, опыта, терпения. Чтобы начать первый проект, чего не хватает? "
+    "Сил, опыта, терпения."
+)
+
+
+def test_rhetorical_repetition_is_speech_and_is_kept() -> None:
+    """The TD-33 defect, verbatim from a real lecture.
+
+    A phrase repeated to make a point is scattered among varied sentences; a decoder loop
+    blankets the block. Measured over 13 lectures, the old ratio deleted 39 such blocks
+    (5172 words of lecture) to catch 18 loops.
+    """
+    text = "\n".join([*_speech(1), f"[00:01:00] {_RHETORICAL}", *_speech(1, start_min=2)])
+    kept, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert dropped == ()
+    assert _RHETORICAL in kept
+
+
+def test_a_verbatim_decoder_loop_is_still_dropped() -> None:
+    """The other side of the same line: one phrase, over and over, covering everything."""
+    loop = "[00:01:00] " + "I love you, " * 40
+    text = "\n".join([*_speech(1), loop, *_speech(1, start_min=2)])
+    _, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert dropped == (loop,)
+
+
+def test_a_two_repeat_credit_line_is_caught_on_its_own() -> None:
+    """TD-26's original boilerplate, six words. A 3-gram window sees it without adjacency;
+    a longer window could not, which is why the window is 3."""
+    doubled = f"[00:01:00] {_CREDIT} {_CREDIT}"
+    text = "\n".join([*_speech(1), doubled, *_speech(1, start_min=2)])
+    _, dropped = chunk.drop_degenerate_blocks(text, ChunkConfig())
+    assert dropped == (doubled,)
+
+
+def test_coverage_counts_positions_not_occurrences() -> None:
+    """Consecutive windows of a loop OVERLAP. Counting occurrences times n would report
+    more than 100% of a block that is a single phrase, so coverage is a position set."""
+    assert chunk._loop_coverage(["раз", "два", "три"] * 10) == 1.0
+    assert chunk._loop_coverage(["а", "б", "в", "г", "д", "е", "ж", "з", "и", "к"]) == 0.0
 
 
 def test_kept_blocks_keep_their_timecodes_for_the_anchor_gate() -> None:

@@ -60,7 +60,7 @@ _DEFAULT_PHASE_TARGET_TOKENS = 12_000
 # genuine speech blocks never fell below a 0.56 unique-word ratio (median 0.71) and never
 # below 15 words (median 133), while every Whisper boilerplate-loop block sat at 0.07-0.50.
 # The floor is set just under the observed speech minimum so the two classes stay separated.
-_DEFAULT_MIN_UNIQUE_WORD_RATIO = 0.55
+_DEFAULT_MAX_LOOP_COVERAGE = 0.50
 _DEFAULT_MIN_BLOCK_WORDS = 15
 # Scan-time speech-rate constants (see ScanConfig). MEASURED 2026-09-04 against the
 # operator's seven-lecture RU course (23h43m): a real transcript runs ~122 wpm at ~6.2
@@ -208,13 +208,14 @@ class ChunkConfig:
 
     The other two are TD-26 transcript hygiene, applied to the synthesis INPUT only
     (:func:`echogist.chunk.drop_degenerate_blocks`); the saved transcript on disk stays
-    verbatim. ``min_unique_word_ratio`` is the floor below which a block is a repetition
-    loop rather than speech; ``min_block_words`` is the length under which a block is too
-    short to carry a minute of talk, used only for blocks TOUCHING such a loop.
+    verbatim. ``max_loop_coverage`` is the share of a block its most repeated 3-gram must
+    blanket for the block to be a repetition loop rather than speech; ``min_block_words``
+    is the length under which a block is too short to carry a minute of talk, used only
+    for blocks TOUCHING such a loop.
     """
 
     phase_target_tokens: int = _DEFAULT_PHASE_TARGET_TOKENS
-    min_unique_word_ratio: float = _DEFAULT_MIN_UNIQUE_WORD_RATIO
+    max_loop_coverage: float = _DEFAULT_MAX_LOOP_COVERAGE
     min_block_words: int = _DEFAULT_MIN_BLOCK_WORDS
 
 
@@ -576,11 +577,11 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
                     chunk_table, "phase_target_tokens", "[chunk]", _DEFAULT_PHASE_TARGET_TOKENS
                 )
             ),
-            min_unique_word_ratio=_optional_positive(
+            max_loop_coverage=_optional_positive(
                 chunk_table,
-                "min_unique_word_ratio",
+                "max_loop_coverage",
                 "[chunk]",
-                _DEFAULT_MIN_UNIQUE_WORD_RATIO,
+                _DEFAULT_MAX_LOOP_COVERAGE,
             ),
             min_block_words=int(
                 _optional_positive(

@@ -85,11 +85,6 @@ def _blocks(text: str) -> list[_Block]:
     return out
 
 
-# Below this a block is too short for the unique-word ratio to mean anything: a genuine
-# "Да. Да." is 50% unique and would look exactly like a loop. Blocks this small are judged
-# by Rule B (adjacency) instead, never by ratio.
-_MIN_WORDS_FOR_RATIO = 4
-
 # Trailing punctuation stripped before comparing words, so "канал!" and "канал" are one word.
 _WORD_PUNCT = ".,!?…:;—-\"'()[]«»"
 
@@ -99,17 +94,43 @@ def _block_body(line: str) -> str:
     return _TIMECODE_RE.sub("", line, count=1).strip() if _TIMECODE_RE.match(line) else line.strip()
 
 
-def _unique_word_ratio(words: Sequence[str]) -> float:
-    """Distinct words / total words, case- and punctuation-insensitive. 0.0 for no words.
+#: Words per n-gram in the loop detector. 3 is the shortest window that still spans a
+#: phrase rather than a collocation, and it is short enough to catch a two-repeat block
+#: (``Субтитры сделал SubsAuthor`` twice, six words) that a longer window cannot see.
+_LOOP_NGRAM = 3
 
-    The signature of a Whisper repetition loop: the decoder emits one phrase over and over
-    across a stretch of silence or music, so the block is long on words and short on
-    distinct ones. Real speech does not do this — measured floor 0.56 on a real RU lecture.
+
+def _loop_coverage(words: Sequence[str]) -> float:
+    """Fraction of the block's word POSITIONS covered by repeats of its most repeated
+    3-gram. 0.0 when nothing repeats or the block is too short to hold two windows.
+
+    The signature of a Whisper repetition loop: the decoder emits ONE PHRASE VERBATIM over
+    and over across silence or music, so a single n-gram blankets the block.
+
+    This replaced a unique-word ratio (TD-33), which measured the wrong thing. A ratio
+    cannot tell a stuck decoder from a lecturer repeating a phrase to make a point, and
+    this operator's lectures do the latter constantly — a Socratic drill whose answer is
+    "Сил, опыта, терпения" five times scores 0.550 against a 0.55 floor and was
+    deleted. Measured over 13 real lectures (2451 blocks), the ratio destroyed 39 blocks
+    of genuine speech (5172 words) to catch 18 loops; coverage catches the same 18 with
+    nothing lost. Repetition that is a rhetorical device is scattered among varied
+    sentences and covers little; a decoder loop covers nearly everything.
     """
-    if not words:
+    if len(words) < _LOOP_NGRAM * 2:
         return 0.0
-    distinct = {w.lower().strip(_WORD_PUNCT) for w in words}
-    return len(distinct) / len(words)
+    normalized = [w.lower().strip(_WORD_PUNCT) for w in words]
+    positions: dict[tuple[str, ...], list[int]] = {}
+    for i in range(len(normalized) - _LOOP_NGRAM + 1):
+        positions.setdefault(tuple(normalized[i : i + _LOOP_NGRAM]), []).append(i)
+    most_repeated = max(positions.values(), key=len)
+    if len(most_repeated) < 2:
+        return 0.0
+    # Positions, not occurrence count: consecutive windows of a loop OVERLAP, so counting
+    # occurrences times n would report more than 100% of a block that is one phrase.
+    covered: set[int] = set()
+    for i in most_repeated:
+        covered.update(range(i, i + _LOOP_NGRAM))
+    return len(covered) / len(words)
 
 
 def drop_degenerate_blocks(text: str, cfg: ChunkConfig) -> tuple[str, tuple[str, ...]]:
@@ -126,8 +147,8 @@ def drop_degenerate_blocks(text: str, cfg: ChunkConfig) -> tuple[str, tuple[str,
     Two content-agnostic rules, no phrase list (a phrase list only ever catches the
     boilerplate someone already saw):
 
-    * **Rule A — the loop.** A block with enough words to judge whose unique-word ratio is
-      below ``cfg.min_unique_word_ratio`` is a repetition loop, not speech.
+    * **Rule A — the loop.** A block whose most repeated 3-gram blankets at least
+      ``cfg.max_loop_coverage`` of its word positions is a repetition loop, not speech.
     * **Rule B — the shoulder.** A block too short to hold a minute of talk
       (``cfg.min_block_words``) that TOUCHES a Rule-A block is part of the same artifact,
       applied outward until it stops spreading. This is what catches the single unique
@@ -149,10 +170,7 @@ def drop_degenerate_blocks(text: str, cfg: ChunkConfig) -> tuple[str, tuple[str,
         return text, ()
 
     words = [_block_body(b.line).split() for b in blocks]
-    drop = [
-        len(w) >= _MIN_WORDS_FOR_RATIO and _unique_word_ratio(w) < cfg.min_unique_word_ratio
-        for w in words
-    ]
+    drop = [_loop_coverage(w) >= cfg.max_loop_coverage for w in words]
 
     # Rule B spreads outward from the Rule-A runs until nothing more is adjacent to a drop.
     spreading = True

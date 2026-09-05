@@ -264,12 +264,25 @@ phase_target_tokens = 12000
 # UPSTREAM of the model, where neither the groundedness contract nor the anchor validator
 # looks: the timecodes are real, only the words are invented.
 #
-# Both numbers are MEASURED on that transcript, not guessed. Across its 188 genuine speech
-# blocks the unique-word ratio never fell below 0.56 (median 0.71) and the word count never
-# below 15 (median 133); every boilerplate block sat at ratio 0.07-0.50. The floor sits in
-# that gap. Raise min_unique_word_ratio only if boilerplate survives; LOWER it if a real
-# block with heavy legitimate repetition (a chant, a drill, a counted exercise) gets cut.
-min_unique_word_ratio = 0.55
+# MEASURED over 13 real lectures (2451 blocks), not guessed — and the measurement replaced
+# the metric, not just the number (TD-33). The old rule scored a block by its unique-word
+# ratio, which cannot tell a stuck decoder from a lecturer repeating a phrase to make a
+# point. This operator's lectures do the latter constantly: a Socratic drill whose answer
+# is "Сил, опыта, терпения" five times scores 0.550 against the old 0.55 floor, and
+# a student's 181-word confession scores 0.547. The ratio destroyed 39 blocks of genuine
+# speech (5172 words, ~39 minutes) to catch 18 loops.
+#
+# A decoder loop repeats ONE PHRASE VERBATIM, so a single 3-gram blankets the block:
+# measured 0.60-1.00 for every loop in the corpus ("I love you" x83 = 1.00, "Добро
+# пожаловать на наш канал!" = 0.60-0.80, "Субтитры сделал <name>" = 1.00). Rhetorical
+# repetition is scattered among varied sentences and never exceeded 0.20. The floor sits in
+# that gap, nearer the loops. At 0.50 the corpus gives 18 loops caught and 0 real blocks
+# lost.
+#
+# Calibrated on ONE speaker in ONE language. Raise it if a real block with heavy legitimate
+# repetition (a chant, a drill, a counted exercise) still gets cut; lower it if boilerplate
+# survives.
+max_loop_coverage = 0.50
 # Word count under which a block cannot hold a minute of talk. Used ONLY for blocks touching
 # a detected loop, so a quiet moment surrounded by real speech is never cut on length alone.
 min_block_words = 15

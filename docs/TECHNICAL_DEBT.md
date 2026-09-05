@@ -11,31 +11,6 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-31 — a transcript cannot say which recording it came from** · HIGH · created
-  2026-09-05, from the four-agent review of the v2.3.0..HEAD range. `plan_run` reuses a
-  saved transcript when its sanitized STEM matches and is unambiguous within the run. The
-  transcript pool is flat and global, so nothing verifies the transcript came from THIS
-  source: `transcripts/2026-08-01-Лекция 1.txt` (course A, last month) is handed to
-  `CourseB/Лекция 1.mp4` and a paid summary of course B's lecture is written from course
-  A's words. Every anchor validates — the timecodes are real, just from the wrong
-  recording — so nothing in the pipeline can notice. Reproduced. Two courses that both
-  number their lectures is the ordinary case, not an exotic one.
-  The adjacent half was fixed 2026-09-05 (`d70829e`): a name whose `-N` could be either a
-  dedup suffix or part of the stem is now claimable two ways and therefore reused for
-  neither. That closes the WITHIN-folder case. It cannot close this one, because two
-  identically named recordings in different courses are not ambiguous by any name rule.
-  **Fix requires stamping the resolved source path INSIDE the transcript** (a header line
-  or a sidecar) and joining on the stamp, with the stem as a hint only — the same move
-  TD-22 already made for summaries, where the join IS on the resolved path and is safe.
-  An unstamped transcript then falls back to re-transcribing (free, local, visible) rather
-  than to a name guess (paid, silent). **Deliberately not done without the operator: it
-  changes a user-facing artifact format and it decides TD-27.** Once transcripts carry
-  identity, the two load-bearing indexes can be recursive over any tree, and TD-27's
-  choice of release unit stops being constrained by them.
-  Related, same root: `_flow_saved_transcript` stamps the `.txt` path as the summary's
-  `source_path` while every other flow stamps the media file, so a summary bought through
-  the recovery flow is invisible to the next folder run and is paid for twice.
-
 - **TD-30 — the script check trades EN drift detection for quiet** · LOW · created
   2026-09-05. `_ALLOWED_SCRIPTS["en"]` now allows Cyrillic, because summarizing a Russian
   lecture in English is a supported setting and every faithful quotation of the author's
@@ -73,16 +48,14 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   quietly break, and the right fix is a decision about what an EchoGist *artifact release*
   IS, not a new subdirectory.
 
-  **What makes it load-bearing** (why this is HIGH and not a cosmetic tidy):
-  1. **The transcript pool IS the checkpoint.** CLAUDE.md's recovery principle is
-     "artifact-based recovery, not a job engine" — durable state is the saved artifact. Re-runs
-     find prior work by looking in the FLAT `output/transcripts`. Move transcripts under a
-     per-run folder and the next run stops finding them: on the operator's real folder that is
-     ~3 hours of GPU time silently repeated.
-  2. **The summary skip joins on resolved source path, not location** (TD-22,
-     `summarize.summary_index`). It walks a known summaries directory. Any per-run split
-     requires the index to search ACROSS run folders or the "already summarized, not re-paid
-     for" guarantee — the one that protects money — silently stops holding.
+  **TD-31 removed two of the three constraints (2026-09-05).** Both indexes now join on the
+  recording's CONTENT fingerprint rather than on a name or a location, so:
+  1. ~~The flat transcript pool is the checkpoint and cannot be split~~ — `transcript_sources`
+     matches by fingerprint, so a transcript is found in any layout, and moving one between
+     layouts costs nothing.
+  2. ~~The summary skip walks a known summaries directory~~ — `summary_index` keys on the same
+     fingerprint, so the "already summarized, not re-paid for" guarantee holds across any split.
+  What remains is the third, and it is now the whole of the work:
   3. **26 hardcoded path expressions.** `deps.base / "output" / "<sub>"` is written inline
      across `menu.py` (12 sites), plus `provision.OUTPUT_SUBDIRS` and `scan._OUTPUT_DIR_NAME`.
      There is no path module. Any layout change is a 26-site edit today, and `scan._keep_dir`
@@ -92,53 +65,16 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
   **The actual question to answer** (this is a design decision, not a refactor): what is the
   unit of release — a RUN (dated), a SOURCE COURSE (named after the input folder), or the
-  current flat pool with grouping left to the file manager? Each answers re-run semantics
-  differently: a dated unit re-transcribes or needs a cross-folder index; a named unit merges
-  two different courses that share a folder name; the flat pool is what exists and scales badly
-  past a few dozen files. Whatever wins, it must keep both guarantees above intact and should
-  land a real `paths` module so the layout has ONE definition.
+  current flat pool with grouping left to the file manager? Since TD-31 this is a pure
+  ergonomics question: no layout can break a join any more, and a named unit no longer merges
+  two courses that share a folder name. It should still land a real `paths` module so the
+  layout has ONE definition.
 
   **Trigger for closure:** before the operator's second real course goes through the folder
   run — that is the point where a flat `summaries/` stops being navigable and the decision can
   no longer be deferred. **Blocks nothing today**; the current flat layout is correct, just
   unscalable. Sequence it AFTER the menu/logging work, since a `paths` module is easier to
   land once the two-module menu has settled which flows exist.
-
-- **TD-33 — a repetitive block is dropped WHOLE, and the real speech at its head goes with
-  it** · MEDIUM · created 2026-09-05, from the operator's six-file `КУРС2025` run.
-  `drop_degenerate_blocks` (Rule A, `chunk.py:153`) scores a whole block by unique-word
-  ratio and drops it below `min_unique_word_ratio = 0.55`. The unit it judges is a
-  ~60-second block (`transcribe.py:39`, `block_seconds = 60`, ~110-150 words), so the rule
-  cannot drop the loop without dropping everything that shares the minute with it.
-  **Measured on that run:** 21 blocks dropped across 6 files (4/2/1/3/6/5), and the
-  unique-word ratio of every dropped block's visible 88-char head is **0.80-1.00** — far
-  above the 0.55 floor. So the head of each dropped block is ordinary speech, and the
-  repetition that condemned it sits further in. The arithmetic agrees: with a head of ~13
-  words at ~0.9 unique, a 130-word block only falls under 0.55 if its remaining ~117 words
-  supply fewer than ~60 distinct words (~0.51). Something in those tails genuinely loops —
-  Rule A is not misfiring — but a minute of lecture leaves with it each time. The examples
-  are not incidental material: `[01:57:26] ...<student's question>...` is a
-  student's question, and `[02:15:04] ...<the
-  lecturer's answer>...` is the answer. File 6, titled «Разбор вопросов учеников»,
-  had 5 such blocks removed from its own input. Roughly 21 minutes out of 18h18m (1.9%),
-  concentrated in the Q&A stretches. Fidelity property (5), coverage.
-  **The reporting half is FIXED here, not deferred.** The line asserted the drops were
-  "repeated filler transcribed over silence" — the rule measures repetition, not silence,
-  and telling the operator a block was filler tells them not to check it. It now claims only
-  what was measured, and previews each block as `head ... tail` so the repetition that caused
-  the drop is visible instead of the innocent opening (`menu._dropped_excerpt`).
-  **The granularity half needs the operator.** The real fix is sub-block: trim the looping
-  RUN and keep the rest of the minute. That reverses the standing "WHOLE blocks only — never
-  an edit inside one" decision in the docstring, which was reasoned for the boilerplate case
-  (a stray credit line glued to real speech, where keeping everything is right) and does not
-  cover this one (a loop that dominates the block, where keeping everything is wrong and
-  dropping everything is also wrong). It changes what reaches the model, so it is a
-  prompt/fidelity change and goes through `/plan-eng-review` per CLAUDE.md, not a patch.
-  Raising `min_unique_word_ratio` is NOT the fix and would let real loops back in.
-  **Do not re-derive the threshold from this run's log alone** — it truncates blocks at 88
-  chars, so the tails were never seen. The measurement needs the saved transcripts, which
-  live on the Windows box. **Trigger:** the operator's next look at a saved transcript
-  alongside its summary, or the next folder run over dialogue-heavy material.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which only TD-27 remains open: TD-22, TD-25
@@ -147,12 +83,44 @@ run, off that run's own audited numbers. TD-29 closed 2026-09-04 with the `notic
 TD-28 then reused for its own renderer half on 2026-09-05. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
 not debt. TD-32 and TD-33 both came out of the operator's read of the six-file `КУРС2025`
-run on 2026-09-05: TD-32 opened and closed the same day, TD-33 stays open with its reporting
-half already fixed and its granularity half waiting on an operator decision.
+run on 2026-09-05 and both closed the same week; TD-31 closed 2026-09-05 with `dbdda98` and took
+TD-27's two load-bearing constraints with it, leaving TD-27 a path-module refactor rather than a
+design question.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-33 — the loop detector could not tell a stuck decoder from a lecturer making a point** ·
+  MEDIUM · closed 2026-09-05. Opened believing the unit was too coarse and the fix was sub-block
+  trimming. Measuring the 13 saved transcripts (2451 blocks) showed the opposite: there is almost
+  nothing to trim — exactly ONE block in 13 lectures is genuinely mixed — and the real defect was
+  the metric. `_unique_word_ratio` conflated a Whisper decoder loop with rhetorical repetition,
+  which this lecturer uses constantly: a Socratic drill answered "Сил, опыта, терпения"
+  five times scored 0.550 against the 0.55 floor and was deleted, as was a student's 181-word
+  confession at 0.547. **The rule was destroying 39 blocks of genuine lecture (5172 words, ~39
+  minutes) to catch 18 loops.** Replaced by `_loop_coverage`: the share of a block's word
+  POSITIONS blanketed by repeats of its most repeated 3-gram. A decoder loop repeats one phrase
+  verbatim (measured 0.60-1.00); rhetorical repetition is scattered among varied sentences (never
+  above 0.20). At `max_loop_coverage = 0.50` the corpus gives 18 loops caught and 0 real blocks
+  lost, TD-26's original `Субтитры сделал <name>` still caught at 1.00. The "WHOLE blocks only"
+  decision was NOT reversed — it never needed to be. Calibrated on ONE speaker in ONE language.
+  Residual: the single mixed block (215 words, ~37% loop) now reaches the model intact; keeping
+  135 words of real speech was judged the better side of that trade.
+- **TD-31 — a transcript could not say which recording it came from** · HIGH · closed 2026-09-05
+  (`dbdda98`). Identity is now the recording's CONTENT (`naming.source_fingerprint`: sha256 over
+  size + first and last mebibyte, 16 hex) and it lives in the transcript's FILENAME, never inside
+  the file — the body is the exact text the summarizer reads, and a metadata line in it would
+  become block #1 at `[00:00:00]` and could be quoted back with an anchor that passes validation.
+  One scheme for both joins: `Summary.source_path` became `source_fingerprint`, so the
+  already-paid-for skip keys on the same value. Both joins now survive a tree move, a rename and a
+  WSL-vs-Windows read. **Mandatory contract, pinned by a test:** the fingerprint is taken once
+  from the original recording and inherited forward — a re-encode (increment 1b) must carry its
+  parent's value, never recompute, or it re-buys a summary. Stem matching deleted entirely per the
+  clean-slate rule for 3.0, including the `-N` ambiguity machinery of 2026-09-04. Design doc:
+  `docs/designs/td-31-transcript-identity.md`. Also closed the adjacent half: the recovery flow
+  stamped the `.txt` path as the summary's source, so such a summary was invisible to the next
+  folder run and the lecture was paid for twice.
 
 - TD-32 — the per-file section rule wore the same cyan as ordinary output · closed 2026-09-05 · `rule` held the bare `cyan` that `info` already owned, so `---- [3/6] lecture.mp4 ----` was drawn in the colour and weight of the `Extracting audio ->` lines it separates: width without rank, and an hour-old 18-hour folder run had to be read line by line to find where a file began — the exact wall `UI.rule` exists to break. Closed by splitting the style in two, which the entry named as the fallback and which turned out to be the better shape outright: `rule` (`#005f87`, dark steel-blue, used by nothing else) draws the line, `rule.title` (`bold #005f87`) draws the file name. The name keeps its legibility through WEIGHT rather than brightness — a brighter title would have undone the separation the darker line just bought. `UI.rule` handed one style name to both the `Text` and the `Rule`, which is what coupled them. One theme edit plus one call site; no behaviour, artifact or config contract moved, and `NO_COLOR`/legacy-`cmd` consoles are untouched (rich drops colour there and the ASCII `-` glyph already carries the separation). Pinned by three tests: the rule colour differs from `info` and `heading`, the title shares the line's colour and adds bold, and `UI.rule` passes the two names separately.
 - TD-28 — a character the PDF font cannot draw reached the PDF unannounced · closed 2026-09-05 · **both halves now closed.** The fidelity half closed 2026-09-04 (the passages were read: a Chinese morpheme substituted for a Russian one mid-word, three times in seven lectures — language drift, not fabrication; the deterministic script check plus the prompt sentence answer it). The renderer half closes here: `render` reads the bundled font's cmap with `fontTools` (fpdf2's own locked dependency, so no new install) and announces every DISTINCT undrawable character, with its codepoint and one quote of where it sits, on the loud `notice` channel — the same channel as a dropped anchor, wired to `ui.warn` — BEFORE the file is written. fpdf2 does notice the missing glyph, but it says so through its own `logging` warning at output time, off EchoGist's channels and after layout, which is exactly how it scrolled past. Reports and returns: the character is never substituted (that would be silent rewriting) and the PDF is still written (refusing it would throw away a summary already paid for) — the same division as `report_foreign_scripts`. Coverage is the INTERSECTION of the regular and bold faces, the corpus is the Markdown rendering of the same document, and an unreadable font yields an empty charset that reports nothing (fail-soft, like an empty `allowed`). Wired at the seam with a test, because `RenderFn` is `Callable[..., Path]` and an unpassed `notice` would fall back to `print` with mypy and the suite both green.
