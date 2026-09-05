@@ -152,9 +152,7 @@ def test_save_raw_result_dedups(tmp_path: Path) -> None:
 
 
 def test_save_raw_result_illegal_title_sanitized(tmp_path: Path) -> None:
-    path = summarize.save_raw_result(
-        _summary("a/b:c?"), tmp_path, source_stem="a:b", today=_DAY
-    )
+    path = summarize.save_raw_result(_summary("a/b:c?"), tmp_path, source_stem="a:b", today=_DAY)
     # F9 illegal-char strip via naming.sanitize_stem, on BOTH parts.
     assert path.name == "2026-09-05-a-b-a-b-c.json"
 
