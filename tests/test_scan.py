@@ -510,7 +510,10 @@ def test_transcript_index_parses_names_back_to_stems(tmp_path: Path) -> None:
 
     index = scan.transcript_index(directory)
 
-    assert index == Counter({"Лекция 1": 2, "Другая": 1})
+    # "Лекция 1-2" counts once, not twice: the -2 file is claimable as either the
+    # second transcript of "Лекция 1" or the first of "Лекция 1-2", so it is not
+    # auto-reused for either and the report must not offer it as a candidate.
+    assert index == Counter({"Лекция 1": 1, "Другая": 1})
 
 
 def test_a_stem_is_not_matched_as_a_prefix_of_a_longer_one(tmp_path: Path) -> None:
@@ -732,3 +735,29 @@ def test_problem_lists_are_shown_relative_to_the_scan_root(tmp_path: Path) -> No
     result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
 
     assert scan.unreadable_rows(result)[0][0] == "Course/week 2/broken.mp4"
+
+
+def test_a_transcript_whose_name_ends_in_a_number_is_not_handed_to_the_wrong_file(
+    tmp_path: Path,
+) -> None:
+    """``-2`` is either a dedup suffix or part of the stem, and the name cannot say which.
+
+    Reading it only as a suffix did two wrong things at once: ``lecture-2.mp4`` never
+    found its own transcript and re-transcribed forever, while ``lecture.mp4`` matched it
+    and would buy a summary of a different recording. Course files called ``Часть-1.mp4``
+    are ordinary, so this is not an exotic input.
+    """
+    (tmp_path / "2026-08-01-lecture-2.txt").write_text("x", encoding="utf-8")
+
+    index = scan.transcript_files(tmp_path)
+
+    assert index == {}  # claimable two ways, so evidence for neither
+
+
+def test_an_unambiguous_transcript_is_still_reused(tmp_path: Path) -> None:
+    """The fix must not cost the reuse it exists to protect: this is GPU-hours."""
+    (tmp_path / "2026-08-02-intro.txt").write_text("x", encoding="utf-8")
+
+    index = scan.transcript_files(tmp_path)
+
+    assert [p.name for p in index["intro"]] == ["2026-08-02-intro.txt"]

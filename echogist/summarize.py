@@ -366,8 +366,9 @@ def save_raw_result(
         # provenance rather than model output. Resolved through the SAME rule the scan
         # uses for its dedup key, or the two strings never join.
         summary = replace(summary, source_path=str(naming.resolve_source(source_path)))
-    path.write_text(_summary_json(summary), encoding="utf-8")
-    return path
+    # Atomic: this file is what makes a render failure free to retry, and the call that
+    # produced it is ALREADY BILLED by the time it is written.
+    return naming.publish_text(path, _summary_json(summary))
 
 
 def summary_index(raw_dir: Path) -> set[str]:

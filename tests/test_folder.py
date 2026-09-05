@@ -823,3 +823,32 @@ def test_progress_callbacks_see_every_source_in_order(tmp_path: Path) -> None:
     )
     assert seen == [(1, 3, sources[0]), (2, 3, sources[1]), (3, 3, sources[2])]
     assert [r.source for r in results] == sources
+
+
+def test_ctrl_c_between_two_files_still_carries_the_partial_report() -> None:
+    """The gap between files is exactly where an operator aims Ctrl-C.
+
+    ``on_start``/``on_result`` sat outside the guard, and ``KeyboardInterrupt`` is a
+    BaseException, so an interrupt while the next file's header printed escaped the menu's
+    backstop and crashed the app — losing the report, and on a paid phase the "Actually
+    spent" reconciliation for money already billed.
+    """
+    done: list[Path] = []
+
+    def step(source: Path) -> Path:
+        done.append(source)
+        return source
+
+    def on_start(index: int, total: int, source: Path) -> None:
+        if index == 2:  # raised from the header print, not from the work
+            raise KeyboardInterrupt
+
+    try:
+        folder.run_phase(
+            [Path("a.mp4"), Path("b.mp4")], step, on_start=on_start, recoverable=(OSError,)
+        )
+    except folder.Cancelled as exc:
+        assert [item.source.name for item in exc.report.items] == ["a.mp4"]
+    else:  # pragma: no cover - the call must not return normally
+        raise AssertionError("Cancelled was not raised")
+    assert done == [Path("a.mp4")]

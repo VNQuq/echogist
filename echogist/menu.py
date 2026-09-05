@@ -218,8 +218,16 @@ _RESUME_KEY_DIGEST_SIZE = 8
 _RESUME_KEY_RE = re.compile(rf"[0-9a-f]{{{_RESUME_KEY_DIGEST_SIZE * 2}}}")
 
 
-def _resume_key(source_path: Path) -> str:
-    """Identity of the source being summarized, as the stem of its resume partial.
+def _resume_key(source_path: Path, *, language: str = "", tier: str = "") -> str:
+    """Identity of the WORK being resumed, as the stem of its resume partial.
+
+    ``language`` and ``tier`` are part of the identity, not decoration. The partial holds
+    finished prose, and reconcile never re-reads the transcript — so a RU run that died at
+    phase 2 of 4, resumed after switching ``summary_language`` to EN, reloads two Russian
+    phases, generates two English ones, and writes a mixed-language document out of prose
+    it cannot see. Same shape across a tier change, where half the phases were written by
+    a different model. Both re-run from scratch now, which costs a repeat of phases that
+    were never usable rather than a paid document that is quietly wrong.
 
     Keyed on the resolved PATH, not the stem. Two different recordings can share a stem
     (``lecture.mp4`` in two folders, the same talk saved twice); under a stem key the second
@@ -232,9 +240,8 @@ def _resume_key(source_path: Path) -> str:
     the same file picked twice with different casing must not produce two keys and silently
     lose the resume.
     """
-    return hashlib.blake2s(
-        str(source_path.resolve()).casefold().encode(), digest_size=_RESUME_KEY_DIGEST_SIZE
-    ).hexdigest()
+    identity = f"{str(source_path.resolve()).casefold()}\x00{language}\x00{tier}"
+    return hashlib.blake2s(identity.encode(), digest_size=_RESUME_KEY_DIGEST_SIZE).hexdigest()
 
 
 def _sweep_stale_resumes(resume_dir: Path, ui: UI) -> None:
@@ -433,7 +440,10 @@ def _run_summary(
     # within-run partial that is deleted once the durable .json exists.
     resume_dir = summaries_dir / "raw" / ".resume"
     _sweep_stale_resumes(resume_dir, ui)
-    resume_path = resume_dir / f"{_resume_key(source_path)}.json"
+    resume_path = resume_dir / (
+        f"{_resume_key(source_path, language=settings.summary_language, tier=settings.model_tier)}"
+        ".json"
+    )
     resume_from = _load_resume(resume_path, k, ui)
 
     def _persist(partial: summarize.Summary) -> None:
@@ -1070,7 +1080,12 @@ def _run_transcript_texts(
     for source, saved in plan.ready:
         try:
             texts[source] = saved.read_text(encoding="utf-8")
-        except OSError as exc:  # readable a moment ago at plan time; re-transcribe instead
+        # UnicodeDecodeError (a ValueError) alongside OSError: one transcript saved in
+        # UTF-16 or cp1251 used to abort the entire folder run before a single file was
+        # transcribed, because neither this handler nor _RECOVERABLE covers it. Degrading
+        # was always the intent here, and _flow_saved_transcript catches the same pair for
+        # the same read.
+        except (OSError, UnicodeDecodeError) as exc:  # re-transcribe rather than abort
             ui.warn(f"Couldn't read {saved.name} ({exc}); transcribing {source.name} again.")
             plan = replace(plan, to_transcribe=plan.to_transcribe + (source,))
     if plan.ready:
@@ -1278,7 +1293,15 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
 
     try:
         summarized = folder.run_phase(
-            ordered, _summarize_step, on_start=_announce, recoverable=(_StageFailed,)
+            ordered,
+            _summarize_step,
+            on_start=_announce,
+            # OSError too: `save_raw_result` and the resume writes touch the disk AFTER
+            # the call is billed, so a full or locked output/ on file 6 of 7 used to
+            # escape this loop and take the whole report with it — the per-file prices,
+            # "Actually spent", and the quoted-vs-actual ratio that is the cost model's
+            # only feedback signal. The file is marked failed and the run continues.
+            recoverable=(_StageFailed, OSError),
         )
     except FolderCancelled as exc:
         _report_run(

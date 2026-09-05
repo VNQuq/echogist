@@ -88,6 +88,9 @@ _PLACEHOLDER_ATTRS = 0x1000 | 0x400000
 # dedup suffix. Parsing the name BACK to its stem is what makes transcript detection one
 # pass over the directory instead of one regex build per (source, transcript) pair.
 _TRANSCRIPT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<stem>.+?)(?:-\d+)?$")
+#: The date stamp alone, for reading the same name WITHOUT assuming a trailing ``-N`` is
+#: a dedup suffix. See :func:`transcript_files` for why both readings are needed.
+_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 
 
 class ScanCancelled(Exception):
@@ -499,11 +502,32 @@ def transcript_files(transcripts_dir: Path) -> dict[str, tuple[Path, ...]]:
     # No try/except: Path.glob yields nothing for a missing or unreadable directory
     # rather than raising, so a handler here would be dead code (verified, and the
     # is_dir guard above already covers the missing case).
+    claims: dict[Path, set[str]] = {}
     for path in sorted(transcripts_dir.glob("*.txt")):
         match = _TRANSCRIPT_NAME.match(path.stem)
-        if match:
-            groups.setdefault(match["stem"], []).append(path)
-    return {stem: tuple(paths) for stem, paths in groups.items()}
+        if not match:
+            continue
+        # BOTH readings of the name, because the ``-N`` dedup suffix is indistinguishable
+        # from a stem that simply ends in a number. ``2026-08-01-lecture-2.txt`` is either
+        # the second transcript of "lecture" or the first of "lecture-2", and a course
+        # full of ``Часть-1.mp4`` / ``01-Введение-2.mp4`` is entirely ordinary. Indexing
+        # only the stripped reading did two wrong things at once: "lecture-2.mp4" never
+        # found its own transcript and re-transcribed on every run, while a DIFFERENT file
+        # "lecture.mp4" matched it and bought a summary of the wrong recording.
+        literal = _DATE_PREFIX.sub("", path.stem)
+        for stem in {match["stem"], literal}:
+            groups.setdefault(stem, []).append(path)
+            claims.setdefault(path, set()).add(stem)
+    # A transcript claimable two ways is not evidence for either. Dropping it costs a
+    # re-transcription, which is free, local and visible; keeping it risks a paid summary
+    # of another recording, which is silent. That is the same trade plan_run makes for an
+    # ambiguous stem, applied one level earlier.
+    ambiguous = {path for path, stems in claims.items() if len(stems) > 1}
+    return {
+        stem: tuple(p for p in paths if p not in ambiguous)
+        for stem, paths in groups.items()
+        if any(p not in ambiguous for p in paths)
+    }
 
 
 def stem_key(path: Path) -> str:

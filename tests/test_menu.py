@@ -22,6 +22,7 @@ import ast
 import re
 from collections.abc import Sequence
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1271,7 +1272,10 @@ def test_resume_partial_loaded_passed_to_seam_then_cleared(tmp_path: Path) -> No
     _write_settings(tmp_path, model_tier="economy")
     big = "\n".join(f"[00:{m:02d}:00] " + "слово " * 400 for m in range(50))  # K>1
     src = _seed_transcript(tmp_path, text=big)
-    key = menu._resume_key(src)  # keyed on the resolved source path, not its stem
+    # Keyed on the resolved source path, plus the language and tier the phases were
+    # written under: reloading Russian phases into an English run would splice two
+    # languages into one document that reconcile never re-reads.
+    key = menu._resume_key(src, language="ru", tier="economy")
     resume_path = tmp_path / "output" / "summaries" / "raw" / ".resume" / f"{key}.json"
     partial = summarize._running_summary(
         [SynthesisSection("Done phase", "prior prose", ("[00:00:00]",))], [], [], "ru"
@@ -1357,9 +1361,11 @@ def test_resume_partial_is_keyed_per_source_not_per_stem(tmp_path: Path) -> None
 
     assert seen_resume == [None, None]  # B started FRESH — it never saw A's phases
     resume_dir = tmp_path / "output" / "summaries" / "raw" / ".resume"
-    assert (resume_dir / f"{menu._resume_key(src_a)}.json").is_file()  # A's partial kept
-    assert not (resume_dir / f"{menu._resume_key(src_b)}.json").exists()  # B's was cleared
-    assert menu._resume_key(src_a) != menu._resume_key(src_b)  # the keys actually differ
+    settings = config.load_settings(tmp_path / "settings.json")
+    key = partial(menu._resume_key, language=settings.summary_language, tier=settings.model_tier)
+    assert (resume_dir / f"{key(src_a)}.json").is_file()  # A's partial kept
+    assert not (resume_dir / f"{key(src_b)}.json").exists()  # B's was cleared
+    assert key(src_a) != key(src_b)  # the keys actually differ
 
 
 def test_resume_key_is_case_insensitive(tmp_path: Path) -> None:
@@ -2193,3 +2199,22 @@ def test_a_finding_is_loud_while_the_phase_chatter_stays_muted(
     assert any("Synthesizing phase" in text for text in muted)
     assert any("2 dropped" in text for text in loud), "a finding must not print as chatter"
     assert not any("2 dropped" in text for text in muted)
+
+
+def test_a_partial_from_another_language_is_not_spliced_into_this_run(tmp_path: Path) -> None:
+    """The partial holds finished prose and reconcile never re-reads the transcript.
+
+    A RU run that dies at phase 2 of 4 and is resumed after switching to EN would reload
+    two Russian phases, generate two English ones, and write one mixed-language document
+    with nothing able to notice. Re-running the dead phases is the cheap side of that.
+    """
+    src = tmp_path / "lecture.txt"
+    src.write_text("x", encoding="utf-8")
+
+    ru = menu._resume_key(src, language="ru", tier="economy")
+    en = menu._resume_key(src, language="en", tier="economy")
+    flagship = menu._resume_key(src, language="ru", tier="flagship")
+
+    assert len({ru, en, flagship}) == 3
+    # ...and the identity is still case-insensitive on the path, which is why it is hashed.
+    assert ru == menu._resume_key(tmp_path / "LECTURE.txt", language="ru", tier="economy")

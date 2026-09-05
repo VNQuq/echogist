@@ -153,8 +153,9 @@ def save_transcript(
     path = naming.dated_artifact_path(
         out_dir, source_stem, ".txt", fallback="transcript", today=today
     )
-    path.write_text(render_transcript(transcript, block_seconds) + "\n", encoding="utf-8")
-    return path
+    # Atomic: the transcript IS the checkpoint (artifact-based recovery), so a truncated
+    # one is a fake checkpoint that reads as valid and buys half a lecture's summary.
+    return naming.publish_text(path, render_transcript(transcript, block_seconds) + "\n")
 
 
 # --------------------------------------------------------------------------- #

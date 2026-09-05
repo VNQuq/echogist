@@ -9,6 +9,7 @@ suffix. That rule lives here, once, so a fix lands in every stage at the same ti
 
 from __future__ import annotations
 
+import os
 from collections.abc import Set as AbstractSet
 from datetime import date
 from pathlib import Path
@@ -143,3 +144,26 @@ def resolve_source(path: Path) -> Path:
         return path.resolve()
     except OSError:
         return path
+
+
+def publish_text(path: Path, text: str) -> Path:
+    """Write ``text`` to ``path`` atomically: ``.part`` first, then ``os.replace``.
+
+    The one publish scheme, shared with :func:`echogist.extract.extract_audio` and
+    :func:`echogist.scan.save_cache`. A plain ``write_text`` is not atomic: a power loss
+    or ``kill -9`` mid-write leaves a TRUNCATED file, and for a transcript that is the
+    worst possible residue — a syntactically perfect checkpoint that indexes, reads as
+    unambiguous, and buys a paid summary of half a lecture with no error anywhere.
+
+    ``.part`` is deliberately the marker: dedup cannot see it (:func:`dedup_path`
+    ignores it), so an interrupted write leaves litter rather than a fake artifact that
+    would poison naming forever.
+    """
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return path

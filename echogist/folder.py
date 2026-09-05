@@ -584,15 +584,22 @@ def run_phase(
     items: list[Item] = []
     total = len(sources)
     for index, source in enumerate(sources, start=1):
-        on_start(index, total, source)
+        # The WHOLE iteration is guarded, not just ``step``. ``KeyboardInterrupt`` is a
+        # BaseException, so one raised while ``on_start`` prints the next file's header or
+        # while ``on_result`` renders the last one's row escapes run_menu's backstop
+        # entirely and crashes the app — taking the partial report with it, and on phase 2
+        # the "Actually spent" reconciliation for money already billed. The gap between
+        # two files is exactly where an operator aims Ctrl-C.
         try:
-            output = step(source)
+            on_start(index, total, source)
+            try:
+                output = step(source)
+            except recoverable as exc:
+                item = Item(source=source, status="failed", detail=str(exc))
+            else:
+                item = Item(source=source, status="done", output=output)
+            items.append(item)
+            on_result(item)
         except KeyboardInterrupt:
             raise Cancelled(Report(tuple(items))) from None
-        except recoverable as exc:
-            item = Item(source=source, status="failed", detail=str(exc))
-        else:
-            item = Item(source=source, status="done", output=output)
-        items.append(item)
-        on_result(item)
     return Report(tuple(items))
