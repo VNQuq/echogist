@@ -1,10 +1,13 @@
 # Current Context
 
-**Updated:** 2026-09-05 · v2.3.0 + 15 unreleased commits. **The debt registry is empty of
-HIGH/MEDIUM entries — TD-27 closed, so v3.0 is now cuttable** (see Next). Calibration: run 1 (7 RU lectures,
-Haiku, **$2.4003**) seeded the cost model; run 2 (`КУРС2025`, 6 lectures, 18h18m,
-**balanced**, **$3.7246**) is the first Sonnet folder run, **0 CJK slips, 0 undrawable chars**.
-Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed TD-31 + TD-33.
+**Updated:** 2026-09-06 · **v3.0.0 released**, carrying TD-31's and TD-27's artifact-format
+breaks. **Released with TD-34 + TD-35 (HIGH) and TD-36 (MEDIUM) open, on the operator's call** —
+none is a regression against v2.3.0; run 3's own new `notice` lines are what made two of them
+visible. Calibration: run 1 (7 RU lectures, Haiku, **$2.4003**) seeded the cost model; run 2
+(`КУРС2025`, 6 lectures, **balanced**, **$3.7246**) closed TD-31 + TD-33 off its 13
+transcripts; **run 3** (same 6 lectures, 18h18m, first run of the 3.0 build, **$4.4634**) is the
+clean unstitched measurement — **0 CJK slips, 0 undrawable chars**, 6/6 transcripts reused by
+fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
 **Authority:** [CLAUDE.md](../CLAUDE.md); TECHNICAL_DEBT TD-16 for the v2 rule's validation.
 **Max: ~88 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.
 
@@ -51,8 +54,10 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
 - **Essence block** is phase prose only; reconcile ALWAYS runs; every emitted string is
   anchor-validated, title included — an EMPTY title says so.
 - **Cost model** projects output as `ratio x that call's input`. **Re-seed a tier from its own
-  "Actual cost" line: output/input, +~5%.** economy 0.39; balanced 0.24 is n=1, run 2's 5 clean
-  files say 0.2805 — UNRESOLVED (stitched log). Token estimate: 3 rates by script.
+  "Actual cost" line: output/input, +~5%.** economy 0.39; **balanced 0.24 is now MEASURED WRONG**
+  (TD-35): run 3 gives 0.29513 aggregate, 0.2828-0.3008 across 6 files, so the gate quotes 0.89x
+  its bill. The input leg is near-exact (0.9987x) — the whole miss is this one number. Token
+  estimate: 3 rates by script.
 - **Key:** env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are
   Windows-only; `/mnt/c/Users/operator/Documents/echogist/output/` reads that tree from here.
   **The real pool is migrated (2026-09-05):** 13/13 summaries and 13/13 transcripts carry
@@ -60,10 +65,17 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
 
 ## Next
 
-1. **Stub pipeline on Windows before the next push** (CLAUDE.md). WSL has no clip fixture and
-   no Whisper model, so it cannot run here. Seven commits are waiting.
-2. **v3.0 is the next move.** The registry's last HIGH is closed and TD-31 + TD-27 broke both
-   artifact formats, so nothing was releasable in between and 3.0 is the release that carries
-   them. Cut it with `scripts/release.py` per CLAUDE.md, never `/ship`.
-3. TD-30 (needs a home now the header idea is dead); TD-29b — **now louder**, a folder run
+1. **TD-35 first — it is a two-number `config/models.toml` edit and every `balanced` run until
+   then quotes under its bill.** The measurement is done; only the pick is open: 0.31 (the
+   CLAUDE.md +5% rule, quotes 1.03x) or 0.33 (1.07x, also covers the worst file ever seen,
+   0.3171). Operator's call, deliberately not made.
+2. **TD-34 + TD-36 together via `/plan-eng-review`** — one root: the anchor validator proves every
+   emitted string RESOLVES, nothing proves a required field EXISTS. ADR-triggering.
+3. **The summary-skip join is still unexercised on a real run.** `summaries/raw/` was cleared
+   before run 3, so nothing was skippable. The 6 JSONs now carry fingerprints matching their
+   transcripts exactly, so the next run over the same folder is the test — it should skip all 6
+   and spend $0.
+4. **The stub pipeline still cannot run in WSL** (no clip fixture, no Whisper model), so it did
+   not gate 3.0.0; run 3 on Windows — 46 paid calls, 6 documents — stood in for it.
+5. TD-30 (needs a home now the header idea is dead); TD-29b — **now louder**, a folder run
    pointed at `output/` writes triple-dated names; TD-29c; streaming; 1b.
