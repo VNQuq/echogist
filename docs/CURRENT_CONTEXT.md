@@ -57,4 +57,3 @@ Its 13 saved transcripts are now the measurement corpus (2451 blocks) and closed
 3. **v3.0, not v2.4.0** — 3.0 begins when the registry empties, and TD-31 already broke both
    artifact formats, so nothing is releasable in between.
 4. TD-30 (needs a home now the header idea is dead); TD-29b; TD-29c; streaming; 1b.
-5. `scripts/backfill_td31.py` is spent — delete it once you are sure the pool is right.
