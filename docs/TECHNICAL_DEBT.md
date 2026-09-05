@@ -11,6 +11,67 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
+- **TD-31 — a transcript cannot say which recording it came from** · HIGH · created
+  2026-09-05, from the four-agent review of the v2.3.0..HEAD range. `plan_run` reuses a
+  saved transcript when its sanitized STEM matches and is unambiguous within the run. The
+  transcript pool is flat and global, so nothing verifies the transcript came from THIS
+  source: `transcripts/2026-08-01-Лекция 1.txt` (course A, last month) is handed to
+  `CourseB/Лекция 1.mp4` and a paid summary of course B's lecture is written from course
+  A's words. Every anchor validates — the timecodes are real, just from the wrong
+  recording — so nothing in the pipeline can notice. Reproduced. Two courses that both
+  number their lectures is the ordinary case, not an exotic one.
+  The adjacent half was fixed 2026-09-05 (`d70829e`): a name whose `-N` could be either a
+  dedup suffix or part of the stem is now claimable two ways and therefore reused for
+  neither. That closes the WITHIN-folder case. It cannot close this one, because two
+  identically named recordings in different courses are not ambiguous by any name rule.
+  **Fix requires stamping the resolved source path INSIDE the transcript** (a header line
+  or a sidecar) and joining on the stamp, with the stem as a hint only — the same move
+  TD-22 already made for summaries, where the join IS on the resolved path and is safe.
+  An unstamped transcript then falls back to re-transcribing (free, local, visible) rather
+  than to a name guess (paid, silent). **Deliberately not done without the operator: it
+  changes a user-facing artifact format and it decides TD-27.** Once transcripts carry
+  identity, the two load-bearing indexes can be recursive over any tree, and TD-27's
+  choice of release unit stops being constrained by them.
+  Related, same root: `_flow_saved_transcript` stamps the `.txt` path as the summary's
+  `source_path` while every other flow stamps the media file, so a summary bought through
+  the recovery flow is invisible to the next folder run and is paid for twice.
+
+- **TD-30 — the script check trades EN drift detection for quiet** · LOW · created
+  2026-09-05. `_ALLOWED_SCRIPTS["en"]` now allows Cyrillic, because summarizing a Russian
+  lecture in English is a supported setting and every faithful quotation of the author's
+  own words was otherwise a finding. The cost: an EN reply drifting wholesale back into
+  Russian is now invisible to the check. Taken deliberately — the measured defect is a CJK
+  morpheme spliced into a word, and an instrument that cries at correct text stops being
+  read. **Trigger:** the first EN summary the operator actually runs. The real fix is to
+  key allowed scripts on (summary language, SOURCE language) rather than on summary
+  language alone, which needs the source language to be known — Whisper auto-detects it
+  today and it is never recorded.
+
+- **TD-29b — pointing a folder run at `output/` processes EchoGist's own artifacts** ·
+  LOW · created 2026-09-05. `scan.walk` applies its prune rule to `dirnames` only, never
+  to the walk ROOT, so both the literal-name floor and the TD-25 resolved-path `exclude`
+  are bypassed when the operator picks `output/` or `output/audio` in the folder picker —
+  a plausible "summarize the MP3s I already made" gesture, and the picker opens on the
+  last directory used. Result: every artifact is re-transcribed, and on a Summary run
+  re-summarized and paid for, saving doubly-dated transcripts (`2026-09-05-2026-09-04-…`).
+  Reproduced. **Not fixed because it is a scope call, not a bug fix:** refusing the folder
+  removes a gesture that may be legitimate (the operator may genuinely want summaries of
+  extracted MP3s), and the useful version of that gesture needs the double-dating and the
+  summary-skip join fixed first — i.e. TD-31. **Trigger:** TD-31, or the first time it
+  happens.
+
+- **TD-29c — the declared CI gate does not exist** · MEDIUM · created 2026-09-05.
+  `CLAUDE.md` states that every push to `main` passes ruff + mypy + tests and that the
+  pipeline runs end-to-end in CI against a stub summarizer. There is no `.github/`
+  directory in the entire history and no git hooks; the gate is run by hand every time.
+  The killswitch itself IS covered by tests (`test_cost.py` asserts no network import at
+  module top level, and the whole suite runs offline with no key in ~5s) — only the
+  enforcement is missing. **This is a hard-constraint violation, not a code defect, and
+  the fix is a policy choice the operator owns:** add a workflow, or amend CLAUDE.md to
+  say the gate is manual. Not added unilaterally because an untested workflow pushed to
+  the repo would fail on the runner (bundled ffmpeg, GPU-adjacent imports) and turn the
+  guardrail into noise.
+
 - **TD-28 — a character the PDF cannot draw still reaches the PDF** · LOW (was MEDIUM) ·
   created 2026-09-04, HALVED the same day. Three of the seven summaries made `fpdf` report
   a missing glyph: `'描'`, `'技'`, `'催化剂'`. Two problems sat behind that one warning.
