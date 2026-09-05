@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -576,6 +577,40 @@ def test_transcribed_count_joins_on_the_recording(tmp_path: Path) -> None:
 
 def test_transcript_fingerprint_of_an_unstamped_name_is_none(tmp_path: Path) -> None:
     assert scan.transcript_fingerprint(tmp_path / "2026-01-01-talk.txt") is None
+
+
+def test_transcript_source_stem_drops_the_date_and_the_fingerprint(tmp_path: Path) -> None:
+    """The summary is named after the RECORDING. Neither the checkpoint's date nor its
+    identity may leak into a document's name (TD-27)."""
+    path = tmp_path / f"2026-09-05-Модуль Основы, занятие 3-{_FP_A}.txt"
+
+    stem = scan.transcript_source_stem(path)
+
+    assert stem == "Модуль Основы, занятие 3"
+    assert _FP_A not in stem
+    assert "2026-09-05" not in stem
+
+
+def test_transcript_source_stem_round_trips_a_written_name(tmp_path: Path) -> None:
+    path = naming.transcript_path(tmp_path, "Лекция 1", _FP_A, today=date(2026, 9, 5))
+
+    assert scan.transcript_source_stem(path) == "Лекция 1"
+
+
+def test_transcript_source_stem_of_a_pre_td31_name_still_drops_the_date(
+    tmp_path: Path,
+) -> None:
+    """No fingerprint to anchor on, so the full pattern misses — but the date must still
+    come off, or a re-summarized old transcript is named with two dates."""
+    assert scan.transcript_source_stem(tmp_path / "2026-08-30-talk.txt") == "talk"
+
+
+def test_transcript_source_stem_of_a_hand_renamed_file_is_the_operators_own_name(
+    tmp_path: Path,
+) -> None:
+    """Never a guess and never empty: the caller must have a stem, and this is exactly the
+    value the recovery flow passed before."""
+    assert scan.transcript_source_stem(tmp_path / "my notes.txt") == "my notes"
 
 
 def test_a_missing_transcripts_directory_is_an_empty_index(tmp_path: Path) -> None:

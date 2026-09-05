@@ -90,6 +90,9 @@ _PLACEHOLDER_ATTRS = 0x1000 | 0x400000
 _TRANSCRIPT_NAME = re.compile(
     rf"^\d{{4}}-\d{{2}}-\d{{2}}-(?P<stem>.+)-(?P<fingerprint>[0-9a-f]{{{naming.FINGERPRINT_HEX}}})$"
 )
+# The date prefix alone, for a transcript written before TD-31: its name has a date but no
+# fingerprint, so the full pattern above does not match and the date must still come off.
+_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 
 
 class ScanCancelled(Exception):
@@ -494,6 +497,32 @@ def _relative(path: Path, root: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Transcript detection
 # --------------------------------------------------------------------------- #
+def transcript_source_stem(path: Path) -> str:
+    """The RECORDING's stem a saved transcript's name carries — no date, no fingerprint.
+
+    The recovery flow ("re-summarize a saved transcript") names the summary after its
+    source, and its source is the recording, not the ``.txt``. Handed ``path.stem`` it
+    would use the whole transcript filename and stamp the summary
+    ``<today>-<transcript date>-<stem>-<fingerprint>-<title>`` — the date twice and an
+    identity that belongs in the checkpoint's name, not a document's.
+
+    **Non-Optional, unlike its sibling :func:`transcript_fingerprint`, and the asymmetry is
+    deliberate.** A wrong fingerprint hands one recording's transcript to another and costs
+    money, so that one refuses to guess. A degraded NAME costs nothing, and the caller must
+    have some stem, so the fallback belongs here where it can be documented once rather
+    than at the call site.
+
+    Falls back to the filename minus a leading ISO date — the shape a pre-TD-31 transcript
+    has, and the one case where returning the raw stem would re-introduce the double date.
+    A hand-renamed file yields the operator's own name for it, which is exactly the value
+    this flow passed before.
+    """
+    match = _TRANSCRIPT_NAME.match(path.stem)
+    if match:
+        return str(match["stem"])
+    return _DATE_PREFIX.sub("", path.stem)
+
+
 def transcript_fingerprint(path: Path) -> str | None:
     """The source fingerprint a saved transcript's NAME carries, or ``None``.
 

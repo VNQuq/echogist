@@ -952,7 +952,10 @@ def _flow_saved_transcript(deps: Deps) -> None:
         model_config,
         text,
         chosen,
-        chosen.stem,
+        # The recording's stem, not the transcript's filename: the summary is named after
+        # its SOURCE, and the .txt's name carries a date and a fingerprint that belong to
+        # the checkpoint (see scan.transcript_source_stem).
+        scan.transcript_source_stem(chosen),
         fingerprint=scan.transcript_fingerprint(chosen),
     )
 
