@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from echogist import naming
 
 
@@ -127,3 +129,111 @@ def test_dated_artifact_path_uses_fallback_for_illegal_stem(tmp_path: Path) -> N
         tmp_path, "///", ".mp3", fallback="audio", today=date(2026, 6, 15)
     )
     assert path == tmp_path / "2026-06-15-audio.mp3"
+
+
+# --------------------------------------------------------------------------- #
+# TD-31 — source identity is CONTENT, and it lives in the transcript's NAME
+# --------------------------------------------------------------------------- #
+def _big(path: Path, filler: bytes = b"a", size: int = 3 << 20) -> Path:
+    """A file past the 2 MiB sample window, so head and tail are sampled separately."""
+    path.write_bytes(filler * size)
+    return path
+
+
+def test_the_fingerprint_is_stable_across_reads(tmp_path: Path) -> None:
+    src = _big(tmp_path / "lecture.mp4")
+    assert naming.source_fingerprint(src) == naming.source_fingerprint(src)
+
+
+def test_the_fingerprint_has_the_shape_the_transcript_name_parser_expects(
+    tmp_path: Path,
+) -> None:
+    fingerprint = naming.source_fingerprint(_big(tmp_path / "lecture.mp4"))
+    assert len(fingerprint) == naming.FINGERPRINT_HEX
+    assert all(ch in "0123456789abcdef" for ch in fingerprint)
+
+
+def test_moving_or_renaming_a_recording_does_not_change_its_identity(tmp_path: Path) -> None:
+    """The whole reason identity is content and not a path.
+
+    A path dies on a tree move, a rename, and a WSL-vs-Windows read of the same disk. The
+    recording is the same recording through all three.
+    """
+    src = _big(tmp_path / "Лекция 1.mp4")
+    before = naming.source_fingerprint(src)
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    dst = moved / "Совсем другое имя.mp4"
+    src.rename(dst)
+    assert naming.source_fingerprint(dst) == before
+
+
+def test_a_changed_byte_changes_the_fingerprint(tmp_path: Path) -> None:
+    src = _big(tmp_path / "lecture.mp4")
+    before = naming.source_fingerprint(src)
+    data = bytearray(src.read_bytes())
+    data[0] = ord("z")
+    src.write_bytes(bytes(data))
+    assert naming.source_fingerprint(src) != before
+
+
+def test_a_change_in_the_tail_changes_the_fingerprint(tmp_path: Path) -> None:
+    """The tail is sampled precisely because a container's head is often boilerplate."""
+    src = _big(tmp_path / "lecture.mp4")
+    before = naming.source_fingerprint(src)
+    data = bytearray(src.read_bytes())
+    data[-1] = ord("z")
+    src.write_bytes(bytes(data))
+    assert naming.source_fingerprint(src) != before
+
+
+def test_two_recordings_of_the_same_length_but_different_content_differ(
+    tmp_path: Path,
+) -> None:
+    a = _big(tmp_path / "a.mp4", filler=b"a")
+    b = _big(tmp_path / "b.mp4", filler=b"b")
+    assert naming.source_fingerprint(a) != naming.source_fingerprint(b)
+
+
+def test_a_file_smaller_than_the_sample_window_is_hashed_whole(tmp_path: Path) -> None:
+    """Below 2 MiB the head and tail samples would overlap, so a short file must not be
+    identified by a prefix it shares with a neighbour."""
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"x" * 1024 + b"tail-a")
+    b.write_bytes(b"x" * 1024 + b"tail-b")
+    assert naming.source_fingerprint(a) != naming.source_fingerprint(b)
+
+
+def test_length_alone_separates_two_otherwise_identical_files(tmp_path: Path) -> None:
+    a = _big(tmp_path / "a.mp4", size=3 << 20)
+    b = _big(tmp_path / "b.mp4", size=(3 << 20) + 1)
+    assert naming.source_fingerprint(a) != naming.source_fingerprint(b)
+
+
+def test_an_unreadable_file_raises_rather_than_returning_a_value(tmp_path: Path) -> None:
+    """A sentinel would join to every OTHER identity-less file and hand one recording's
+    transcript to another — the exact failure this function exists to prevent."""
+    with pytest.raises(OSError):
+        naming.source_fingerprint(tmp_path / "never-existed.mp4")
+
+
+def test_transcript_path_puts_the_identity_in_the_name(tmp_path: Path) -> None:
+    path = naming.transcript_path(tmp_path, "Лекция 1", "0123456789abcdef", today=date(2026, 6, 15))
+    assert path == tmp_path / "2026-06-15-Лекция 1-0123456789abcdef.txt"
+
+
+def test_transcript_path_sanitizes_and_falls_back_like_every_other_artifact(
+    tmp_path: Path,
+) -> None:
+    path = naming.transcript_path(tmp_path, "///", "0123456789abcdef", today=date(2026, 6, 15))
+    assert path == tmp_path / "2026-06-15-transcript-0123456789abcdef.txt"
+
+
+def test_transcript_path_does_not_dedup(tmp_path: Path) -> None:
+    """Two different recordings cannot collide (different fingerprints), so a repeat name
+    is the SAME recording and must land on one file. A ``-2`` would leave two files
+    claiming one recording — what the old ambiguity was made of."""
+    (tmp_path / "2026-06-15-talk-0123456789abcdef.txt").write_text("x", encoding="utf-8")
+    path = naming.transcript_path(tmp_path, "talk", "0123456789abcdef", today=date(2026, 6, 15))
+    assert path.name == "2026-06-15-talk-0123456789abcdef.txt"

@@ -56,8 +56,7 @@ import contextlib
 import subprocess
 import threading
 import time
-from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -479,38 +478,46 @@ class Plan:
 def plan_run(
     sources: Sequence[Path],
     *,
+    fingerprints: Mapping[Path, str],
     summarized: set[str],
-    transcripts: dict[str, tuple[Path, ...]],
+    transcripts: Mapping[str, Path],
 ) -> Plan:
     """Sort every source into finished / ready-to-summarize / needs-transcribing.
 
-    ``summarized`` is :func:`echogist.summarize.summary_index` — resolved source paths
-    that already have a summary, so a second run over the same folder does not re-pay for
-    a lecture already bought (TD-22). ``transcripts`` is
-    :func:`echogist.scan.transcript_files`.
+    Both joins are on the TD-31 source fingerprint — the identity of the recording, taken
+    from its content — so neither depends on a filename. ``fingerprints`` maps each source
+    to the value :mod:`echogist.scan` computed once during the walk; ``summarized`` is
+    :func:`echogist.summarize.summary_index` (already paid for, TD-22); ``transcripts`` is
+    :func:`echogist.scan.transcript_sources`.
 
-    A saved transcript is reused ONLY when the match is unambiguous in both directions:
-    exactly one transcript file carries the stem, and exactly one source in this run maps
-    to it. Anything else transcribes again. That is the deliberate trade for not building
-    increment 2's naming machinery: re-doing free local work is visible and merely slow,
-    whereas summarizing one lecture from another's transcript is a paid, silent fidelity
-    violation — the failure this whole pipeline exists to prevent. Note the asymmetry with
-    the summary skip above, which is safe at any stem because it joins on the RESOLVED
-    SOURCE PATH rather than on a name.
+    This replaced a stem match. Two courses that both number their lectures produced the
+    same stem, and the transcript of course A's lecture 1 was handed to course B's — a
+    PAID summary of the wrong recording, silent because every anchor still validated
+    against real timecodes. A name says what a file is called; only its content says which
+    recording it is.
+
+    A source whose fingerprint is missing from ``fingerprints`` transcribes again rather
+    than matching anything. Free, local and visible beats paid and silent, always.
+
+    Nothing here recomputes a fingerprint. That is the seam the increment 1b re-encode
+    depends on: a re-encoded file carries its PARENT's value in ``fingerprints``, so it
+    reads as the same recording and is not re-bought. Recomputing would change every byte
+    and silently re-buy the summary.
     """
-    stems = [scan.stem_key(source) for source in sources]
-    stem_counts = Counter(stems)
-
     finished: list[Path] = []
     ready: list[tuple[Path, Path]] = []
     todo: list[Path] = []
-    for source, stem in zip(sources, stems, strict=True):
-        if str(naming.resolve_source(source)) in summarized:
+    for source in sources:
+        fingerprint = fingerprints.get(source)
+        if fingerprint is None:
+            todo.append(source)
+            continue
+        if fingerprint in summarized:
             finished.append(source)
             continue
-        saved = transcripts.get(stem, ())
-        if len(saved) == 1 and stem_counts[stem] == 1:
-            ready.append((source, saved[0]))
+        saved = transcripts.get(fingerprint)
+        if saved is not None:
+            ready.append((source, saved))
         else:
             todo.append(source)
     # Sorted, not walk order: os.walk's order is filesystem-dependent, so an unsorted plan

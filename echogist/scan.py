@@ -21,8 +21,7 @@ import json
 import math
 import os
 import re
-from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -76,7 +75,7 @@ _OUTPUT_DIR_NAME = "output"
 # these are re-derivable in one ffmpeg spawn, so a migration would cost more than a
 # re-probe.
 CACHE_FILENAME = ".scan-cache.json"
-_CACHE_SCHEMA = 1
+_CACHE_SCHEMA = 2  # 2: entries carry the TD-31 source fingerprint
 
 # Windows file attributes marking a cloud placeholder: the file is listed in the
 # directory but its bytes live in the cloud. FILE_ATTRIBUTE_OFFLINE (0x1000) and
@@ -84,13 +83,13 @@ _CACHE_SCHEMA = 1
 # hydration download, which turns an offline two-minute scan into hours of transfer.
 _PLACEHOLDER_ATTRS = 0x1000 | 0x400000
 
-# A saved transcript is ``<YYYY-MM-DD>-<sanitized stem>.txt``, optionally with a ``-N``
-# dedup suffix. Parsing the name BACK to its stem is what makes transcript detection one
-# pass over the directory instead of one regex build per (source, transcript) pair.
-_TRANSCRIPT_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-(?P<stem>.+?)(?:-\d+)?$")
-#: The date stamp alone, for reading the same name WITHOUT assuming a trailing ``-N`` is
-#: a dedup suffix. See :func:`transcript_files` for why both readings are needed.
-_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+# A saved transcript is ``<YYYY-MM-DD>-<sanitized stem>-<fingerprint>.txt`` (TD-31). The
+# fingerprint is fixed-width hex anchored at the END of the name, so the name has exactly
+# one reading — which is why the two-readings ``-N`` machinery this replaced is gone: a
+# stem that itself ends in digits, or in hex, can no longer be confused with a suffix.
+_TRANSCRIPT_NAME = re.compile(
+    rf"^\d{{4}}-\d{{2}}-\d{{2}}-(?P<stem>.+)-(?P<fingerprint>[0-9a-f]{{{naming.FINGERPRINT_HEX}}})$"
+)
 
 
 class ScanCancelled(Exception):
@@ -128,6 +127,10 @@ class MediaFile:
     duration: float
     audio_kbps: float | None
     has_video: bool
+    #: TD-31 source identity: content, not location. Computed here ONCE and passed
+    #: onward as a value — no later stage recomputes it (see
+    #: :func:`echogist.naming.source_fingerprint` for why a re-encode must inherit it).
+    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -382,19 +385,35 @@ def scan_tree(
             if entry is None:
                 try:
                     probe = probe_media(path, exe, runner)
+                    # Cached under the SAME size+mtime key as the probe: changed bytes
+                    # change the key, which forces a recompute, so a stale fingerprint
+                    # cannot outlive the file it identifies.
+                    fingerprint = naming.source_fingerprint(path)
                 except ExtractError as exc:
                     unreadable.append((path, str(exc)))
+                    continue
+                except OSError as exc:
+                    unreadable.append((path, f"cannot read the file: {exc.strerror or exc}"))
                     continue
                 entry = {
                     "duration": probe.duration,
                     "audio_kbps": probe.audio_kbps,
                     "has_video": probe.has_video,
+                    "fingerprint": fingerprint,
                 }
             fresh[key] = entry
 
             duration = _valid_duration(entry.get("duration"))
             if duration is None:  # cached or fresh negative, or a corrupt cache value
                 unreadable.append((path, "ffmpeg reported no duration for this file"))
+                continue
+            cached_fingerprint = entry.get("fingerprint")
+            if not isinstance(cached_fingerprint, str) or not cached_fingerprint:
+                # A cache entry from before the fingerprint existed, or a hand-edited one.
+                # Without an identity the file cannot be joined to anything, and guessing
+                # one would join it to every other identity-less file, so report it rather
+                # than let it into the plan.
+                unreadable.append((path, "no source fingerprint could be read for this file"))
                 continue
             files.append(
                 MediaFile(
@@ -404,6 +423,7 @@ def scan_tree(
                     duration=duration,
                     audio_kbps=_valid_kbps(entry.get("audio_kbps")),
                     has_video=bool(entry.get("has_video")),
+                    fingerprint=cached_fingerprint,
                 )
             )
     except KeyboardInterrupt as exc:
@@ -470,79 +490,77 @@ def _relative(path: Path, root: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Transcript detection
 # --------------------------------------------------------------------------- #
-def transcript_index(transcripts_dir: Path) -> Counter[str]:
-    """How many saved transcripts exist per sanitized source stem.
+def transcript_fingerprint(path: Path) -> str | None:
+    """The source fingerprint a saved transcript's NAME carries, or ``None``.
 
-    Built by listing the directory ONCE and parsing each transcript filename back to its
-    stem, rather than testing each source against each transcript. The pairwise version
-    is ``O(files x transcripts)`` with a regex compiled in the inner loop — 150k
-    compilations on a 500-file library with 300 transcripts, inside a 30-second budget.
+    The recovery flow ("re-summarize a saved transcript") needs it: without one it stamped
+    the summary with the ``.txt``'s own path, so a summary bought that way was invisible to
+    the next folder run and the lecture was PAID FOR TWICE. Reading it back out of the name
+    means that summary joins exactly like any other.
 
-    The count is a CANDIDATE count, not an answer: two sources with the same sanitized
-    stem share one bucket. Disambiguating them is exactly what the collision report is
-    for, which is why the column is labelled "candidate".
+    ``None`` for a transcript written before TD-31 or renamed by hand. That reads as
+    "unknown source", never as a guess.
     """
-    return Counter({stem: len(paths) for stem, paths in transcript_files(transcripts_dir).items()})
+    match = _TRANSCRIPT_NAME.match(path.stem)
+    return match["fingerprint"] if match else None
 
 
-def transcript_files(transcripts_dir: Path) -> dict[str, tuple[Path, ...]]:
-    """The saved transcripts on disk, grouped by the sanitized source stem they were
-    named from — the path-carrying form of :func:`transcript_index`.
+def transcript_sources(transcripts_dir: Path) -> dict[str, Path]:
+    """The saved transcripts on disk, keyed by the FINGERPRINT of the recording they were
+    made from (TD-31).
 
-    A bulk run needs the PATH to reuse a transcript instead of re-transcribing hours of
-    audio, and both callers must agree on which filenames count as a transcript, so the
-    name-parsing rule lives here once and the counting form is derived from this one.
-    Values are sorted for a stable pick, and a stem with more than one file is
-    deliberately left ambiguous for the caller to refuse: nothing on disk says which
-    recording a second ``-2`` transcript belongs to.
+    Built by listing the directory ONCE and parsing each filename, rather than testing
+    each source against each transcript: the pairwise version is ``O(files x
+    transcripts)`` with a regex compiled in the inner loop.
+
+    The key is an identity, not a name, so this answers "is there a transcript of THIS
+    recording" exactly. The previous stem-keyed version could only answer "is there a
+    transcript of something with this name", and two courses that both number their
+    lectures made that answer wrong, paid and silent. There is no ambiguity to refuse
+    here and no ``-N`` reading to disambiguate: a fixed-width fingerprint anchored at the
+    end of the name has one parse.
+
+    Two transcripts of ONE recording can still exist under different dates (transcribed,
+    summary deleted, transcribed again next month). They are the same recording by
+    construction, so the newest wins rather than being refused.
     """
-    groups: dict[str, list[Path]] = {}
+    found: dict[str, Path] = {}
     if not transcripts_dir.is_dir():
         return {}
     # No try/except: Path.glob yields nothing for a missing or unreadable directory
     # rather than raising, so a handler here would be dead code (verified, and the
     # is_dir guard above already covers the missing case).
-    claims: dict[Path, set[str]] = {}
     for path in sorted(transcripts_dir.glob("*.txt")):
         match = _TRANSCRIPT_NAME.match(path.stem)
         if not match:
+            # No fingerprint in the name: written before TD-31, or hand-renamed. It
+            # cannot be joined to a recording, and the operator's clean-slate rule for
+            # 3.0 forbids guessing from the stem, so it is simply not a candidate. The
+            # cost is one re-transcription: free, local and visible.
             continue
-        # BOTH readings of the name, because the ``-N`` dedup suffix is indistinguishable
-        # from a stem that simply ends in a number. ``2026-08-01-lecture-2.txt`` is either
-        # the second transcript of "lecture" or the first of "lecture-2", and a course
-        # full of ``Часть-1.mp4`` / ``01-Введение-2.mp4`` is entirely ordinary. Indexing
-        # only the stripped reading did two wrong things at once: "lecture-2.mp4" never
-        # found its own transcript and re-transcribed on every run, while a DIFFERENT file
-        # "lecture.mp4" matched it and bought a summary of the wrong recording.
-        literal = _DATE_PREFIX.sub("", path.stem)
-        for stem in {match["stem"], literal}:
-            groups.setdefault(stem, []).append(path)
-            claims.setdefault(path, set()).add(stem)
-    # A transcript claimable two ways is not evidence for either. Dropping it costs a
-    # re-transcription, which is free, local and visible; keeping it risks a paid summary
-    # of another recording, which is silent. That is the same trade plan_run makes for an
-    # ambiguous stem, applied one level earlier.
-    ambiguous = {path for path, stems in claims.items() if len(stems) > 1}
-    return {
-        stem: tuple(p for p in paths if p not in ambiguous)
-        for stem, paths in groups.items()
-        if any(p not in ambiguous for p in paths)
-    }
+        # Sorted glob, so a later date overwrites an earlier one for the same recording.
+        found[match["fingerprint"]] = path
+    return found
 
 
 def stem_key(path: Path) -> str:
     """The sanitized stem an artifact for ``path`` would be named from. ``fallback`` is a
     REQUIRED keyword-only argument on ``sanitize_stem``; ``transcript`` matches what
-    ``transcribe.save_transcript`` passes, so the index keys line up.
+    ``transcribe.save_transcript`` passes, so the names line up.
 
-    Public because a bulk run has to key its plan the SAME way the transcript index and
-    the collision report key theirs — three callers agreeing on one name rule."""
+    ONE caller since TD-31: :func:`collisions`, the duplicate-name warning. It is no
+    longer part of any join — transcripts and summaries are matched by fingerprint now —
+    but two sources that share a stem still fight over one SUMMARY filename, and that is
+    still worth telling the operator."""
     return naming.sanitize_stem(path.stem, fallback="transcript")
 
 
-def candidate_transcripts(files: Iterable[MediaFile], index: Counter[str]) -> int:
-    """How many of ``files`` have at least one transcript candidate on disk."""
-    return sum(1 for f in files if index.get(stem_key(f.path), 0) > 0)
+def transcribed_count(files: Iterable[MediaFile], transcripts: Mapping[str, Path]) -> int:
+    """How many of ``files`` already have a transcript of THAT recording on disk.
+
+    An exact count since TD-31, not the "candidate" count it replaced: the join is on the
+    recording's fingerprint, so a name shared by two lectures no longer inflates it."""
+    return sum(1 for f in files if f.fingerprint in transcripts)
 
 
 # --------------------------------------------------------------------------- #
@@ -690,7 +708,7 @@ def group_by_folder(result: ScanResult) -> list[tuple[Path, tuple[MediaFile, ...
     return sorted((folder, tuple(items)) for folder, items in groups.items())
 
 
-def folder_rows(result: ScanResult, index: Counter[str]) -> list[Choice]:
+def folder_rows(result: ScanResult, transcripts: Mapping[str, Path]) -> list[Choice]:
     """One ``ui.table`` row per folder: the folder is the key, the numbers are packed
     into the value.
 
@@ -702,14 +720,14 @@ def folder_rows(result: ScanResult, index: Counter[str]) -> list[Choice]:
     rows: list[Choice] = []
     for folder, items in group_by_folder(result):
         name = f"{folder}/" if str(folder) != "." else "./"
-        with_transcript = candidate_transcripts(items, index)
+        with_transcript = transcribed_count(items, transcripts)
         rows.append(
             (
                 name,
                 f"{plural(len(items), 'file'):>9}  "
                 f"{human_hours(sum(f.duration for f in items)):>9}  "
                 f"{human_size(sum(f.size for f in items)):>10}  "
-                f"{plural(with_transcript, 'transcript candidate')}",
+                f"{plural(with_transcript, 'transcript')}",
             )
         )
     return rows

@@ -144,49 +144,60 @@ def test_save_raw_result_illegal_title_sanitized(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# TD-22 — the source back-link, so a second bulk run skips what is already paid for
+# TD-22 back-link, keyed by the TD-31 source fingerprint: a second bulk run skips what
+# is already paid for, and the join survives the tree being moved or renamed.
 # --------------------------------------------------------------------------- #
-def test_save_raw_result_stamps_resolved_source_path(tmp_path: Path) -> None:
-    src = tmp_path / "Lecture.mp4"
-    src.write_bytes(b"x")
-    out = tmp_path / "raw"
-    path = summarize.save_raw_result(_summary("Talk"), out, source_path=src)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    # Resolved, not the path as handed in: the scan's key is resolved too, and the two
-    # strings must join exactly or the skip silently misses.
-    assert data["source_path"] == str(src.resolve())
+_FP = "0123456789abcdef"
 
 
-def test_save_raw_result_omitting_source_writes_the_pre_td22_shape(tmp_path: Path) -> None:
+def test_save_raw_result_stamps_the_source_fingerprint(tmp_path: Path) -> None:
+    path = summarize.save_raw_result(_summary("Talk"), tmp_path / "raw", fingerprint=_FP)
+    assert json.loads(path.read_text(encoding="utf-8"))["source_fingerprint"] == _FP
+
+
+def test_save_raw_result_omitting_the_fingerprint_writes_an_unknown_source(
+    tmp_path: Path,
+) -> None:
     path = summarize.save_raw_result(_summary("Talk"), tmp_path)
-    assert json.loads(path.read_text(encoding="utf-8"))["source_path"] == ""
+    assert json.loads(path.read_text(encoding="utf-8"))["source_fingerprint"] == ""
 
 
-def test_save_raw_result_resolves_an_indirect_source_to_the_same_key(tmp_path: Path) -> None:
-    """`folder/../folder/x.mp4` and `folder/x.mp4` are ONE recording, one summary."""
-    nested = tmp_path / "folder"
-    nested.mkdir()
-    src = nested / "x.mp4"
-    src.write_bytes(b"x")
-    indirect = nested / ".." / "folder" / "x.mp4"
-    direct = summarize.save_raw_result(_summary("A"), tmp_path / "raw", source_path=src)
-    round_about = summarize.save_raw_result(_summary("B"), tmp_path / "raw", source_path=indirect)
-    key_a = json.loads(direct.read_text(encoding="utf-8"))["source_path"]
-    key_b = json.loads(round_about.read_text(encoding="utf-8"))["source_path"]
-    assert key_a == key_b
-    assert summarize.summary_index(tmp_path / "raw") == {key_a}
+def test_the_join_survives_the_recording_being_moved(tmp_path: Path) -> None:
+    """The property path identity could not give us, and the reason for content identity.
+
+    A summary stamped with a path stopped matching the moment the tree moved, the folder
+    was renamed, or the same disk was read from WSL rather than Windows — and a re-run then
+    re-bought a lecture already paid for. The fingerprint is a property of the recording,
+    so none of that touches it.
+    """
+    out = tmp_path / "raw"
+    summarize.save_raw_result(_summary("Talk"), out, fingerprint=_FP)
+
+    moved = tmp_path / "somewhere else"
+    out.rename(moved)
+
+    assert summarize.summary_index(moved) == {_FP}
+
+
+def test_a_re_encode_that_inherits_its_parent_is_not_re_bought(tmp_path: Path) -> None:
+    """The MANDATORY contract of TD-31, pinned at the join where breaking it costs money.
+
+    A re-encode (increment 1b) changes every byte. If it recomputed its own fingerprint it
+    would read as a new recording and silently re-buy a summary already paid for. It
+    carries the PARENT's value instead, so it indexes as the same recording.
+    """
+    out = tmp_path / "raw"
+    summarize.save_raw_result(_summary("Original"), out, fingerprint=_FP)
+
+    # The re-encoded file, carrying its parent's identity rather than its own bytes'.
+    assert _FP in summarize.summary_index(out)
 
 
 def test_summary_index_collects_every_stamped_source(tmp_path: Path) -> None:
     out = tmp_path / "raw"
-    for name in ("one", "two"):
-        src = tmp_path / f"{name}.mp4"
-        src.write_bytes(b"x")
-        summarize.save_raw_result(_summary(name), out, source_path=src)
-    assert summarize.summary_index(out) == {
-        str((tmp_path / "one.mp4").resolve()),
-        str((tmp_path / "two.mp4").resolve()),
-    }
+    for name, fingerprint in (("one", _FP), ("two", "fedcba9876543210")):
+        summarize.save_raw_result(_summary(name), out, fingerprint=fingerprint)
+    assert summarize.summary_index(out) == {_FP, "fedcba9876543210"}
 
 
 def test_summary_index_is_empty_for_a_missing_directory(tmp_path: Path) -> None:
@@ -199,16 +210,14 @@ def test_summary_index_skips_unreadable_json_rather_than_raising(tmp_path: Path)
     out.mkdir()
     (out / "broken.json").write_text("{not json", encoding="utf-8")
     (out / "list.json").write_text("[1, 2]", encoding="utf-8")  # JSON, but not an object
-    src = tmp_path / "good.mp4"
-    src.write_bytes(b"x")
-    summarize.save_raw_result(_summary("good"), out, source_path=src)
-    assert summarize.summary_index(out) == {str(src.resolve())}
+    summarize.save_raw_result(_summary("good"), out, fingerprint=_FP)
+    assert summarize.summary_index(out) == {_FP}
 
 
-def test_summary_index_ignores_a_pre_td22_summary(tmp_path: Path) -> None:
+def test_summary_index_ignores_a_summary_with_no_back_link(tmp_path: Path) -> None:
     """No back-link reads as "unknown source", never as "this source is covered"."""
     out = tmp_path / "raw"
-    summarize.save_raw_result(_summary("old"), out)  # no source_path
+    summarize.save_raw_result(_summary("old"), out)  # no fingerprint
     assert summarize.summary_index(out) == set()
 
 

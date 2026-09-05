@@ -39,6 +39,7 @@ from echogist import (  # noqa: E402
     config,
     extract,
     guard,
+    naming,
     provision,
     render,
     summarize,
@@ -146,7 +147,12 @@ def run_smoke(
     # 2. Transcribe → saved transcript (GPU). The original clip is the input, as
     #    in the menu (faster-whisper decodes the source directly).
     transcript = transcribe.transcribe(clip, model_dir(model_config, base), log=emit)
-    tpath = transcribe.save_transcript(transcript, base / "output" / "transcripts", clip.stem)
+    # TD-31: the recording's identity, read from the clip itself. The smoke run makes the
+    # same artifacts the menu does, so it names them the same way.
+    fingerprint = naming.source_fingerprint(clip)
+    tpath = transcribe.save_transcript(
+        transcript, base / "output" / "transcripts", clip.stem, fingerprint=fingerprint
+    )
     emit(f"Saved transcript: {tpath}")
     artifacts.append(tpath)
 
@@ -172,7 +178,9 @@ def run_smoke(
         log=emit,
     )
     summaries_dir = base / "output" / "summaries"
-    json_path = summarize.save_raw_result(result.summary, summaries_dir / "raw")  # F13
+    json_path = summarize.save_raw_result(  # F13
+        result.summary, summaries_dir / "raw", fingerprint=fingerprint
+    )
     out_path = render.render(
         result.summary,
         summaries_dir,

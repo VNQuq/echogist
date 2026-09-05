@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from echogist import config, extract, folder, menu, scan, summarize
+from echogist import config, extract, folder, menu, naming, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
@@ -1535,7 +1535,10 @@ def _offline_scan(monkeypatch: pytest.MonkeyPatch, *, cancel_after: int | None =
 def _lecture(directory: Path, name: str) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_bytes(b"x" * 4096)
+    # Distinct bytes per name, same length. Identity is CONTENT since TD-31, so two files
+    # written with identical bytes are genuinely ONE recording and every join collapses
+    # them — correct behaviour, but not what a fixture standing in for two lectures wants.
+    path.write_bytes((name.encode("utf-8") * 4096)[:4096])
     return path
 
 
@@ -1961,7 +1964,9 @@ def test_bulk_flow_skips_a_file_that_already_has_a_summary(
     done = _lecture(library, "done.mp4")
     _lecture(library, "todo.mp4")
     summarize.save_raw_result(
-        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+        _summary(),
+        tmp_path / "output" / "summaries" / "raw",
+        fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(
         tmp_path, ["folder", str(library), "summary", False, True, "exit"]
@@ -1981,7 +1986,9 @@ def test_bulk_flow_with_nothing_left_to_do_never_reaches_the_gate(
     library = tmp_path / "library"
     done = _lecture(library, "done.mp4")
     summarize.save_raw_result(
-        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+        _summary(),
+        tmp_path / "output" / "summaries" / "raw",
+        fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "summary", False, "exit"])
 
@@ -2118,7 +2125,9 @@ def test_folder_transcript_run_does_not_skip_an_already_summarized_file(
     done = _lecture(library, "done.mp4")
     _lecture(library, "todo.mp4")
     summarize.save_raw_result(
-        _summary(), tmp_path / "output" / "summaries" / "raw", source_path=done
+        _summary(),
+        tmp_path / "output" / "summaries" / "raw",
+        fingerprint=naming.source_fingerprint(done),
     )
     deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "transcript", False, "exit"])
 

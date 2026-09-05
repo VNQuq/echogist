@@ -19,6 +19,10 @@ import pytest
 from echogist import transcribe
 from echogist.transcribe import Segment, TranscribeError, Transcript
 
+#: A stand-in source fingerprint: 16 hex characters, the shape naming.FINGERPRINT_HEX
+#: produces. The value is arbitrary; only its shape and its stability matter here.
+_FP = "0123456789abcdef"
+
 
 def _transcript(*segments: Segment, language: str = "ru", duration: float = 0.0) -> Transcript:
     return Transcript(language=language, duration=duration, segments=tuple(segments))
@@ -125,18 +129,38 @@ def test_render_transcript_empty() -> None:
 # --------------------------------------------------------------------------- #
 # save_transcript
 # --------------------------------------------------------------------------- #
-def test_save_transcript_writes_dated_file(tmp_path: Path) -> None:
+def test_save_transcript_writes_a_dated_fingerprinted_file(tmp_path: Path) -> None:
     t = _transcript(Segment(0.0, 1.0, "Привет мир"))
-    path = transcribe.save_transcript(t, tmp_path, "lecture", today=date(2026, 6, 15))
-    assert path == tmp_path / "2026-06-15-lecture.txt"
+    path = transcribe.save_transcript(
+        t, tmp_path, "lecture", fingerprint=_FP, today=date(2026, 6, 15)
+    )
+    assert path == tmp_path / f"2026-06-15-lecture-{_FP}.txt"
     assert path.read_text(encoding="utf-8") == "[00:00:00] Привет мир\n"
+
+
+def test_the_saved_body_carries_no_metadata_of_our_own(tmp_path: Path) -> None:
+    """TD-31's load-bearing property: identity is in the NAME, never in the file.
+
+    The body is the exact text the summarizer reads. Any line we add becomes block #1 at
+    ``[00:00:00]`` (``chunk._blocks`` anchors a timecode-less line at the previous start,
+    the first one at zero), and the model could quote our own metadata back with an anchor
+    that PASSES validation. Pin it: every line is a real transcript block.
+    """
+    t = _transcript(Segment(0.0, 1.0, "Привет"), Segment(70.0, 71.0, "мир"))
+    path = transcribe.save_transcript(
+        t, tmp_path, "lecture", fingerprint=_FP, today=date(2026, 6, 15)
+    )
+    body = path.read_text(encoding="utf-8")
+    assert body == transcribe.render_transcript(t) + "\n"
+    assert all(line.startswith("[") for line in body.splitlines() if line.strip())
+    assert _FP not in body
 
 
 def test_save_transcript_groups_by_block_seconds(tmp_path: Path) -> None:
     # block_seconds threads through to render: two close segments share one block.
     t = _transcript(Segment(0.0, 2.0, "a"), Segment(3.0, 5.0, "b"))
     path = transcribe.save_transcript(
-        t, tmp_path, "talk", block_seconds=60.0, today=date(2026, 6, 15)
+        t, tmp_path, "talk", fingerprint=_FP, block_seconds=60.0, today=date(2026, 6, 15)
     )
     assert path.read_text(encoding="utf-8") == "[00:00:00] a b\n"
 
@@ -144,31 +168,48 @@ def test_save_transcript_groups_by_block_seconds(tmp_path: Path) -> None:
 def test_save_transcript_creates_out_dir(tmp_path: Path) -> None:
     out = tmp_path / "output" / "transcripts"
     t = _transcript(Segment(0.0, 1.0, "x"))
-    path = transcribe.save_transcript(t, out, "clip", today=date(2026, 6, 15))
+    path = transcribe.save_transcript(t, out, "clip", fingerprint=_FP, today=date(2026, 6, 15))
     assert path.is_file()
 
 
-def test_save_transcript_dedups(tmp_path: Path) -> None:
+def test_re_transcribing_one_recording_overwrites_rather_than_dedups(tmp_path: Path) -> None:
+    """No ``-2``/``-3`` suffix any more, and that is the point (TD-31).
+
+    Two different recordings have different fingerprints and cannot collide, so a repeat
+    name means the SAME recording transcribed twice on one day. Landing on one file is
+    correct and idempotent; a ``-2`` would leave two files claiming one recording, which
+    is what the old dedup-suffix ambiguity was made of.
+    """
     t = _transcript(Segment(0.0, 1.0, "x"))
-    p1 = transcribe.save_transcript(t, tmp_path, "talk", today=date(2026, 6, 15))
-    p2 = transcribe.save_transcript(t, tmp_path, "talk", today=date(2026, 6, 15))
-    p3 = transcribe.save_transcript(t, tmp_path, "talk", today=date(2026, 6, 15))
-    assert p1.name == "2026-06-15-talk.txt"
-    assert p2.name == "2026-06-15-talk-2.txt"
-    assert p3.name == "2026-06-15-talk-3.txt"
+    p1 = transcribe.save_transcript(t, tmp_path, "talk", fingerprint=_FP, today=date(2026, 6, 15))
+    p2 = transcribe.save_transcript(t, tmp_path, "talk", fingerprint=_FP, today=date(2026, 6, 15))
+    assert p1 == p2 == tmp_path / f"2026-06-15-talk-{_FP}.txt"
+    assert len(list(tmp_path.glob("*.txt"))) == 1
+
+
+def test_two_recordings_sharing_a_stem_get_different_files(tmp_path: Path) -> None:
+    t = _transcript(Segment(0.0, 1.0, "x"))
+    a = transcribe.save_transcript(t, tmp_path, "talk", fingerprint=_FP, today=date(2026, 6, 15))
+    b = transcribe.save_transcript(
+        t, tmp_path, "talk", fingerprint="fedcba9876543210", today=date(2026, 6, 15)
+    )
+    assert a != b
+    assert len(list(tmp_path.glob("*.txt"))) == 2
 
 
 def test_save_transcript_sanitizes_illegal_chars(tmp_path: Path) -> None:
     t = _transcript(Segment(0.0, 1.0, "x"))
-    path = transcribe.save_transcript(t, tmp_path, 'a/b:c*?"<>|d', today=date(2026, 6, 15))
+    path = transcribe.save_transcript(
+        t, tmp_path, 'a/b:c*?"<>|d', fingerprint=_FP, today=date(2026, 6, 15)
+    )
     assert ":" not in path.name and "/" not in path.name and "*" not in path.name
     assert path.is_file()
 
 
 def test_save_transcript_blank_stem_falls_back(tmp_path: Path) -> None:
     t = _transcript(Segment(0.0, 1.0, "x"))
-    path = transcribe.save_transcript(t, tmp_path, "///", today=date(2026, 6, 15))
-    assert path.name == "2026-06-15-transcript.txt"
+    path = transcribe.save_transcript(t, tmp_path, "///", fingerprint=_FP, today=date(2026, 6, 15))
+    assert path.name == f"2026-06-15-transcript-{_FP}.txt"
 
 
 # --------------------------------------------------------------------------- #

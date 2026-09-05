@@ -635,74 +635,121 @@ def _tier() -> config.ModelTier:
 # --------------------------------------------------------------------------- #
 # plan_run — what the folder run will actually do, decided before anything runs
 # --------------------------------------------------------------------------- #
+_FP_A = "0123456789abcdef"
+_FP_B = "fedcba9876543210"
+
+
 def test_a_source_with_a_summary_on_disk_is_not_re_paid_for(tmp_path: Path) -> None:
     """TD-22 in anger: the whole reason the back-link exists."""
     src = tmp_path / "lecture.mp4"
-    src.write_bytes(b"x")
-    plan = folder.plan_run([src], summarized={str(src.resolve())}, transcripts={})
+    plan = folder.plan_run([src], fingerprints={src: _FP_A}, summarized={_FP_A}, transcripts={})
     assert plan.summarized == (src,)
     assert plan.to_transcribe == ()
     assert plan.ready == ()
 
 
-def test_the_summary_skip_joins_on_the_resolved_path_not_the_name(tmp_path: Path) -> None:
-    nested = tmp_path / "f"
-    nested.mkdir()
-    src = nested / "lecture.mp4"
-    src.write_bytes(b"x")
-    indirect = nested / ".." / "f" / "lecture.mp4"
-    plan = folder.plan_run([indirect], summarized={str(src.resolve())}, transcripts={})
-    assert plan.summarized == (indirect,)
+def test_two_courses_with_identical_names_never_share_a_transcript(tmp_path: Path) -> None:
+    """THE bug (TD-31). Live on the operator's disk, not a constructed edge case.
+
+    КУРС2025 and a next course named the same way both contain
+    ``Модуль Основы, занятие 1.mp4``. The stem rule matched them, handed course A's
+    transcript to course B, and bought a summary of the wrong recording — silent, because
+    every ``[HH:MM:SS]`` anchor validated against real timecodes from the wrong lecture.
+    """
+    a = tmp_path / "КУРС2025" / "Модуль Основы, занятие 1.mp4"
+    b = tmp_path / "КУРС2026" / "Модуль Основы, занятие 1.mp4"
+    saved = tmp_path / f"2026-09-05-Модуль Основы, занятие 1-{_FP_A}.txt"
+
+    plan = folder.plan_run(
+        [a, b],
+        fingerprints={a: _FP_A, b: _FP_B},
+        summarized=set(),
+        transcripts={_FP_A: saved},
+    )
+
+    assert plan.ready == ((a, saved),)  # its own transcript, reused
+    assert plan.to_transcribe == (b,)  # a different recording, transcribed
 
 
-def test_an_unambiguous_saved_transcript_skips_the_transcribe_phase(tmp_path: Path) -> None:
+def test_the_join_survives_the_whole_tree_being_moved(tmp_path: Path) -> None:
+    """Identity is content, so a move, a rename, or a WSL-vs-Windows read changes nothing.
+
+    Under path identity every stamp in the pool went stale the moment the tree moved, and
+    the re-run silently re-transcribed hours of audio and re-bought summaries already paid
+    for. This is the property that hands TD-27 a free choice of layout.
+    """
+    before = tmp_path / "old-root" / "Лекция 1.mp4"
+    after = tmp_path / "new-root" / "renamed" / "Совсем другое имя.mp4"
+    saved = tmp_path / f"2026-09-05-Лекция 1-{_FP_A}.txt"
+
+    plan = folder.plan_run(
+        [after], fingerprints={after: _FP_A}, summarized=set(), transcripts={_FP_A: saved}
+    )
+
+    assert plan.ready == ((after, saved),)
+    assert plan.to_transcribe == ()
+    assert before != after  # the path changed in every part; the recording did not
+
+
+def test_a_re_encode_inheriting_its_parent_is_neither_re_transcribed_nor_re_bought(
+    tmp_path: Path,
+) -> None:
+    """The MANDATORY contract of TD-31, pinned at the join.
+
+    A re-encode (increment 1b) changes every byte. Recomputing its fingerprint would read
+    it as a new recording and silently re-buy a summary. It carries the PARENT's value in
+    ``fingerprints`` instead — which is exactly why ``plan_run`` receives the mapping and
+    never computes one itself.
+    """
+    original = tmp_path / "Лекция 1.mp4"
+    re_encoded = tmp_path / "Лекция 1.mp3"
+
+    plan = folder.plan_run(
+        [re_encoded],
+        fingerprints={re_encoded: _FP_A},  # the parent's value, not its own bytes'
+        summarized={_FP_A},
+        transcripts={},
+    )
+
+    assert plan.summarized == (re_encoded,)
+    assert plan.to_transcribe == ()
+    assert original.suffix != re_encoded.suffix  # different bytes, one recording
+
+
+def test_a_source_with_no_fingerprint_transcribes_rather_than_matching(
+    tmp_path: Path,
+) -> None:
+    """Free, local and visible beats paid and silent. Never guess an identity."""
     src = tmp_path / "lecture.mp4"
-    src.write_bytes(b"x")
-    saved = tmp_path / "2026-09-04-lecture.txt"
-    saved.write_text("t", encoding="utf-8")
-    plan = folder.plan_run([src], summarized=set(), transcripts={"lecture": (saved,)})
+    saved = tmp_path / f"2026-09-04-lecture-{_FP_A}.txt"
+
+    plan = folder.plan_run([src], fingerprints={}, summarized={_FP_A}, transcripts={_FP_A: saved})
+
+    assert plan.to_transcribe == (src,)
+    assert plan.ready == ()
+    assert plan.summarized == ()
+
+
+def test_a_saved_transcript_of_this_recording_skips_the_transcribe_phase(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "lecture.mp4"
+    saved = tmp_path / f"2026-09-04-lecture-{_FP_A}.txt"
+    plan = folder.plan_run(
+        [src], fingerprints={src: _FP_A}, summarized=set(), transcripts={_FP_A: saved}
+    )
     assert plan.ready == ((src, saved),)
     assert plan.to_transcribe == ()
 
 
-def test_two_transcripts_for_one_stem_are_refused_and_it_transcribes_again(
-    tmp_path: Path,
-) -> None:
-    """Nothing on disk says which recording the ``-2`` file belongs to."""
-    src = tmp_path / "lecture.mp4"
-    src.write_bytes(b"x")
-    a = tmp_path / "2026-09-04-lecture.txt"
-    b = tmp_path / "2026-09-05-lecture-2.txt"
-    plan = folder.plan_run([src], summarized=set(), transcripts={"lecture": (a, b)})
-    assert plan.to_transcribe == (src,)
-    assert plan.ready == ()
-
-
-def test_two_sources_sharing_a_stem_never_reuse_one_transcript(tmp_path: Path) -> None:
-    """The paid, silent failure this pipeline exists to prevent: summarizing one
-    lecture from the other's transcript because their names happen to match."""
-    one = tmp_path / "a" / "Лекция.mp4"
-    two = tmp_path / "b" / "Лекция.mp4"
-    for p in (one, two):
-        p.parent.mkdir(parents=True)
-        p.write_bytes(b"x")
-    saved = tmp_path / "2026-09-04-Лекция.txt"
-    saved.write_text("t", encoding="utf-8")
-    plan = folder.plan_run([one, two], summarized=set(), transcripts={"Лекция": (saved,)})
-    assert plan.ready == ()
-    assert plan.to_transcribe == (one, two)
-
-
 def test_every_source_lands_in_exactly_one_bucket(tmp_path: Path) -> None:
     done, ready, fresh = (tmp_path / f"{n}.mp4" for n in ("done", "ready", "fresh"))
-    for p in (done, ready, fresh):
-        p.write_bytes(b"x")
-    saved = tmp_path / "2026-09-04-ready.txt"
-    saved.write_text("t", encoding="utf-8")
+    saved = tmp_path / f"2026-09-04-ready-{_FP_B}.txt"
     plan = folder.plan_run(
         [done, ready, fresh],
-        summarized={str(done.resolve())},
-        transcripts={"ready": (saved,)},
+        fingerprints={done: _FP_A, ready: _FP_B, fresh: "c" * 16},
+        summarized={_FP_A},
+        transcripts={_FP_B: saved},
     )
     assert plan.summarized == (done,)
     assert plan.ready == ((ready, saved),)
@@ -713,13 +760,13 @@ def test_every_source_lands_in_exactly_one_bucket(tmp_path: Path) -> None:
 def test_the_plan_is_sorted_not_in_walk_order(tmp_path: Path) -> None:
     """os.walk order is filesystem-dependent, so an unsorted plan plays a seven-lecture
     course back as 4, 2, 1, 7 and cannot be reproduced between runs."""
-    names = ["4.mp4", "2.mp4", "1.mp4", "3.mp4"]
-    sources = []
-    for n in names:
-        p = tmp_path / n
-        p.write_bytes(b"x")
-        sources.append(p)
-    plan = folder.plan_run(sources, summarized=set(), transcripts={})
+    sources = [tmp_path / n for n in ("4.mp4", "2.mp4", "1.mp4", "3.mp4")]
+    plan = folder.plan_run(
+        sources,
+        fingerprints={p: f"{i:016x}" for i, p in enumerate(sources)},
+        summarized=set(),
+        transcripts={},
+    )
     assert [p.name for p in plan.to_transcribe] == ["1.mp4", "2.mp4", "3.mp4", "4.mp4"]
 
 

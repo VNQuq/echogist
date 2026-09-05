@@ -9,6 +9,7 @@ suffix. That rule lives here, once, so a fix lands in every stage at the same ti
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Set as AbstractSet
 from datetime import date
@@ -122,14 +123,88 @@ def dated_artifact_path(
     return dedup_path(directory, base, suffix, taken=taken)
 
 
+# --------------------------------------------------------------------------- #
+# Source identity (TD-31)
+# --------------------------------------------------------------------------- #
+#: Bytes sampled from each end of a recording. 1 MiB is far past any container header
+#: and any trailing index, so two different lectures share a sample only by accident of
+#: length AND of both ends, while the read stays negligible next to the ``ffmpeg -i``
+#: probe the scan already spends on the same file.
+_FINGERPRINT_SAMPLE = 1 << 20
+
+#: Hex characters kept from the digest. 16 (64 bits) makes an accidental collision
+#: across a personal library indistinguishable from never, and keeps the suffix short
+#: enough to sit inside a Windows filename next to a long lecture title.
+FINGERPRINT_HEX = 16
+
+
+def source_fingerprint(path: Path) -> str:
+    """The identity of a RECORDING: ``sha256(size + head + tail)``, truncated (TD-31).
+
+    Content, not location. A path is where a file is, not which recording it is: it dies
+    on a tree move, a folder rename, and the same disk read from WSL (``/mnt/c/...``)
+    versus Windows (``C:\\...``). Joining artifacts on a path would hand TD-27 the rule
+    "you may never move a transcript"; joining on content hands it freedom.
+
+    **A dedup heuristic sufficient for this pool, NOT a proof of identity.** Two distinct
+    recordings of identical byte length whose first and last mebibyte both match would
+    collide. For a library of lecture recordings that does not happen. Do not restate this
+    as content-addressing.
+
+    **The value is taken ONCE from the original recording and inherited forward — a
+    derived file NEVER recomputes its own.** A re-encode (increment 1b) changes every
+    byte, so a recomputed fingerprint reads as a new recording and silently re-buys a
+    summary already paid for. Nothing in the pipeline recomputes: the scan computes it and
+    every later stage receives it as a value.
+
+    Raises ``OSError`` rather than returning a value for an unreadable file. A sentinel
+    would join to every other unreadable file and hand one recording's transcript to
+    another — the exact failure this function exists to prevent.
+    """
+    size = path.stat().st_size
+    digest = hashlib.sha256(str(size).encode("ascii"))
+    with path.open("rb") as handle:
+        if size <= 2 * _FINGERPRINT_SAMPLE:
+            # Small enough that the two samples would overlap: hash the whole thing, so a
+            # short file is never identified by a prefix it shares with its own neighbour.
+            digest.update(handle.read())
+        else:
+            digest.update(handle.read(_FINGERPRINT_SAMPLE))
+            handle.seek(-_FINGERPRINT_SAMPLE, os.SEEK_END)
+            digest.update(handle.read(_FINGERPRINT_SAMPLE))
+    return digest.hexdigest()[:FINGERPRINT_HEX]
+
+
+def transcript_path(
+    directory: Path, stem: str, fingerprint: str, *, today: date | None = None
+) -> Path:
+    """``directory/<date>-<sanitized stem>-<fingerprint>.txt`` — the transcript's name.
+
+    The identity lives in the NAME, deliberately, and never inside the file: the
+    transcript body is the exact text the summarizer reads, and any line we add to it
+    becomes block #1 at ``[00:00:00]`` (``chunk._blocks`` anchors a line with no parseable
+    timecode at the previous start, and the first such line at zero). The model could then
+    quote our own metadata back with an anchor that PASSES validation. The filename is not
+    prompt text, so the whole failure class is absent rather than defended against.
+
+    No ``-2``/``-3`` dedup, unlike :func:`dated_artifact_path`: two different recordings
+    have different fingerprints and cannot collide, and the same recording transcribed
+    twice on one day SHOULD land on one name and overwrite. Two transcripts of one
+    recording can still exist under different dates; :func:`echogist.scan.transcript_sources`
+    picks the newest.
+    """
+    stamp = (today or date.today()).isoformat()
+    return directory / f"{stamp}-{sanitize_stem(stem, fallback='transcript')}-{fingerprint}.txt"
+
+
 def resolve_source(path: Path) -> Path:
     """``path.resolve()``, or the path itself when it cannot be resolved (a broken
     junction) rather than aborting the caller.
 
-    The identity of a SOURCE file, shared by every stage that has to decide whether two
-    paths are the same recording: the scan's dedup key across a tree, and the summary's
-    ``source_path`` back-link (TD-22). Both sides must agree character for character or
-    the join silently misses and a paid summary is re-paid, so the rule lives here once.
+    The scan's dedup key across a tree: whether two PATHS reach the same file. Not the
+    identity of a recording — that is :func:`source_fingerprint`, taken from content, and
+    it is what the transcript name and the summary back-link join on (TD-31). This one
+    still decides whether a walk reached one file twice, which is a question about paths.
 
     Deliberately NOT casefolded, unlike ``menu._resume_key``. There the key identifies one
     file the operator picked twice, and folding case only ever merges two spellings of the

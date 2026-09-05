@@ -11,13 +11,12 @@ from __future__ import annotations
 import json
 import math
 import os
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from echogist import config, cost, extract, guard, scan
+from echogist import config, cost, extract, guard, naming, scan
 from echogist.extract import ExtractError
 
 _STDERR = """\
@@ -39,7 +38,9 @@ def _runner(text: str = _STDERR) -> extract.Runner:
 def _media(directory: Path, name: str, size: int = 1024) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_bytes(b"x" * size)
+    # Distinct bytes per name, exact length preserved. Identity is CONTENT since TD-31, so
+    # two fixtures written with identical bytes are one recording to every join.
+    path.write_bytes((name.encode("utf-8") * size)[:size])
     return path
 
 
@@ -400,7 +401,7 @@ def test_the_cache_is_published_atomically(tmp_path: Path, monkeypatch: pytest.M
 
     assert replaced == [(str(cache_path) + ".part", str(cache_path))]
     assert not cache_path.with_name(cache_path.name + ".part").exists()
-    assert json.loads(cache_path.read_text())["schema"] == 1
+    assert json.loads(cache_path.read_text())["schema"] == scan._CACHE_SCHEMA
 
 
 def test_a_cache_that_cannot_be_written_does_not_fail_the_scan(
@@ -501,45 +502,91 @@ def test_a_completed_scan_evicts_entries_for_files_that_are_gone(tmp_path: Path)
 # --------------------------------------------------------------------------- #
 # Transcript detection
 # --------------------------------------------------------------------------- #
-def test_transcript_index_parses_names_back_to_stems(tmp_path: Path) -> None:
+_FP_A = "0123456789abcdef"
+_FP_B = "fedcba9876543210"
+
+
+def test_transcript_sources_are_keyed_by_the_recording_not_the_name(tmp_path: Path) -> None:
     directory = tmp_path / "transcripts"
     directory.mkdir()
-    for name in ("2026-01-01-Лекция 1.txt", "2026-02-02-Лекция 1-2.txt", "2026-01-01-Другая.txt"):
-        (directory / name).write_text("x", encoding="utf-8")
-    (directory / "notes.txt").write_text("x", encoding="utf-8")  # no date prefix
+    (directory / f"2026-01-01-Лекция 1-{_FP_A}.txt").write_text("x", encoding="utf-8")
+    (directory / f"2026-01-01-Другая-{_FP_B}.txt").write_text("x", encoding="utf-8")
+    (directory / "notes.txt").write_text("x", encoding="utf-8")  # no date, no fingerprint
 
-    index = scan.transcript_index(directory)
+    index = scan.transcript_sources(directory)
 
-    # "Лекция 1-2" counts once, not twice: the -2 file is claimable as either the
-    # second transcript of "Лекция 1" or the first of "Лекция 1-2", so it is not
-    # auto-reused for either and the report must not offer it as a candidate.
-    assert index == Counter({"Лекция 1": 1, "Другая": 1})
+    assert set(index) == {_FP_A, _FP_B}
+    assert index[_FP_A].name == f"2026-01-01-Лекция 1-{_FP_A}.txt"
 
 
-def test_a_stem_is_not_matched_as_a_prefix_of_a_longer_one(tmp_path: Path) -> None:
-    # The bug a naive startswith would ship: "Лекция 1" must not claim the transcript
-    # belonging to "Лекция 10", or the scan reports work as done that was never done.
+def test_a_transcript_with_no_fingerprint_is_not_a_candidate(tmp_path: Path) -> None:
+    """Pre-TD-31 or hand-renamed: it cannot be joined to a recording.
+
+    The clean-slate rule for 3.0 forbids falling back to the stem, so the file is simply
+    not offered. The cost is one re-transcription — free, local and visible — against the
+    paid, silent alternative of guessing which recording it belongs to.
+    """
+    (tmp_path / "2026-08-01-lecture.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "2026-08-01-lecture-2.txt").write_text("x", encoding="utf-8")
+
+    assert scan.transcript_sources(tmp_path) == {}
+
+
+def test_a_stem_that_itself_ends_in_hex_still_parses(tmp_path: Path) -> None:
+    """The ambiguity the ``-N`` machinery existed for cannot arise any more.
+
+    ``2026-08-01-lecture-2.txt`` used to be readable two ways (second transcript of
+    "lecture", or first of "lecture-2") and was therefore refused. A fingerprint is
+    fixed-width and anchored at the END of the name, so there is exactly one parse even
+    when the stem itself looks like one.
+    """
+    path = tmp_path / f"2026-08-01-part-{_FP_B}-{_FP_A}.txt"
+    path.write_text("x", encoding="utf-8")
+
+    index = scan.transcript_sources(tmp_path)
+
+    assert set(index) == {_FP_A}
+    assert scan.transcript_fingerprint(path) == _FP_A
+
+
+def test_two_transcripts_of_one_recording_resolve_to_the_newest(tmp_path: Path) -> None:
+    # Transcribed, summary deleted, transcribed again next month. Same recording by
+    # construction, so the newest wins rather than being refused as ambiguous.
+    (tmp_path / f"2026-01-01-talk-{_FP_A}.txt").write_text("old", encoding="utf-8")
+    (tmp_path / f"2026-03-03-talk-{_FP_A}.txt").write_text("new", encoding="utf-8")
+
+    assert scan.transcript_sources(tmp_path)[_FP_A].read_text(encoding="utf-8") == "new"
+
+
+def test_transcribed_count_joins_on_the_recording(tmp_path: Path) -> None:
+    # Two files that share a stem no longer inflate the count: the join is an identity.
     directory = tmp_path / "transcripts"
     directory.mkdir()
-    (directory / "2026-01-01-Лекция 10.txt").write_text("x", encoding="utf-8")
+    (directory / f"2026-01-01-Лекция 1-{_FP_A}.txt").write_text("x", encoding="utf-8")
+    index = scan.transcript_sources(directory)
+    has = scan.MediaFile(Path("A/Лекция 1.mp4"), Path("Лекция 1.mp4"), 1, 1.0, None, True, _FP_A)
+    same_name = scan.MediaFile(
+        Path("B/Лекция 1.mp4"), Path("Лекция 1.mp4"), 1, 1.0, None, True, _FP_B
+    )
 
-    index = scan.transcript_index(directory)
-    short = scan.MediaFile(Path("Лекция 1.mp4"), Path("Лекция 1.mp4"), 1, 1.0, None, True)
-    long = scan.MediaFile(Path("Лекция 10.mp4"), Path("Лекция 10.mp4"), 1, 1.0, None, True)
+    assert scan.transcribed_count([has], index) == 1
+    assert scan.transcribed_count([same_name], index) == 0
+    assert scan.transcribed_count([has, same_name], index) == 1
 
-    assert scan.candidate_transcripts([short], index) == 0
-    assert scan.candidate_transcripts([long], index) == 1
+
+def test_transcript_fingerprint_of_an_unstamped_name_is_none(tmp_path: Path) -> None:
+    assert scan.transcript_fingerprint(tmp_path / "2026-01-01-talk.txt") is None
 
 
 def test_a_missing_transcripts_directory_is_an_empty_index(tmp_path: Path) -> None:
-    assert scan.transcript_index(tmp_path / "never-created") == Counter()
+    assert scan.transcript_sources(tmp_path / "never-created") == {}
 
 
 # --------------------------------------------------------------------------- #
 # Collisions
 # --------------------------------------------------------------------------- #
-def _file(path: Path) -> scan.MediaFile:
-    return scan.MediaFile(path, path, 1, 60.0, None, True)
+def _file(path: Path, fingerprint: str = "f" * 16) -> scan.MediaFile:
+    return scan.MediaFile(path, path, 1, 60.0, None, True, fingerprint)
 
 
 def test_collisions_group_files_that_would_share_an_artifact_name() -> None:
@@ -634,7 +681,9 @@ def test_project_cost_sums_per_file_rather_than_pooling_durations() -> None:
     model_config = _model_config()
     tier = model_config.tier("economy")
     files = [_file(Path("/a.mp4")), _file(Path("/b.mp4"))]
-    files = [scan.MediaFile(f.path, f.rel, f.size, 3 * 3600.0, None, True) for f in files]
+    files = [
+        scan.MediaFile(f.path, f.rel, f.size, 3 * 3600.0, None, True, f.fingerprint) for f in files
+    ]
 
     total = scan.project_cost(files, model_config, tier)
     one = scan.project_file(3 * 3600.0, model_config, tier)
@@ -673,12 +722,12 @@ def test_folder_rows_are_one_row_per_folder_with_the_numbers_packed(tmp_path: Pa
     _media(tmp_path / "Course-1" / "bonus", "c.mp4")
 
     result = _scan(tmp_path, tmp_path)
-    rows = scan.folder_rows(result, Counter())
+    rows = scan.folder_rows(result, {})
 
     assert [key for key, _value in rows] == ["Course-1/", "Course-1/bonus/"]
     assert "2 files" in rows[0][1]
     assert "2h 00m" in rows[0][1]
-    assert "0 transcript candidates" in rows[0][1]
+    assert "0 transcripts" in rows[0][1]
 
 
 def test_totals_name_the_tier_the_price_belongs_to(tmp_path: Path) -> None:
@@ -719,7 +768,7 @@ def test_a_folder_with_only_unreadable_files_still_renders_its_totals(tmp_path: 
     result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
     model_config = _model_config()
 
-    assert scan.folder_rows(result, Counter()) == []  # no folder has a countable file
+    assert scan.folder_rows(result, {}) == []  # no folder has a countable file
     totals = dict(scan.totals_rows(result, model_config, model_config.tier("economy")))
     assert totals["Media files"] == "0"
     assert totals["Unreadable files"] == "1"
@@ -737,27 +786,86 @@ def test_problem_lists_are_shown_relative_to_the_scan_root(tmp_path: Path) -> No
     assert scan.unreadable_rows(result)[0][0] == "Course/week 2/broken.mp4"
 
 
-def test_a_transcript_whose_name_ends_in_a_number_is_not_handed_to_the_wrong_file(
+def test_reuse_survives_a_recording_being_renamed(tmp_path: Path) -> None:
+    """The property the stem rule could never give us, and the reason for content identity.
+
+    Rename the file, move it to another folder, or read the same disk from WSL instead of
+    Windows: the recording is unchanged, so its transcript is still its transcript.
+    """
+    (tmp_path / f"2026-08-02-old name-{_FP_A}.txt").write_text("x", encoding="utf-8")
+    renamed = scan.MediaFile(
+        Path("/elsewhere/completely different.mp4"),
+        Path("completely different.mp4"),
+        1,
+        1.0,
+        None,
+        True,
+        _FP_A,
+    )
+
+    index = scan.transcript_sources(tmp_path)
+
+    assert scan.transcribed_count([renamed], index) == 1
+
+
+# --------------------------------------------------------------------------- #
+# TD-31 — the fingerprint the scan computes once and everything downstream reuses
+# --------------------------------------------------------------------------- #
+def test_the_scan_stamps_every_file_with_its_content_identity(tmp_path: Path) -> None:
+    a = _media(tmp_path, "a.mp4")
+    _media(tmp_path, "b.mp4")
+
+    result = _scan(tmp_path, tmp_path)
+
+    found = {f.path.name: f.fingerprint for f in result.files}
+    assert found["a.mp4"] == naming.source_fingerprint(a)
+    assert found["a.mp4"] != found["b.mp4"]
+
+
+def test_the_fingerprint_is_cached_and_not_recomputed_per_scan(tmp_path: Path) -> None:
+    """It rides the existing size+mtime cache key, so a warm scan reads nothing."""
+    _media(tmp_path, "a.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+    scan.scan_tree(tmp_path, cache_path=cache_path, exe="/fake", runner=_runner())
+
+    entry = next(iter(scan.load_cache(cache_path).values()))
+
+    assert isinstance(entry["fingerprint"], str)
+    assert len(entry["fingerprint"]) == naming.FINGERPRINT_HEX
+
+
+def test_changed_bytes_invalidate_the_cached_fingerprint(tmp_path: Path) -> None:
+    """The cache key is ``<path>|<size>|<mtime_ns>``, so an edit changes the key and the
+    fingerprint is recomputed. A stale identity cannot outlive the file it identifies."""
+    path = _media(tmp_path, "a.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+    before = _scan_with(tmp_path, cache_path).files[0].fingerprint
+
+    path.write_bytes(b"completely different bytes, different length")
+
+    assert _scan_with(tmp_path, cache_path).files[0].fingerprint != before
+
+
+def _scan_with(root: Path, cache_path: Path) -> scan.ScanResult:
+    return scan.scan_tree(root, cache_path=cache_path, exe="/fake", runner=_runner())
+
+
+def test_a_file_whose_cache_entry_has_no_fingerprint_is_reported_unreadable(
     tmp_path: Path,
 ) -> None:
-    """``-2`` is either a dedup suffix or part of the stem, and the name cannot say which.
+    """Without an identity a file cannot be joined to anything, and guessing one would
+    join it to every other identity-less file. Report it rather than let it into a plan."""
+    _media(tmp_path, "a.mp4")
+    cache_path = tmp_path / "output" / scan.CACHE_FILENAME
+    _scan_with(tmp_path, cache_path)
+    entries = scan.load_cache(cache_path)
+    for entry in entries.values():
+        entry.pop("fingerprint", None)
+    scan.save_cache(cache_path, entries)
 
-    Reading it only as a suffix did two wrong things at once: ``lecture-2.mp4`` never
-    found its own transcript and re-transcribed forever, while ``lecture.mp4`` matched it
-    and would buy a summary of a different recording. Course files called ``Часть-1.mp4``
-    are ordinary, so this is not an exotic input.
-    """
-    (tmp_path / "2026-08-01-lecture-2.txt").write_text("x", encoding="utf-8")
+    result = _scan_with(tmp_path, cache_path)
 
-    index = scan.transcript_files(tmp_path)
-
-    assert index == {}  # claimable two ways, so evidence for neither
-
-
-def test_an_unambiguous_transcript_is_still_reused(tmp_path: Path) -> None:
-    """The fix must not cost the reuse it exists to protect: this is GPU-hours."""
-    (tmp_path / "2026-08-02-intro.txt").write_text("x", encoding="utf-8")
-
-    index = scan.transcript_files(tmp_path)
-
-    assert [p.name for p in index["intro"]] == ["2026-08-02-intro.txt"]
+    assert result.files == ()
+    assert [reason for _path, reason in result.unreadable] == [
+        "no source fingerprint could be read for this file"
+    ]

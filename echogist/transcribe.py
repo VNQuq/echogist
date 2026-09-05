@@ -139,20 +139,26 @@ def save_transcript(
     out_dir: Path,
     source_stem: str,
     *,
+    fingerprint: str,
     block_seconds: float = _DEFAULT_BLOCK_SECONDS,
     today: date | None = None,
 ) -> Path:
-    """Write the rendered transcript to ``out_dir/<date>-<stem>.txt`` (deduped).
+    """Write the rendered transcript to ``out_dir/<date>-<stem>-<fingerprint>.txt``.
 
     The saved file is the recovery checkpoint: the menu's 'Saved transcript' entry
-    re-summarizes it without re-transcribing. ``block_seconds`` sets the timecode granularity (see
-    :func:`render_transcript`). Returns the path written. Naming (illegal-char strip +
-    ``-2``/``-3`` dedup, F9) is the shared :mod:`echogist.naming` rule.
+    re-summarizes it without re-transcribing. ``block_seconds`` sets the timecode
+    granularity (see :func:`render_transcript`). Returns the path written.
+
+    ``fingerprint`` is the TD-31 identity of the RECORDING
+    (:func:`echogist.naming.source_fingerprint`), and it goes in the NAME, never in the
+    file. The body is the exact text the summarizer reads, so a metadata line inside it
+    would become block #1 at ``[00:00:00]`` and could be quoted back with an anchor that
+    passes validation. Required, not optional: a transcript with no identity cannot be
+    joined to its recording, and the next run would have to guess from the name — the
+    paid, silent failure TD-31 closed.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = naming.dated_artifact_path(
-        out_dir, source_stem, ".txt", fallback="transcript", today=today
-    )
+    path = naming.transcript_path(out_dir, source_stem, fingerprint, today=today)
     # Atomic: the transcript IS the checkpoint (artifact-based recovery), so a truncated
     # one is a fake checkpoint that reads as valid and buys half a lecture's summary.
     return naming.publish_text(path, render_transcript(transcript, block_seconds) + "\n")

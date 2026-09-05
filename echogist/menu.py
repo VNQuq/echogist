@@ -75,6 +75,7 @@ from . import (
     extract,
     folder,
     guard,
+    naming,
     provision,
     render,
     scan,
@@ -344,6 +345,7 @@ def _run_summary(
     source_path: Path,
     source_stem: str,
     *,
+    fingerprint: str | None,
     gate: bool = True,
     on_cost: Callable[[cost.CostEstimate], None] | None = None,
 ) -> Path | None:
@@ -521,7 +523,7 @@ def _run_summary(
     # F13: the raw .json goes under summaries/raw/ so summaries/ holds only the
     # readable .pdf/.md; render reuses its stem so the triplet still shares a base.
     json_path = summarize.save_raw_result(  # BEFORE render
-        result.summary, summaries_dir / "raw", source_path=source_path
+        result.summary, summaries_dir / "raw", fingerprint=fingerprint
     )
     _clear_resume(resume_path)  # durable artifact exists — the within-run partial is spent
     try:
@@ -549,7 +551,7 @@ def _run_summary(
 
 
 def _transcribe_to_checkpoint(
-    deps: Deps, source: Path, model_config: config.ModelConfig
+    deps: Deps, source: Path, model_config: config.ModelConfig, *, fingerprint: str
 ) -> tuple[Path, str]:
     """Run TRANSCRIBE behind a %/ETA progress bar, save the checkpoint, return it.
 
@@ -570,6 +572,7 @@ def _transcribe_to_checkpoint(
         transcript,
         deps.base / "output" / "transcripts",
         source.stem,
+        fingerprint=fingerprint,
         block_seconds=model_config.transcript.block_seconds,
     )
     ui.info(f"Saved transcript: {tpath}")
@@ -722,14 +725,24 @@ def _flow_local_file(deps: Deps) -> None:
         except (ExtractError, OSError) as exc:
             ui.warn(f"Couldn't save the MP3 ({exc}); continuing without the audio artifact.")
 
-    _, text = _transcribe_to_checkpoint(deps, source, model_config)
+    # TD-31 identity, read from the ORIGINAL source before anything derived exists. This
+    # flow has no scan to inherit it from, so it is computed here — the one place in the
+    # single-file path, and never again downstream.
+    try:
+        fingerprint = naming.source_fingerprint(source)
+    except OSError as exc:
+        # Fail loud, back to the menu: a summary with no identity is re-bought on the next
+        # folder run, and a transcript with no identity can never be reused at all.
+        ui.error(f"Could not read {source.name} to identify it: {exc.strerror or exc}.")
+        return
+    _, text = _transcribe_to_checkpoint(deps, source, model_config, fingerprint=fingerprint)
     if action == "transcript":  # transcript only — the checkpoint is the deliverable
         # TD-12 (Issue 2): reveal the transcripts folder here, in the transcript branch ONLY
         # — never in _transcribe_to_checkpoint, which also runs on the Summary path (that was
         # the original TD-14 bug where a Summary popped transcripts).
         ui.reveal_dir(deps.base / "output" / "transcripts", priority=REVEAL_TRANSCRIPT)
         return
-    _run_summary(deps, settings, model_config, text, source, source.stem)
+    _run_summary(deps, settings, model_config, text, source, source.stem, fingerprint=fingerprint)
 
 
 def _selection_bytes(sources: Sequence[Path]) -> int:
@@ -929,7 +942,19 @@ def _flow_saved_transcript(deps: Deps) -> None:
     if not text.strip():
         ui.warn(f"{chosen.name} is empty; nothing to summarize.")
         return
-    _run_summary(deps, settings, model_config, text, chosen, chosen.stem)
+    # The transcript's NAME carries the recording's fingerprint (TD-31), so a summary
+    # bought through the recovery flow joins exactly like one bought from the media file.
+    # It used to be stamped with the .txt's own path, which no folder run could match —
+    # the lecture was then re-transcribed and re-summarized, paid twice.
+    _run_summary(
+        deps,
+        settings,
+        model_config,
+        text,
+        chosen,
+        chosen.stem,
+        fingerprint=scan.transcript_fingerprint(chosen),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -967,9 +992,9 @@ def _report_scan(
         ui.warn("No media files found under that folder.")
         return
 
-    index = scan.transcript_index(transcripts_dir)
+    transcripts = scan.transcript_sources(transcripts_dir)
     if result.files:
-        ui.table("Folders", scan.folder_rows(result, index))
+        ui.table("Folders", scan.folder_rows(result, transcripts))
     ui.table("Totals", scan.totals_rows(result, model_config, tier))
     ui.info(
         "The dollar figure is a PROJECTION from duration, biased high (~1.3x the bill on "
@@ -1089,6 +1114,7 @@ def _run_transcript_texts(
     ui: UI,
     plan: folder.Plan,
     model_config: config.ModelConfig,
+    fingerprints: Mapping[Path, str],
     *,
     keep_mp3: bool = False,
 ) -> tuple[dict[Path, str], FolderReport]:
@@ -1126,7 +1152,12 @@ def _run_transcript_texts(
                 ui.info(f"Saved MP3: {mp3.name}")
             except (ExtractError, OSError) as exc:
                 ui.warn(f"Couldn't save the MP3 for {source.name} ({exc}); continuing.")
-        path, text = _transcribe_to_checkpoint(deps, source, model_config)
+        # Direct index, not .get(): every source in the plan came from result.files, so
+        # the mapping covers all of them. A missing key here would mean the plan and the
+        # scan disagree, which is a bug to see, not to paper over with an unnamed artifact.
+        path, text = _transcribe_to_checkpoint(
+            deps, source, model_config, fingerprint=fingerprints[source]
+        )
         texts[source] = text
         return path
 
@@ -1201,10 +1232,16 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
     # transcript deleted since. Feeding an empty index leaves plan_run's OTHER skip — a
     # saved transcript already on disk — as the only one, which is exactly the right one
     # here. On a summary run both skips apply, as before (TD-22).
+    # One mapping, built once from the scan, carried by value from here down. Nothing
+    # downstream recomputes a fingerprint (TD-31): that is what lets a future re-encode
+    # inherit its parent's identity instead of reading as a new recording and re-buying a
+    # summary already paid for.
+    fingerprints = {f.path: f.fingerprint for f in result.files}
     plan = folder.plan_run(
         [f.path for f in result.files],
+        fingerprints=fingerprints,
         summarized=summarize.summary_index(summaries_dir / "raw") if summarize_after else set(),
-        transcripts=scan.transcript_files(transcripts_dir),
+        transcripts=scan.transcript_sources(transcripts_dir),
     )
     if plan.summarized:
         ui.info(f"Skipping {len(plan.summarized)} file(s) already summarized (not re-paid for).")
@@ -1229,7 +1266,7 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
     # Phase 1 — local, free, the long one.
     try:
         with_text, transcribed = _run_transcript_texts(
-            deps, ui, plan, model_config, keep_mp3=keep_mp3
+            deps, ui, plan, model_config, fingerprints, keep_mp3=keep_mp3
         )
     except FolderCancelled as exc:
         _report_run(ui, exc.report, stage="Transcribed", cancelled=True)
@@ -1303,6 +1340,7 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
             with_text[source],
             source,
             source.stem,
+            fingerprint=fingerprints.get(source),
             gate=False,
             on_cost=_record,
         )
