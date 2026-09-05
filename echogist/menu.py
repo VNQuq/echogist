@@ -960,7 +960,7 @@ def _report_scan(
         ui.table("Cloud placeholders (not downloaded, not probed)", scan.placeholder_rows(result))
 
 
-def _preview_folder(deps: Deps, root: Path) -> ScanResult:
+def _preview_folder(deps: Deps, root: Path) -> tuple[ScanResult, bool]:
     """Walk a folder and report what is in it. Read-only, offline, free.
 
     Not an action the operator picks: :func:`_flow_folder` runs this the moment a folder is
@@ -974,6 +974,10 @@ def _preview_folder(deps: Deps, root: Path) -> ScanResult:
     a cold scan of a large tree is minutes of ffmpeg spawns, and throwing away both the
     report and the cache for a keystroke would be the same mistake the batch flow already
     refuses to make. The caller still gets the partial result and still asks its question.
+
+    Returns ``(result, cancelled)``. The flag is not cosmetic: a partial result is a
+    statement about what was READ, never about what is in the folder, so the caller must
+    not read an interrupted empty walk as an empty folder.
     """
     ui = _ui(deps)
     ui.clear()  # TD-11: start this flow on a clean screen
@@ -998,10 +1002,15 @@ def _preview_folder(deps: Deps, root: Path) -> ScanResult:
         result = exc.result
         cancelled = True
 
+    if cancelled and _found_nothing(result):
+        # "No media files found" would be a claim about the folder, and the walk stopped
+        # before it could make one. Fail loud about what actually happened instead.
+        ui.warn("Scan stopped before it read anything; nothing is known about this folder.")
+        return result, cancelled
     _report_scan(ui, result, model_config, tier, deps.base / "output" / "transcripts")
     if cancelled:
         ui.warn("Scan cancelled; the numbers above cover only what was read.")
-    return result
+    return result, cancelled
 
 
 # --------------------------------------------------------------------------- #
@@ -1134,6 +1143,18 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
         # A partial scan would run a partial folder and quote a partial price, which is
         # exactly the kind of silent half-job this flow must not do.
         ui.warn("Scan cancelled; nothing was transcribed or summarized.")
+        return
+
+    if not result.files:
+        # "Nothing to do" below is a statement about work ALREADY DONE, and an empty plan
+        # means that only when there were files to plan for. A folder of unhydrated
+        # OneDrive placeholders or of files ffmpeg could not probe reaches here with an
+        # empty plan too, and reporting it as "already summarized" tells the operator the
+        # course is finished when not one second of it was read.
+        ui.warn(
+            "Nothing readable in this folder, so there is nothing to run. "
+            "The report above lists what was found and why each file was skipped."
+        )
         return
 
     summaries_dir = deps.base / "output" / "summaries"
@@ -1434,16 +1455,25 @@ def _flow_folder(deps: Deps) -> None:
     root = _pick_folder(ui, "Select a folder")
     if root is None:
         return
-    result = _preview_folder(deps, root)
-    if _found_nothing(result):
+    result, cancelled = _preview_folder(deps, root)
+    if _found_nothing(result) and not cancelled:
         # _report_scan already said so. Asking "what should I produce?" about an empty tree
-        # would offer three runs that can only report the same emptiness back.
+        # would offer three runs that can only report the same emptiness back. Guarded on
+        # ``cancelled`` because an interrupted walk is silent about the folder, not a
+        # verdict on it: Ctrl-C to skip a slow scan must not also discard the module.
         return
     action = ui.select(f"What should EchoGist produce for '{root.name}'?", _ACTION_CHOICES)
     if action == "__back__":  # TD-13: back out to the main menu, do nothing
         return
     if action == "mp3":
-        _flow_mp3(deps, [root])
+        # The files the PREVIEW counted, not the folder — ``expand_selection`` walks one
+        # level only, so handing it the root converted the top of a course tree and
+        # reported "Converted 3 of 3" for the 500 files the report had just listed. The
+        # scan already walked recursively AND pruned output/ by resolved path (TD-25),
+        # which the one-level walk never did. Unreadable files are included deliberately:
+        # a failed DURATION probe says nothing about whether ffmpeg can transcode it, and
+        # dropping them here would silently shrink a selection the operator just saw.
+        _flow_mp3(deps, [f.path for f in result.files] + [p for p, _reason in result.unreadable])
     elif action == "transcript":
         _flow_run(deps, root, summarize_after=False)
     elif action == "summary":

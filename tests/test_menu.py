@@ -1694,6 +1694,89 @@ def test_the_preview_runs_on_the_pick_not_on_a_choice(
     assert calls == {"extract": 0, "transcribe": 0, "summarize": 0, "render": 0}
 
 
+def test_mp3_for_a_folder_converts_every_file_the_preview_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preview walks the whole tree; the MP3 action used to walk one level of it.
+
+    Two numbers, one folder: the operator reads "Media files: 3" and a per-folder table
+    listing the course subfolders, picks MP3 only, and gets the top-level file with a
+    "Converted 1 of 1" report that reads as a complete success. The three actions come off
+    ONE choice list, so they have to mean the same thing by "this folder".
+    """
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "intro.mp4")
+    _lecture(library / "Week-1", "one.mp4")
+    _lecture(library / "Week-1" / "Day-2", "two.mp4")
+    spy = _spy_batch()
+    deps, stub, _calls = _make_deps(
+        tmp_path, ["folder", str(library), "mp3", True, "exit"], convert_many=spy
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert "Media files: 3" in stub.log_text
+    assert sorted(p.name for p in spy.seen["sources"]) == ["intro.mp4", "one.mp4", "two.mp4"]
+
+
+def test_a_cancelled_preview_does_not_claim_the_folder_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-C on the very first probe reads nothing, so it can say nothing about the tree.
+
+    The partial result is empty, and the empty-folder early return used to fire on it: a
+    keystroke meant to skip a slow scan printed "No media files found" about a full course
+    and threw the operator out of the folder module.
+    """
+    _offline_scan(monkeypatch, cancel_after=0)
+    library = tmp_path / "library"
+    _lecture(library, "a.mp4")
+    _lecture(library, "b.mp4")
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(library), "__back__", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "No media files found" not in stub.log_text
+    assert "Scan stopped before it read anything" in stub.log_text
+    # ...and the module is still usable: the action question was still asked.
+    assert [m for m in stub.messages if m[0] == "select" and "produce for" in m[1]]
+
+
+def test_an_unreadable_folder_is_not_reported_as_already_summarized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unhydrated OneDrive course plans to nothing, exactly like a finished one does.
+
+    "Every file in this folder already has a summary" is a claim about work done. Said
+    over a folder whose files were never read, it tells the operator the course is
+    finished when not one second of it reached the GPU.
+    """
+    monkeypatch.setattr(extract, "default_ffmpeg_exe", lambda: "/fake/ffmpeg")
+    # A probe that returns no Duration line: the file is real, its length is unknowable.
+    monkeypatch.setattr(scan, "scan_tree", lambda root, **kw: _scan_all_unreadable(root))
+    library = tmp_path / "library"
+    _lecture(library, "a.mp4")
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(library), "summary", "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert "already has a summary" not in stub.log_text
+    assert "Nothing readable in this folder" in stub.log_text
+    assert calls["transcribe"] == 0 and calls["summarize"] == 0
+
+
+def _scan_all_unreadable(root: Path) -> scan.ScanResult:
+    """A scan whose every candidate failed to probe — the OneDrive-placeholder shape."""
+    found = sorted(p for p in root.rglob("*.mp4"))
+    return scan.ScanResult(
+        root=root,
+        files=(),
+        unreadable=tuple((p, "no duration in probe output") for p in found),
+        placeholders=(),
+    )
+
+
 def test_an_empty_folder_never_reaches_the_action_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
