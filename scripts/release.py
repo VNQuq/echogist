@@ -122,6 +122,32 @@ def changelog_notes(tag: str, changelog: Path = _CHANGELOG) -> str:
     return f"{text}\n\n{fallback}" if text else fallback
 
 
+def require_pushed_tag(tag: str) -> None:
+    """Fail unless ``tag`` already exists on ``origin``.
+
+    GitHub's create-release endpoint CREATES a missing tag at the default branch head, so
+    a typo (``v2.4.O`` for ``v2.4.0``) silently invents a tag and publishes a real release
+    pointing at it — and the 422-is-success path below then makes the mistake look
+    idempotent on the retry. The documented flow pushes the annotated tag first; this
+    checks that it actually happened instead of trusting it.
+    """
+    try:
+        found = subprocess.run(
+            ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ReleaseError(f"Could not ask origin about {tag}: {exc}.") from exc
+    if not found:
+        raise ReleaseError(
+            f"{tag} is not on origin. Push the annotated tag first "
+            f"(git tag -a {tag} -m {tag} && git push origin {tag}), then re-run. "
+            "Publishing now would CREATE that tag at the default branch head."
+        )
+
+
 def publish(repo: str, tag: str, notes: str, token: str) -> str:
     """POST the release; return its ``html_url``. A 422 (release already exists for the
     tag) is treated as success — the URL is reconstructed from the tag."""
@@ -166,6 +192,7 @@ def main(argv: list[str]) -> int:
         tag = resolve_tag(argv)
         token = resolve_token()
         notes = changelog_notes(tag)
+        require_pushed_tag(tag)
         print(f"Publishing {repo} release for {tag} ...")
         print(publish(repo, tag, notes, token))
     except ReleaseError as exc:

@@ -2,7 +2,7 @@
 
 **Updated:** 2026-09-04 · v2.3.0. The first full folder run is the calibration fixture for
 everything below: 7 RU lectures, 23h43m, Haiku, 59 calls, **$2.4003**, 0 failures, all anchors
-validated. Since it: cost model rebuilt (TD-23/24), оформление shipped, `batch`+`bulk` merged
+validated. Since it: cost model rebuilt (TD-23/24), PDF styling shipped, `batch`+`bulk` merged
 into `folder.py`, 3 CJK slips diagnosed (TD-29 closed, TD-28 halved). **Authority:**
 [CLAUDE.md](../CLAUDE.md) for the v2 pipeline rule, TECHNICAL_DEBT TD-16 for its validation.
 **Max: 60 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.

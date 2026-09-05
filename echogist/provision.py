@@ -43,7 +43,7 @@ def app_root() -> Path:
 
 
 def ensure_output_dirs(base: Path) -> list[Path]:
-    """Create ``output/{audio,transcripts,summaries,summaries/raw}`` (the recovery artifacts)."""
+    """Create every directory in ``OUTPUT_SUBDIRS`` — the recovery artifacts plus ``logs``."""
     dirs = [base / "output" / sub for sub in OUTPUT_SUBDIRS]
     for directory in dirs:
         directory.mkdir(parents=True, exist_ok=True)

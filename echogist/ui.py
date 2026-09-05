@@ -555,8 +555,9 @@ class RichQuestionaryUI:
         shown this launch, so a summary's folder always wins over an earlier transcript or
         audio pop. Windows only (guarded on ``nt``); on
         the WSL dev box it is a no-op. The pop opens *without* stealing focus from the
-        console (the operator's "в фоне"). Failure is non-fatal — revealing a folder must
-        never mask a completed run — but instead of swallowing it silently we log a
+        console (the operator's phrase: "in the background"). Failure is non-fatal —
+        revealing a folder must never mask a completed run — but instead of swallowing
+        it silently we log a
         one-line fallback so a missing pop is diagnosable."""
         if priority <= self._revealed_priority:
             return
