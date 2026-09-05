@@ -83,3 +83,20 @@ def test_theme_objects_present() -> None:
     assert "error" in theme.RICH_THEME.styles
     assert "success" in theme.RICH_THEME.styles
     assert theme.QUESTIONARY_STYLE is not None
+
+
+def test_the_section_rule_does_not_share_a_colour_with_ordinary_output() -> None:
+    """TD-32: `rule` wore the bare `cyan` that `info` already owned, so a file header was
+    drawn in the same colour and weight as the lines it separates."""
+    styles = theme.RICH_THEME.styles
+    assert str(styles["rule"].color) != str(styles["info"].color)
+    assert str(styles["rule"].color) != str(styles["heading"].color)
+
+
+def test_the_rule_title_keeps_the_line_colour_and_adds_weight() -> None:
+    """Legibility comes from bold, not from climbing back into the conversational range —
+    a brighter title would undo the separation the darker line just bought."""
+    styles = theme.RICH_THEME.styles
+    assert str(styles["rule.title"].color) == str(styles["rule"].color)
+    assert styles["rule.title"].bold
+    assert not styles["rule"].bold

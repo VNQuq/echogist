@@ -294,6 +294,21 @@ def _clear_resume(resume_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # The one summary sub-flow, shared by every summary-producing path
 # --------------------------------------------------------------------------- #
+# A dropped block is previewed as head + TAIL. ``chunk.drop_degenerate_blocks`` judges a
+# WHOLE ~60-second block by its unique-word ratio, and on the operator's six-file run every
+# dropped block's visible head scored 0.80-1.00 unique — far above the 0.55 floor — so the
+# repetition that actually condemned the block is always further in. Showing the head alone
+# showed the one part of the block that is NOT the reason it went.
+_DROPPED_HEAD, _DROPPED_TAIL = 56, 38
+
+
+def _dropped_excerpt(line: str) -> str:
+    """One dropped block as ``head ... tail``, short enough for a console line."""
+    if len(line) <= _DROPPED_HEAD + _DROPPED_TAIL + 5:
+        return line
+    return f"{line[:_DROPPED_HEAD]} ... {line[-_DROPPED_TAIL:]}"
+
+
 def _report_dropped_blocks(ui: UI, dropped: Sequence[str], *, preview: int = 3) -> None:
     """Say what :func:`chunk.drop_degenerate_blocks` removed from the synthesis input.
 
@@ -302,15 +317,21 @@ def _report_dropped_blocks(ui: UI, dropped: Sequence[str], *, preview: int = 3) 
     or a title card, which is the operator's cue that the timecodes they are about to read
     start later than the video does. A few examples, not the whole list — six identical
     greeting lines say nothing the first one did not.
+
+    The line used to assert the drops were "repeated filler transcribed over silence". The
+    rule cannot know that: it measures repetition, not silence, and a ~60-second block that
+    opens on real speech and loops later is dropped WHOLE (TD-33). Telling the operator the
+    block was filler is telling them not to check the one thing worth checking, so the line
+    now says only what was measured.
     """
     if not dropped:
         return
     ui.info(
-        f"Skipping {len(dropped)} non-speech block(s) before summarizing "
-        f"(repeated filler transcribed over silence; the saved transcript keeps them):"
+        f"Skipping {len(dropped)} repetitive block(s) before summarizing — each repeats "
+        f"itself far more than speech does (the saved transcript keeps them, verbatim):"
     )
     for line in dropped[:preview]:
-        ui.info(f"    {line[:88]}")
+        ui.info(f"    {_dropped_excerpt(line)}")
     if len(dropped) > preview:
         ui.info(f"    ... and {len(dropped) - preview} more")
 

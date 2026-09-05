@@ -104,18 +104,57 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   unscalable. Sequence it AFTER the menu/logging work, since a `paths` module is easier to
   land once the two-module menu has settled which flows exist.
 
+- **TD-33 — a repetitive block is dropped WHOLE, and the real speech at its head goes with
+  it** · MEDIUM · created 2026-09-05, from the operator's six-file `КУРС2025` run.
+  `drop_degenerate_blocks` (Rule A, `chunk.py:153`) scores a whole block by unique-word
+  ratio and drops it below `min_unique_word_ratio = 0.55`. The unit it judges is a
+  ~60-second block (`transcribe.py:39`, `block_seconds = 60`, ~110-150 words), so the rule
+  cannot drop the loop without dropping everything that shares the minute with it.
+  **Measured on that run:** 21 blocks dropped across 6 files (4/2/1/3/6/5), and the
+  unique-word ratio of every dropped block's visible 88-char head is **0.80-1.00** — far
+  above the 0.55 floor. So the head of each dropped block is ordinary speech, and the
+  repetition that condemned it sits further in. The arithmetic agrees: with a head of ~13
+  words at ~0.9 unique, a 130-word block only falls under 0.55 if its remaining ~117 words
+  supply fewer than ~60 distinct words (~0.51). Something in those tails genuinely loops —
+  Rule A is not misfiring — but a minute of lecture leaves with it each time. The examples
+  are not incidental material: `[01:57:26] ...<student's question>...` is a
+  student's question, and `[02:15:04] ...<the
+  lecturer's answer>...` is the answer. File 6, titled «Разбор вопросов учеников»,
+  had 5 such blocks removed from its own input. Roughly 21 minutes out of 18h18m (1.9%),
+  concentrated in the Q&A stretches. Fidelity property (5), coverage.
+  **The reporting half is FIXED here, not deferred.** The line asserted the drops were
+  "repeated filler transcribed over silence" — the rule measures repetition, not silence,
+  and telling the operator a block was filler tells them not to check it. It now claims only
+  what was measured, and previews each block as `head ... tail` so the repetition that caused
+  the drop is visible instead of the innocent opening (`menu._dropped_excerpt`).
+  **The granularity half needs the operator.** The real fix is sub-block: trim the looping
+  RUN and keep the rest of the minute. That reverses the standing "WHOLE blocks only — never
+  an edit inside one" decision in the docstring, which was reasoned for the boilerplate case
+  (a stray credit line glued to real speech, where keeping everything is right) and does not
+  cover this one (a loop that dominates the block, where keeping everything is wrong and
+  dropping everything is also wrong). It changes what reaches the model, so it is a
+  prompt/fidelity change and goes through `/plan-eng-review` per CLAUDE.md, not a patch.
+  Raising `min_unique_word_ratio` is NOT the fix and would let real loops back in.
+  **Do not re-derive the threshold from this run's log alone** — it truncates blocks at 88
+  chars, so the tails were never seen. The measurement needs the saved transcripts, which
+  live on the Windows box. **Trigger:** the operator's next look at a saved transcript
+  alongside its summary, or the next folder run over dialogue-heavy material.
+
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, of which only TD-27 remains open: TD-22, TD-25
 and TD-26 closed on 2026-09-04, and TD-23/TD-24 closed the day after the first full folder
 run, off that run's own audited numbers. TD-29 closed 2026-09-04 with the `notice` channel, which
 TD-28 then reused for its own renderer half on 2026-09-05. The other open forward item is
 T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a P3 enhancement,
-not debt.
+not debt. TD-32 and TD-33 both came out of the operator's read of the six-file `КУРС2025`
+run on 2026-09-05: TD-32 opened and closed the same day, TD-33 stays open with its reporting
+half already fixed and its granularity half waiting on an operator decision.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
 
+- TD-32 — the per-file section rule wore the same cyan as ordinary output · closed 2026-09-05 · `rule` held the bare `cyan` that `info` already owned, so `---- [3/6] lecture.mp4 ----` was drawn in the colour and weight of the `Extracting audio ->` lines it separates: width without rank, and an hour-old 18-hour folder run had to be read line by line to find where a file began — the exact wall `UI.rule` exists to break. Closed by splitting the style in two, which the entry named as the fallback and which turned out to be the better shape outright: `rule` (`#005f87`, dark steel-blue, used by nothing else) draws the line, `rule.title` (`bold #005f87`) draws the file name. The name keeps its legibility through WEIGHT rather than brightness — a brighter title would have undone the separation the darker line just bought. `UI.rule` handed one style name to both the `Text` and the `Rule`, which is what coupled them. One theme edit plus one call site; no behaviour, artifact or config contract moved, and `NO_COLOR`/legacy-`cmd` consoles are untouched (rich drops colour there and the ASCII `-` glyph already carries the separation). Pinned by three tests: the rule colour differs from `info` and `heading`, the title shares the line's colour and adds bold, and `UI.rule` passes the two names separately.
 - TD-28 — a character the PDF font cannot draw reached the PDF unannounced · closed 2026-09-05 · **both halves now closed.** The fidelity half closed 2026-09-04 (the passages were read: a Chinese morpheme substituted for a Russian one mid-word, three times in seven lectures — language drift, not fabrication; the deterministic script check plus the prompt sentence answer it). The renderer half closes here: `render` reads the bundled font's cmap with `fontTools` (fpdf2's own locked dependency, so no new install) and announces every DISTINCT undrawable character, with its codepoint and one quote of where it sits, on the loud `notice` channel — the same channel as a dropped anchor, wired to `ui.warn` — BEFORE the file is written. fpdf2 does notice the missing glyph, but it says so through its own `logging` warning at output time, off EchoGist's channels and after layout, which is exactly how it scrolled past. Reports and returns: the character is never substituted (that would be silent rewriting) and the PDF is still written (refusing it would throw away a summary already paid for) — the same division as `report_foreign_scripts`. Coverage is the INTERSECTION of the regular and bold faces, the corpus is the Markdown rendering of the same document, and an unreadable font yields an empty charset that reports nothing (fail-soft, like an empty `allowed`). Wired at the seam with a test, because `RenderFn` is `Callable[..., Path]` and an unpassed `notice` would fall back to `print` with mypy and the suite both green.
 - TD-29 — a dropped anchor printed in the same voice as a clean one · closed 2026-09-04 · `summarize` grew a SECOND channel, `notice`, alongside `log`: `log` is the sixty phase lines the operator scrolls past (menu wires `ui.detail`), `notice` is what they must act on (menu wires `ui.warn`). The anchor line routes itself — `(notice if dropped else log)(...)` — so `0 dropped` stays scenery and `4 dropped` does not. Two named channels rather than a severity argument on `Logger`: that alias is redefined in seven modules and `print` takes no level kwarg, and there are exactly two audiences here, not a spectrum. String-sniffing the message in `menu._progress` stays rejected. The channel is pinned by a test asserting a finding lands on `warn` and not `detail` — necessary because `SummarizeFn` is `Callable[..., ...]` and a stub's `**_kw` would otherwise swallow an unwired `notice` with the suite still green.
 - TD-23 — the scan projection constants were unmeasured · closed 2026-09-04 · reseeded `150 wpm x 7 chars/word` -> `135 x 6.5` in `config/models.toml`. The shipped pair was a guess; measurement (lecture 4, 198 blocks, direct count) gives 122 wpm / 6.21 chars/word, corroborated across all seven lectures by the run's own gate. 150 x 7 = 1050 chars/min against a real ~760 was a 1.4x bias nobody had sized. The new pair keeps a deliberate ~1.15x margin over measured speech, and the whole-course scan quote now lands 1.31x the real $2.4003 bill — high, as required, but a KNOWN margin. Recalibration stays a two-number config edit.

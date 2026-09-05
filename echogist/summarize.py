@@ -1078,7 +1078,20 @@ def validate_anchors(
     # timecode the model invented, which is the one fidelity failure this stage can detect
     # on its own — it must not arrive in the same muted grey as the sixty phase lines.
     line = f"Validated anchors: {stats[0]} exact, {stats[1]} snapped, {stats[2]} dropped."
-    (notice if stats[2] else log)(line)
+    if stats[2]:
+        notice(line)
+    elif valid_by_sec and not any(stats):
+        # Zero anchors PASSES the invariant trivially — "every anchor resolves" is vacuously
+        # true when none was emitted — so the strictest gate in the pipeline stays green over
+        # a stretch the operator cannot check at all. That is the whole fidelity gate for this
+        # material (CLAUDE.md: the manual re-check against the recording IS the gate), and a
+        # 30-minute phase that anchors nothing removes it silently. Observed three times in
+        # one six-file run, in the muted grey, indistinguishable from a clean phase.
+        # A transcript with no parseable timecodes is a supported case and stays quiet:
+        # there was nothing to cite, which is why this is keyed on ``valid_by_sec``.
+        notice(f"{line} Nothing here cites the recording, so nothing here can be checked.")
+    else:
+        log(line)
     return replace(
         summary,
         title=title,
@@ -1199,8 +1212,10 @@ def synthesize_summary(
         sections = list(resume_from.synthesis)
         decisions = list(resume_from.decisions)
         actions = list(resume_from.action_items)
+        # The operator is told about the resume once, by ``menu._load_resume``, which loads
+        # this same partial against this same K and therefore cannot disagree with it. A
+        # second line here said the identical thing in the muted phase-log voice.
         done = len(sections)
-        log(f"Resuming: {done}/{len(phases)} phases already on disk — skipping them.")
     total_in = total_out = 0
     for ph in phases:
         if ph.index <= done:  # already synthesized in a prior run (resume), no re-pay
@@ -1262,6 +1277,13 @@ def synthesize_summary(
         # than the dated source stem when reconcile returned none.
         title = sections[0].heading
 
+    if not title:
+        # Reconcile answered, but with no title. Falling back to the dated source stem is the
+        # right recovery (a document must have a name), but doing it silently hands the
+        # operator a file named like a fallback with nothing saying it IS one — and every
+        # sibling in the same run carries a real title, so it reads as a naming quirk rather
+        # than a call that came back short.
+        notice("Reconcile returned no title; naming the document after the source file.")
     summary = Summary(
         title=title or _fallback_title(source_stem, today),
         core_idea=core_idea,

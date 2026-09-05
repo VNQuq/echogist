@@ -601,7 +601,7 @@ class RichQuestionaryUI:
         """
         self.runlog.write(title, level="SECTION")
         self.console.print(
-            Rule(Text(title, style="rule"), characters=self.glyphs.rule, style="rule")
+            Rule(Text(title, style="rule.title"), characters=self.glyphs.rule, style="rule")
         )
 
     # Every print below passes markup=False AND highlight=False. markup=False is the old

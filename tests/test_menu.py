@@ -2236,3 +2236,38 @@ def test_a_partial_from_another_language_is_not_spliced_into_this_run(tmp_path: 
     assert len({ru, en, flagship}) == 3
     # ...and the identity is still case-insensitive on the path, which is why it is hashed.
     assert ru == menu._resume_key(tmp_path / "LECTURE.txt", language="ru", tier="economy")
+
+
+# --------------------------------------------------------------------------- #
+# TD-33 — what a dropped block's preview actually shows
+# --------------------------------------------------------------------------- #
+def test_a_dropped_block_is_previewed_head_and_tail() -> None:
+    """The head is never why a block was dropped, so previewing only the head is misleading.
+
+    ``chunk.drop_degenerate_blocks`` scores a WHOLE ~60-second block; on the operator's
+    six-file run every dropped block's visible head measured 0.80-1.00 unique words, far
+    above the 0.55 floor, so the repetition is always further in. The operator was shown
+    ordinary speech and told it was filler.
+    """
+    line = "[00:39:38] " + "Real speech that opens the block. " * 3 + "loop loop loop loop"
+    out = menu._dropped_excerpt(line)
+    assert out.startswith("[00:39:38] Real speech")
+    assert out.endswith("loop loop loop loop")
+    assert " ... " in out
+    assert len(out) < len(line)
+
+
+def test_a_short_dropped_block_is_shown_whole() -> None:
+    line = "[00:01:00] да да да да да да"
+    assert menu._dropped_excerpt(line) == line
+
+
+def test_the_dropped_block_report_claims_only_what_was_measured() -> None:
+    """The rule measures repetition. It cannot know a block was silence, and saying so told
+    the operator not to check the one thing worth checking (TD-33)."""
+    ui = StubUI()
+    menu._report_dropped_blocks(ui, ("[00:00:00] " + "a b " * 40,))
+    text = ui.log_text
+    assert "filler" not in text
+    assert "silence" not in text
+    assert "repeats itself" in text

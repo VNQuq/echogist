@@ -954,6 +954,33 @@ def test_synthesize_resumes_complete_partial_runs_reconcile_only() -> None:
     assert result.summary.title == "T"  # reconcile still produced the header
 
 
+def test_an_empty_reconcile_title_is_announced_not_just_substituted() -> None:
+    """Observed on a real run: one file of six was named after its source, the rest were not.
+
+    Falling back to the dated stem is the right recovery — a document must have a name — but
+    the substitution was silent, so a reconcile that came back short is indistinguishable
+    from a naming quirk. CLAUDE.md: fail loud, never a silent skip.
+    """
+    complete = summarize._running_summary(
+        [SynthesisSection("A", "a", ()), SynthesisSection("B", "b", ())], [], [], "en"
+    )
+    loud: list[str] = []
+    result = summarize.synthesize_summary(
+        _two_phases(),
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="Lecture 1",
+        api_key="k",
+        caller=_seq_caller(_outcome({"title": "  ", "core_idea": "c", "main_themes": ["x"]})),
+        log=lambda _m: None,
+        notice=loud.append,
+        resume_from=complete,
+    )
+    assert result.summary.title.startswith("Lecture 1")  # the fallback still applies
+    assert any("no title" in line for line in loud)
+
+
 def test_synthesize_ignores_overlong_partial_and_runs_fresh() -> None:
     # A partial with MORE sections than the plan has phases (len > K — the transcript/K
     # shrank) is genuinely stale and ignored; the run starts fresh.
@@ -1287,6 +1314,43 @@ def test_a_clean_anchor_pass_stays_on_the_quiet_channel() -> None:
         "[00:00:00] a\n[00:10:00] b",
         log=quiet.append,
         notice=loud.append,
+    )
+    assert loud == []
+    assert any("0 dropped" in line for line in quiet)
+
+
+def test_a_phase_that_cites_nothing_goes_to_the_loud_channel() -> None:
+    """Observed three times in one six-file run: a ~30-minute phase emitted zero anchors.
+
+    Zero anchors PASSES "every anchor resolves to a real timecode" vacuously, so the strictest
+    gate in the pipeline stays green over a stretch the operator has no handle on at all. It
+    printed as ``0 exact, 0 snapped, 0 dropped`` in the same muted grey as a clean phase.
+    """
+    quiet: list[str] = []
+    loud: list[str] = []
+    summarize.validate_anchors(
+        _synth_summary(()),
+        "[00:00:00] a\n[00:10:00] b",
+        log=quiet.append,
+        notice=loud.append,
+    )
+    assert quiet == []
+    assert len(loud) == 1
+    assert "0 exact, 0 snapped, 0 dropped" in loud[0]
+    assert "can be checked" in loud[0]
+
+
+def test_a_transcript_with_no_timecodes_to_cite_stays_quiet() -> None:
+    """The complement, and the reason the check is keyed on the transcript's own timecodes.
+
+    A transcript with no parseable timecodes summarizes fine, it just carries no anchors
+    (``synthesize`` refuses only an EMPTY one). Zero anchors there is the correct outcome,
+    not a finding, and warning about it would train the operator to ignore the channel.
+    """
+    quiet: list[str] = []
+    loud: list[str] = []
+    summarize.validate_anchors(
+        _synth_summary(()), "no timecodes at all", log=quiet.append, notice=loud.append
     )
     assert loud == []
     assert any("0 dropped" in line for line in quiet)

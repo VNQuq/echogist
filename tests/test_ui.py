@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 import questionary
 from prompt_toolkit.key_binding import KeyBindings
+from rich.text import Text
 
 from echogist.ui import (
     UI,
@@ -758,6 +759,12 @@ def test_a_rule_carries_the_glyph_tables_character() -> None:
 
     (rendered,) = ui.console.print.call_args.args
     assert rendered.characters == ui.glyphs.rule
+    # TD-32: the line and the file name are styled separately, so the name can carry weight
+    # while the line stays dark. Passing one style name to both is what made the header
+    # indistinguishable from `info`.
+    assert rendered.style == "rule"
+    assert isinstance(rendered.title, Text)
+    assert rendered.title.style == "rule.title"
 
 
 def test_stub_ui_records_rules_and_details() -> None:

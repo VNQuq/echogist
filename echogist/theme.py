@@ -36,9 +36,16 @@ RICH_THEME = Theme(
         "dim": "dim",
         "heading": "bold cyan",
         "banner": "bold cyan",
-        # A run's per-file section header. Same accent as a heading but not bold: it
-        # separates work, it does not announce it.
-        "rule": "cyan",
+        # A run's per-file section header, in TWO styles: the drawn line and the file name
+        # on it. Both sit on a dark steel-blue that no other style uses, so the header
+        # reads as structure rather than as one more line of output — it used to wear the
+        # same bare `cyan` as `info`, which gave it width but no rank, and an hour-old
+        # folder run had to be read line by line to find where a file started (TD-32).
+        # `detail` solved the other half by muting the phase chatter DOWN; this is the
+        # complementary move. The name keeps its weight instead of its brightness: bold on
+        # the same hue stays legible without climbing back up into the conversational range.
+        "rule": "#005f87",
+        "rule.title": "bold #005f87",
         # Sub-steps INSIDE one file's work (the phase-by-phase synthesis lines). A folder
         # run prints ~60 of them and the operator reads none of them line by line — they
         # are there to prove the run is moving and to be scrolled back to when it is not.
