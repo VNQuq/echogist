@@ -1306,3 +1306,77 @@ def test_a_dropped_anchor_goes_to_the_loud_channel() -> None:
     )
     assert quiet == []
     assert any("1 dropped" in line for line in loud)
+
+
+def test_a_dropped_anchor_is_loud_on_the_phase_pass_too() -> None:
+    """The per-phase gate is where anchors are actually dropped, so it owns the notice.
+
+    It used to omit ``notice=``, falling back to the module default ``print`` — straight
+    past the UI seam and into the spinner's repaint. The final pass then always saw a
+    clean summary and reported "0 dropped" on the MUTED channel, so a hallucinated
+    timecode, the one fidelity failure this stage can detect on its own, reached the
+    operator as sixty lines of grey chatter or as nothing at all.
+    """
+    loud: list[str] = []
+    quiet: list[str] = []
+    section = SynthesisSection(
+        heading="H", prose="Пролог [00:44:00] и вывод.", anchors=("[00:00:00]", "[09:99:00]")
+    )
+    summary = Summary(
+        title="T",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        synthesis=(section,),
+    )
+
+    out = summarize.validate_anchors(
+        summary, "[00:00:00] один\n[00:00:30] два\n", log=quiet.append, notice=loud.append
+    )
+
+    assert [line for line in loud if "dropped" in line]
+    assert not [line for line in quiet if "dropped" in line]
+    assert out.synthesis[0].anchors == ("[00:00:00]",)
+    assert "[00:44:00]" not in out.synthesis[0].prose
+
+
+def test_the_title_is_anchor_validated_like_every_other_emitted_line() -> None:
+    """The title is free reconcile prose AND the shared .json/.pdf/.md stem.
+
+    It was the one string ``validate_anchors`` never touched, so an invented timecode in
+    it survived into the document heading and the artifact filename.
+    """
+    summary = Summary(
+        title="Лекция [00:99:00] о деньгах",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        synthesis=(),
+    )
+
+    out = summarize.validate_anchors(summary, "[00:00:00] один\n", log=lambda _s: None)
+
+    assert out.title == "Лекция о деньгах"
+
+
+def test_a_two_field_timecode_cannot_slip_past_the_validator() -> None:
+    """``[12:34]`` is an emitted coordinate the operator will click on.
+
+    The inline pattern required three fields, so a model asked for minute-scale citations
+    wrote a timecode the validator could not even see.
+    """
+    section = SynthesisSection(heading="", prose="Текст [12:34] тут.", anchors=())
+    summary = Summary(
+        title="T",
+        core_idea="",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        synthesis=(section,),
+    )
+
+    out = summarize.validate_anchors(summary, "[00:00:00] один\n", log=lambda _s: None)
+
+    assert out.synthesis[0].prose == "Текст тут."

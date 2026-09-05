@@ -117,3 +117,20 @@ def test_overflow_message_is_human_and_names_numbers() -> None:
     assert f"{result.est_input_tokens:,}" in msg
     assert f"{result.safe_budget:,}" in msg
     assert "saved" in msg.lower()  # reassures the artifact is kept
+
+
+def test_every_non_latin_script_is_rated_above_latin() -> None:
+    """The split was Cyrillic vs everything-else-is-Latin, and Whisper auto-detects.
+
+    Greek, Devanagari, Arabic and Hangul were all rated at the LATIN rate, a 2-3x
+    under-count on the scripts that tokenize worst — in the one direction CLAUDE.md
+    forbids, where the guard lets an over-long transcript through and the gate quotes low.
+    """
+    latin = guard.estimate_input_tokens("a" * 10_000, prompt_overhead=0)
+
+    for text in ("я" * 10_000, "α" * 10_000, "क" * 10_000, "ع" * 10_000, "한" * 10_000):
+        assert guard.estimate_input_tokens(text, prompt_overhead=0) > latin, text
+    # CJK is the dense end and is rated above Cyrillic again.
+    assert guard.estimate_input_tokens(
+        "字" * 10_000, prompt_overhead=0
+    ) > guard.estimate_input_tokens("я" * 10_000, prompt_overhead=0)

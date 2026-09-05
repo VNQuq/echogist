@@ -106,3 +106,33 @@ def test_the_whole_text_being_foreign_is_reported_not_swallowed() -> None:
     findings = alphabet.foreign_findings("催化剂技描", RU)
     assert len(findings) == 1
     assert findings[0].run == "催化剂技描"
+
+
+def test_notation_is_not_a_change_of_writing_system() -> None:
+    """Every one of these is ``isalpha()`` and none is a language slip.
+
+    ``unicodedata.name()``'s first token reads MICRO SIGN as the "micro" script and
+    MATHEMATICAL ITALIC SMALL X as the "mathematical" one. A Russian technical summary
+    produces all of them legitimately, and an instrument that cries at correct text is
+    one the operator learns to scroll past — which costs the CJK detection it exists for.
+    """
+    allowed = frozenset({"cyrillic", "latin", "greek"})
+
+    for text in ("сопротивление 3 Ω", "частота 5 µс", "объём 2 ℓ", "формула 𝑥 = 𝑎", "1ª поправка"):
+        assert alphabet.foreign_findings(text, allowed) == (), text
+
+
+def test_the_measured_defect_is_still_caught_including_a_single_character() -> None:
+    """The three real slips from the operator's own seven lectures.
+
+    One of them is a single Han character inside a Russian word, so no "ignore short
+    runs" rule can be used to quiet the false positives above.
+    """
+    allowed = frozenset({"cyrillic", "latin", "greek"})
+
+    assert [f.run for f in alphabet.foreign_findings("как催化剂для перехода", allowed)] == [
+        "催化剂"
+    ]
+    assert [f.run for f in alphabet.foreign_findings("Преподаватель描написывает", allowed)] == [
+        "描"
+    ]

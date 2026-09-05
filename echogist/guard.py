@@ -31,8 +31,13 @@ from .config import GuardConfig, ModelTier
 # chars/token (~0.25 tok/char); Russian Cyrillic tokenizes to noticeably more
 # tokens/char. Both rates sit ~20% above the measured ratio so the guard errs
 # toward catching an over-long transcript, never under-counting one.
-_TOKENS_PER_CHAR_CYRILLIC = 0.60  # ~1.7 chars/token
+_TOKENS_PER_CHAR_CYRILLIC = 0.60  # ~1.7 chars/token — and every other non-Latin script
 _TOKENS_PER_CHAR_DEFAULT = 0.30  # ~3.3 chars/token
+# CJK is the dense end: a Han/Kana/Hangul codepoint is 3 UTF-8 bytes and tokenizes at
+# roughly 0.6-1 token each, so it is rated above 1 to keep the bias high. Whisper is
+# called with ``language=None`` (transcribe.py) and auto-detects, so a Chinese or Japanese
+# recording is a reachable input even though the operator's material is Russian.
+_TOKENS_PER_CHAR_CJK = 1.20
 
 # Fixed instruction/prompt scaffolding wrapped around the transcript in the single
 # structured SUMMARIZE call. Counted on the input side (plan §4: transcript + prompt).
@@ -51,9 +56,41 @@ _TOKENS_PER_CHAR_DEFAULT = 0.30  # ~3.3 chars/token
 PROMPT_OVERHEAD_TOKENS = 1000
 
 
+# Han, Hiragana/Katakana, Hangul, and the CJK compatibility/extension blocks that matter.
+_CJK_RANGES = (
+    ("぀", "ヿ"),  # Hiragana + Katakana
+    ("㐀", "䶿"),  # CJK Extension A
+    ("一", "鿿"),  # CJK Unified Ideographs
+    ("가", "힯"),  # Hangul Syllables
+    ("豈", "﫿"),  # CJK Compatibility Ideographs
+)
+
+
 def _is_cyrillic(ch: str) -> bool:
     """True for the Cyrillic + Cyrillic Supplement blocks (covers RU, plan §2)."""
     return "Ѐ" <= ch <= "ԯ"
+
+
+def _is_cjk(ch: str) -> bool:
+    """True for the dense CJK blocks, which tokenize at ~1 token per character."""
+    return any(low <= ch <= high for low, high in _CJK_RANGES)
+
+
+def _rate(ch: str, *, cyrillic_rate: float, default_rate: float, cjk_rate: float) -> float:
+    """Tokens per character for one character, always rounding the guess upward.
+
+    Three classes, not two. The old split was Cyrillic vs everything-else-is-Latin, which
+    silently rated Greek, Arabic, Hebrew, Devanagari, Thai, Hangul and Han at the LATIN
+    rate — a 2-3x under-count on exactly the scripts that tokenize worst, in the one
+    direction CLAUDE.md forbids ("estimate Cyrillic high" is the specific case of a
+    general rule). Anything outside ASCII is now rated at least as heavily as Cyrillic;
+    accented Latin is over-estimated by that rule, which is the safe direction.
+    """
+    if _is_cjk(ch):
+        return cjk_rate
+    if ch.isascii():
+        return default_rate
+    return cyrillic_rate
 
 
 def estimate_input_tokens(
@@ -62,17 +99,21 @@ def estimate_input_tokens(
     prompt_overhead: int = PROMPT_OVERHEAD_TOKENS,
     cyrillic_rate: float = _TOKENS_PER_CHAR_CYRILLIC,
     default_rate: float = _TOKENS_PER_CHAR_DEFAULT,
+    cjk_rate: float = _TOKENS_PER_CHAR_CJK,
 ) -> int:
     """Estimate SUMMARIZE input tokens for ``text``, biased high (no network).
 
-    Cyrillic chars are rated higher than the rest, so a Russian transcript always
-    estimates more tokens than a Latin one of the same length. The per-script sum
-    is rounded **up** and the fixed ``prompt_overhead`` added — every rounding goes
-    in the conservative (over-estimate) direction.
+    Three rates, ASCII < non-Latin < CJK, so a Russian transcript always estimates more
+    tokens than a Latin one of the same length and a Chinese one more again. The per-script
+    sum is rounded **up** and the fixed ``prompt_overhead`` added — every rounding goes in
+    the conservative (over-estimate) direction.
     """
-    cyrillic = sum(1 for ch in text if _is_cyrillic(ch))
-    other = len(text) - cyrillic
-    body = math.ceil(cyrillic * cyrillic_rate + other * default_rate)
+    body = math.ceil(
+        sum(
+            _rate(ch, cyrillic_rate=cyrillic_rate, default_rate=default_rate, cjk_rate=cjk_rate)
+            for ch in text
+        )
+    )
     return body + prompt_overhead
 
 

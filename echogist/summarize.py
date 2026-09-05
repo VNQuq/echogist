@@ -84,11 +84,20 @@ _INTERPRETATION_LABELS = {"ru": "интерпретация", "en": "interpretat
 # (:func:`echogist.alphabet.script_of` names). Latin rides along with Cyrillic on purpose:
 # a Russian lecture legitimately says "coach", "MVP", or an English book title, and the
 # rule catches a change of SCRIPT, not a foreign word. An unknown code allows everything
-# — fail-soft, exactly like the two maps above; flagging every character of a language
-# nobody calibrated would be noise, not a finding.
+# — fail-soft; flagging every character of a language nobody calibrated would be noise.
+# Greek rides along with both for the same reason Latin rides along with Cyrillic: in a
+# technical summary α, β, π, Δ, Ω are NOTATION, not a change of writing system, and a
+# Russian physics lecture produces them legitimately. Cyrillic rides along with English
+# because summarizing a Russian lecture in English is a supported setting
+# (``summary_language`` is validated independently of the source), and every faithful
+# quotation of the author's own words would otherwise be a finding. That is a real
+# tradeoff — an EN reply drifting wholesale back into Russian is now invisible — taken
+# deliberately: the measured defect is a CJK morpheme spliced into a word (3x in 7
+# lectures), and an instrument that cries at correct text is one the operator stops
+# reading. See TD-30.
 _ALLOWED_SCRIPTS = {
-    "ru": frozenset({"cyrillic", "latin"}),
-    "en": frozenset({"latin"}),
+    "ru": frozenset({"cyrillic", "latin", "greek"}),
+    "en": frozenset({"latin", "cyrillic", "greek"}),
 }
 
 # How many script findings reach the console before they are counted instead of quoted. A
@@ -887,7 +896,11 @@ def _snap_anchor(anchor: str, valid_by_sec: dict[float, str], window: float) -> 
 # Inline [HH:MM:SS] timecodes the model may weave into prose or the reconcile header. These
 # never pass through the validated ``anchors`` array, so they are snapped/dropped here too —
 # nothing timecoded reaches the operator without resolving to a real transcript block.
-_INLINE_TC_RE = re.compile(r"\[\d{1,2}:\d{2}:\d{2}\]")
+# The optional third field is what makes a two-part ``[MM:SS]`` visible here. It can never
+# RESOLVE (``_tc_seconds`` needs three fields, so it scores inf and is dropped), and that is
+# the point: a model asked for minute-scale citations writes ``[12:34]``, and before this it
+# sailed past the validator into the artifact as a coordinate the operator would click on.
+_INLINE_TC_RE = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?\]")
 
 
 def _make_fixer(
@@ -1024,7 +1037,8 @@ def validate_anchors(
     summary is returned unchanged.
     """
     if not (
-        summary.synthesis
+        summary.title
+        or summary.synthesis
         or summary.decisions
         or summary.action_items
         or summary.core_idea
@@ -1049,6 +1063,7 @@ def validate_anchors(
     )
     decisions = tuple(replace(d, anchor=fix_str(d.anchor)) for d in summary.decisions)
     actions = tuple(replace(a, anchor=fix_str(a.anchor)) for a in summary.action_items)
+    title = strip_inline(summary.title)
     core_idea = strip_inline(summary.core_idea)
     main_themes = tuple(strip_inline(t) for t in summary.main_themes)
     # The essence block is reconcile-written free text like core_idea, so a timecode the
@@ -1065,6 +1080,7 @@ def validate_anchors(
     (notice if stats[2] else log)(line)
     return replace(
         summary,
+        title=title,
         synthesis=sections,
         decisions=decisions,
         action_items=actions,
@@ -1163,6 +1179,13 @@ def synthesize_summary(
     """
     if not phases:
         raise SummarizeError("No transcript phases to synthesize (empty transcript?).")
+    if not any(ph.text.strip() for ph in phases):
+        # ``plan_phases`` hands back one phase holding the whole text when no timecoded
+        # block parses, and blank text parses to no blocks — so a zero-byte transcript
+        # (a silent recording, a truncated write) reached the wire and bought a phase call
+        # plus reconcile to summarize nothing. A transcript with no timecodes but real text
+        # is NOT refused here: it summarizes fine, it just carries no anchors.
+        raise SummarizeError("The transcript is empty; there is nothing to summarize.")
     sections: list[SynthesisSection] = []
     decisions: list[Decision] = []
     actions: list[ActionItem] = []
@@ -1207,6 +1230,7 @@ def synthesize_summary(
             ),
             ph.text,
             log=log,
+            notice=notice,
         )
         sections.append(phase_summary.synthesis[0])
         decisions.extend(phase_summary.decisions)

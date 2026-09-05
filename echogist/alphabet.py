@@ -51,6 +51,36 @@ class Finding:
     context: str
 
 
+# ``unicodedata.name()`` opens with a SCRIPT for a letter of a writing system, but the
+# same first-token rule reads a symbol as one: ``µ`` is MICRO SIGN, ``ℓ`` is SCRIPT SMALL
+# L, ``𝑥`` is MATHEMATICAL ITALIC SMALL X, ``ª`` is FEMININE ORDINAL INDICATOR — all
+# ``isalpha()``, none of them a change of writing system. They are notation, shared by
+# every language exactly like the digits and the em dash this function already excludes,
+# and reporting them as "the model slipped out of the target language" is how an
+# instrument earns the right to be ignored.
+_NOT_A_SCRIPT = frozenset(
+    {
+        "micro",
+        "script",
+        "mathematical",
+        "feminine",
+        "masculine",
+        "ohm",
+        "angstrom",
+        "kelvin",
+        "planck",
+        "estimated",
+        "information",
+        "numero",
+        "turned",
+        "modifier",
+        "double-struck",
+        "black-letter",
+        "unnamed",
+    }
+)
+
+
 @lru_cache(maxsize=4096)
 def script_of(char: str) -> str | None:
     """The writing system ``char`` belongs to, or ``None`` if it belongs to none.
@@ -70,7 +100,8 @@ def script_of(char: str) -> str | None:
         name = unicodedata.name(char)
     except ValueError:  # a letter with no assigned name — report it, do not excuse it
         return "unnamed"
-    return name.split(" ", 1)[0].lower()
+    first = name.split(" ", 1)[0].lower()
+    return None if first in _NOT_A_SCRIPT else first
 
 
 def foreign_findings(text: str, allowed: frozenset[str]) -> tuple[Finding, ...]:
