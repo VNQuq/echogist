@@ -90,7 +90,7 @@ from .folder import Report as FolderReport
 from .model_asset import ProvisionError
 from .render import RenderError
 from .scan import ScanCancelled, ScanResult
-from .summarize import SummarizeError, SummarizeResult
+from .summarize import EmptyPhaseError, SummarizeError, SummarizeResult
 from .transcribe import TranscribeError, Transcript
 from .ui import (
     REVEAL_AUDIO,
@@ -350,6 +350,7 @@ def _run_summary(
     run_date: date | None = None,
     gate: bool = True,
     on_cost: Callable[[cost.CostEstimate], None] | None = None,
+    on_empty_phase: Callable[[Path], None] | None = None,
 ) -> Path | None:
     """GUARD → cost/threshold → the one paid SUMMARIZE call → persist .json → RENDER.
 
@@ -371,6 +372,11 @@ def _run_summary(
     ``on_cost`` receives the AUDITED cost of the call that just landed, so a folder run
     can total real spend against the one quote it showed. Mirrors the ``on_phase`` seam:
     the caller decides what to do with it, this function only reports.
+
+    ``on_empty_phase`` receives this source when the file stopped on an empty phase
+    (TD-34) and nothing else. This function never asks about a retry itself: one file is
+    one attempt here, and the question belongs to whoever owns the CYCLE — the folder run
+    asks once for every file it lost, after its report, not mid-run.
     """
     ui = _ui(deps)
     tier = model_config.tier(settings.model_tier)  # ConfigError (F5) → loop backstop
@@ -514,6 +520,8 @@ def _run_summary(
         except SummarizeError as exc:  # F2 / F4 / F5 — message carried by the stage
             sp.done(ok=False, message="Summarization failed")
             ui.error(str(exc))
+            if isinstance(exc, EmptyPhaseError) and on_empty_phase is not None:
+                on_empty_phase(source_path)
             return None
         sp.done(ok=True, message="Summary received")
 
@@ -554,6 +562,59 @@ def _run_summary(
     # still ends on the summaries folder, not audio.
     ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
     return out_path
+
+
+def _confirm_retry(ui: UI, count: int) -> bool:
+    """The one question about an empty phase, asked AFTER the cycle, never during it.
+
+    An empty phase is intermittent (TD-34: the phase that came back empty in run 3 was fine
+    on the re-run), the phases already synthesized are on disk, and the transcript is the
+    checkpoint — so a retry costs the missing phase and nothing else, and that is the whole
+    reason it is worth one question instead of a trip back through the menu. Default No: it
+    is still a paid call, and the operator may want to look at the transcript first.
+    """
+    files = "file" if count == 1 else "files"
+    return ui.confirm(
+        f"{count} {files} stopped on an empty phase. Retry from the saved transcript? "
+        "Only the missing phase is paid for again.",
+        default=False,
+    )
+
+
+def _run_summary_with_retry(
+    deps: Deps,
+    settings: Settings,
+    model_config: config.ModelConfig,
+    transcript_text: str,
+    source_path: Path,
+    source_stem: str,
+    *,
+    fingerprint: str | None,
+) -> None:
+    """One file's whole summarize cycle: the run, then the empty-phase retry question.
+
+    The single-file mirror of what ``_flow_run`` does for a folder. At most ONE retry —
+    the offer exists because the failure is intermittent, and a second empty phase on the
+    same file is a reason to go look at the transcript, not to keep buying calls.
+    """
+    ui = _ui(deps)
+    stopped: list[Path] = []
+
+    def attempt(on_empty_phase: Callable[[Path], None] | None) -> None:
+        _run_summary(
+            deps,
+            settings,
+            model_config,
+            transcript_text,
+            source_path,
+            source_stem,
+            fingerprint=fingerprint,
+            on_empty_phase=on_empty_phase,
+        )
+
+    attempt(stopped.append)
+    if stopped and _confirm_retry(ui, len(stopped)):
+        attempt(None)
 
 
 def _transcribe_to_checkpoint(
@@ -748,7 +809,9 @@ def _flow_local_file(deps: Deps) -> None:
         # the original TD-14 bug where a Summary popped transcripts).
         ui.reveal_dir(paths.transcripts(deps.base), priority=REVEAL_TRANSCRIPT)
         return
-    _run_summary(deps, settings, model_config, text, source, source.stem, fingerprint=fingerprint)
+    _run_summary_with_retry(
+        deps, settings, model_config, text, source, source.stem, fingerprint=fingerprint
+    )
 
 
 def _selection_bytes(sources: Sequence[Path]) -> int:
@@ -952,7 +1015,7 @@ def _flow_saved_transcript(deps: Deps) -> None:
     # bought through the recovery flow joins exactly like one bought from the media file.
     # It used to be stamped with the .txt's own path, which no folder run could match —
     # the lecture was then re-transcribed and re-summarized, paid twice.
-    _run_summary(
+    _run_summary_with_retry(
         deps,
         settings,
         model_config,
@@ -1338,6 +1401,9 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
     # file that fails after partial spend appends nothing, so position stops matching the
     # file it belongs to the moment anything goes wrong.
     spent: dict[Path, cost.CostEstimate] = {}
+    # TD-34 losses only. Every other failure needs the operator to change something before
+    # a re-run makes sense, so it gets no offer; an empty phase is intermittent and resumes.
+    stopped_empty: list[Path] = []
     started = monotonic()
     # ONE date for the whole run, taken here rather than per file: a folder run is hours
     # long (the real ones have gone 18h), so a run started before midnight would name its
@@ -1360,6 +1426,7 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
             run_date=run_date,
             gate=False,
             on_cost=_record,
+            on_empty_phase=stopped_empty.append,
         )
         if out is None:
             raise _StageFailed(f"{source.name} produced no summary (see the message above)")
@@ -1400,7 +1467,46 @@ def _flow_run(deps: Deps, root: Path | None = None, *, summarize_after: bool = T
         quoted=estimate,
         elapsed=monotonic() - started,
     )
-    if summarized.done:
+    done = summarized.done
+    # The empty-phase question, once, with the whole run's outcome already on screen.
+    # Asking at the failure would be the per-file babysitting this flow exists to remove —
+    # an 18-hour run would sit on a y/N for hours. The retry is a second pass over just the
+    # files that were lost: it re-enters ``_run_summary``, which reloads each one's saved
+    # partial and re-pays only the phase that came back empty. One pass, no loop.
+    if stopped_empty and _confirm_retry(ui, len(stopped_empty)):
+        retry_sources = tuple(stopped_empty)
+        stopped_empty.clear()  # a second empty phase is not re-asked; go read the transcript
+        retry_started = monotonic()
+        # The retry reports its OWN prices, not the run's running total: its table lists one
+        # or two files, and a whole-run "Actually spent" under them reads as what the retry
+        # just cost. The first report already closed the transaction the gate opened.
+        try:
+            retried = folder.run_phase(
+                retry_sources,
+                _summarize_step,
+                on_start=_announce,
+                recoverable=(_StageFailed, OSError),
+            )
+        except FolderCancelled as exc:
+            _report_run(
+                ui,
+                exc.report,
+                stage="Retried",
+                cancelled=True,
+                spent={src: spent[src] for src in retry_sources if src in spent},
+                elapsed=monotonic() - retry_started,
+            )
+            return
+        _report_run(
+            ui,
+            retried,
+            stage="Retried",
+            cancelled=False,
+            spent={src: spent[src] for src in retry_sources if src in spent},
+            elapsed=monotonic() - retry_started,
+        )
+        done += retried.done
+    if done:
         ui.reveal_dir(summaries_dir, priority=REVEAL_SUMMARY)
 
 

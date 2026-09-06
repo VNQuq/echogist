@@ -1031,6 +1031,9 @@ def test_an_empty_phase_fails_the_run_loud() -> None:
             notice=lambda _m: None,
         )
     assert "Phase 2/2" in str(exc.value) and "empty" in str(exc.value)
+    # Its OWN type: the menu offers a retry for this failure and for no other, because it
+    # is the only one that is intermittent and resumes from the phases already on disk.
+    assert isinstance(exc.value, summarize.EmptyPhaseError)
     # It stops BEFORE reconcile — the second call is the empty phase, there is no third.
     assert len(caller.requests) == 2  # type: ignore[attr-defined]
 

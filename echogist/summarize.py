@@ -132,6 +132,17 @@ class SummarizeError(Exception):
     """
 
 
+class EmptyPhaseError(SummarizeError):
+    """A paid phase call answered with no prose (TD-34).
+
+    Its own type, not a bare :class:`SummarizeError`, because it is the ONE summarize
+    failure that is worth retrying as-is: it is intermittent, the phases already done are
+    on disk, and a retry from the saved transcript re-pays only this phase. The menu
+    offers that retry once, after the cycle; every other failure needs the operator to
+    change something first (a key, a config number, a transcript) and gets no offer.
+    """
+
+
 # --------------------------------------------------------------------------- #
 # Pure in-memory model
 # --------------------------------------------------------------------------- #
@@ -1324,7 +1335,7 @@ def synthesize_summary(
             # notice can only name one. The phases already done were persisted by
             # ``on_phase``, so a retry from the saved transcript resumes and re-pays only
             # this one.
-            raise SummarizeError(
+            raise EmptyPhaseError(
                 f"Phase {ph.index}/{ph.total} ({ph.span}) came back empty, so that stretch "
                 "of the recording would be missing from the document. Retry from the saved "
                 "transcript — the phases already synthesized are not paid for again."

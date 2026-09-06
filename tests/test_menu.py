@@ -31,7 +31,13 @@ import pytest
 from echogist import config, extract, folder, menu, naming, paths, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
-from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
+from echogist.summarize import (
+    EmptyPhaseError,
+    SummarizeError,
+    SummarizeResult,
+    Summary,
+    SynthesisSection,
+)
 from echogist.transcribe import Segment, TranscribeError, Transcript
 from echogist.ui import (
     REVEAL_AUDIO,
@@ -69,6 +75,7 @@ def _make_deps(
     api_key: str | None = "sk-test",
     render_error: bool = False,
     summarize_error: str | None = None,
+    empty_phase_calls: int = 0,
     extract_error: bool = False,
     extract_oserror: bool = False,
     convert_many: Any = None,
@@ -110,6 +117,11 @@ def _make_deps(
         calls["summarize"] += 1
         if summarize_error is not None:
             raise SummarizeError(summarize_error)
+        if calls["summarize"] <= empty_phase_calls:
+            # TD-34: a paid phase came back with no prose. Its own type, because it is the
+            # one failure the menu offers to retry — the stub has to raise the real one or
+            # the offer never fires.
+            raise EmptyPhaseError("Phase 2/2 (00:30:00-01:00:00) came back empty")
         # The real stage narrates each phase through `log`; mirror that so a test can see
         # what the operator would have been told while the call was in flight. ``notice``
         # is taken EXPLICITLY, not through **_kw: SummarizeFn is Callable[..., ...], so an
@@ -2339,3 +2351,139 @@ def test_the_dropped_block_report_claims_only_what_was_measured() -> None:
     assert "filler" not in text
     assert "silence" not in text
     assert "repeats itself" in text
+
+
+# --------------------------------------------------------------------------- #
+# The empty-phase retry question (TD-34, after the cycle)
+# --------------------------------------------------------------------------- #
+def _retry_prompts(stub: StubUI) -> list[str]:
+    return [text for level, text in stub.messages if level == "confirm" and "empty phase" in text]
+
+
+def test_an_empty_phase_offers_one_retry_and_it_lands(tmp_path: Path) -> None:
+    """The offer exists because the failure is intermittent and resumes: run 3's empty
+    phase came back full on the re-run, and the phases already synthesized are on disk, so
+    the retry re-pays one call. Without it the operator walks back through the menu, picks
+    the transcript out of a list, and re-answers the gate to do exactly this."""
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "transcript", "0", True, "exit"], empty_phase_calls=1
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert _retry_prompts(stub) == [
+        "1 file stopped on an empty phase. Retry from the saved transcript? "
+        "Only the missing phase is paid for again."
+    ]
+    assert calls["summarize"] == 2
+    assert "Done — summary written to" in stub.log_text
+
+
+def test_the_retry_question_comes_after_the_failure_is_reported(tmp_path: Path) -> None:
+    """After the cycle, never inside it: the operator answers with the outcome on screen."""
+    _seed_transcript(tmp_path)
+    deps, stub, _ = _make_deps(
+        tmp_path, ["single", "transcript", "0", False, "exit"], empty_phase_calls=1
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    failure = next(i for i, (_lvl, t) in enumerate(stub.messages) if "came back empty" in t)
+    question = next(
+        i for i, (lvl, t) in enumerate(stub.messages) if lvl == "confirm" and "empty phase" in t
+    )
+    assert failure < question
+
+
+def test_declining_the_retry_costs_nothing_more(tmp_path: Path) -> None:
+    """Default No — it is still a paid call, and the transcript may be the real problem."""
+    _seed_transcript(tmp_path)
+    deps, _stub, calls = _make_deps(
+        tmp_path, ["single", "transcript", "0", False, "exit"], empty_phase_calls=1
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert calls["summarize"] == 1
+
+
+def test_a_second_empty_phase_is_not_offered_again(tmp_path: Path) -> None:
+    """One retry, not a loop. Twice empty is a reason to go read the transcript."""
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "transcript", "0", True, "exit"], empty_phase_calls=2
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert len(_retry_prompts(stub)) == 1
+    assert calls["summarize"] == 2
+
+
+def test_an_ordinary_summarize_failure_is_never_offered_a_retry(tmp_path: Path) -> None:
+    """A missing key or a blown output cap needs the operator to change something first;
+    re-running it unchanged would just buy the same failure again."""
+    _seed_transcript(tmp_path)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["single", "transcript", "0", "exit"], summarize_error="overloaded"
+    )
+
+    assert menu.run_menu(deps) == 0
+
+    assert _retry_prompts(stub) == []
+    assert calls["summarize"] == 1
+
+
+def test_the_folder_run_asks_once_after_its_report_and_retries_only_what_it_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The question is the folder run's LAST beat, not a per-file pause: an 18-hour run
+    would sit on a y/N for hours, which is the babysitting this flow exists to remove. The
+    retry is a second pass over the lost file alone — the six that landed are not re-paid."""
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    for name in ("a.mp4", "b.mp4"):
+        _lecture(library, name)
+    deps, stub, calls = _make_deps(
+        tmp_path, ["folder", str(library), "summary", False, True, True, "exit"]
+    )
+    real = deps.summarize
+    burned: set[str] = set()
+
+    def flaky(text: str, tier: Any, cfg: Any, *, source_stem: str, **kw: Any) -> SummarizeResult:
+        if source_stem == "b" and source_stem not in burned:
+            burned.add(source_stem)
+            raise EmptyPhaseError("Phase 2/2 (00:30:00-01:00:00) came back empty")
+        return real(text, tier, cfg, source_stem=source_stem, **kw)
+
+    deps = replace(deps, summarize=flaky)
+
+    assert menu.run_menu(deps) == 0
+
+    assert len(_retry_prompts(stub)) == 1
+    report = stub.log_text.index("Summarized — result")
+    question = stub.log_text.index("stopped on an empty phase")
+    assert report < question, "the run reports first, then asks"
+    assert calls["summarize"] == 2, "a landed and b landed on the retry; a is not re-paid"
+    assert "Retried — result" in stub.log_text
+    # The retry's totals describe the RETRY. Carrying the run's running total under a
+    # one-row table reads as what the retry just cost, which is the one number in this
+    # flow the operator acts on.
+    retry_table = stub.log_text[stub.log_text.index("Retried — result") :]
+    assert "a.mp4" not in retry_table, "the file that landed the first time is not re-listed"
+    assert "b.mp4" in retry_table
+
+
+def test_the_folder_run_says_nothing_when_no_file_stopped_on_an_empty_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _offline_scan(monkeypatch)
+    library = tmp_path / "library"
+    _lecture(library, "one.mp4")
+    deps, stub, _ = _make_deps(tmp_path, ["folder", str(library), "summary", False, True, "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert _retry_prompts(stub) == []
+    assert "Retried — result" not in stub.log_text
