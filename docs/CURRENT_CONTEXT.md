@@ -1,13 +1,14 @@
 # Current Context
 
-**Updated:** 2026-09-06 · **v3.0.0 released** (TD-31 + TD-27 artifact-format breaks). It shipped
-with TD-34 + TD-35 (HIGH) and TD-36 (MEDIUM) open on the operator's call; **the next day, on
-`main` and unreleased, five debts closed** — TD-34, TD-35, TD-30, TD-29b and TD-36's announce
-half (`5539ee9`, `c058d76`, this one). Calibration: run 1 (7 RU lectures, Haiku, **$2.4003**)
-seeded the cost model; run 2 (`КУРС2025`, 6 lectures, **balanced**, **$3.7246**) closed
-TD-31 + TD-33 off its 13 transcripts; **run 3** (same 6, 18h18m, first 3.0 run, **$4.4634**) is
-the clean unstitched measurement — 0 CJK slips, 0 undrawable chars, 6/6 transcripts reused by
-fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
+**Updated:** 2026-09-06 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`). v3.0.0 shipped the same
+day carrying TD-31's and TD-27's artifact-format breaks, with TD-34 + TD-35 (HIGH) and TD-36
+(MEDIUM) open on the operator's call; **3.1.0 is the answer to its own first real run** — TD-34,
+TD-35, TD-30, TD-29b and TD-36's announce half, MINOR because no artifact format moved.
+Calibration, four runs: run 1 (7 RU lectures, Haiku, **$2.4003**) seeded the cost model; run 2
+(`КУРС2025`, 6 lectures, **balanced**, **$3.7246**) closed TD-31 + TD-33; **run 3** (same 6,
+18h18m, first 3.0 run, **$4.4634**) is the clean unstitched measurement — 0 CJK slips, 6/6
+transcripts reused by fingerprint, 1 loop block dropped where the old rule dropped 39 per 13
+files; run 4 (3.1 build) skipped 6/6 and spent **$0**.
 **Authority:** [CLAUDE.md](../CLAUDE.md); TECHNICAL_DEBT TD-16 for the v2 rule's validation.
 **Max: ~88 lines** — only what the code and the CHANGELOG cannot. Cut, don't append.
 
@@ -28,7 +29,8 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
 - **The script check has TWO halves** ([design](./designs/script-check.md)): `foreign_findings`
   asks "is this script used here at all", `script_shares` "what SHARE is not the primary one"
   (TD-30) — the first cannot see a wholesale switch, since `en` allows Cyrillic so quotations stay
-  silent. 0.25 is MEASURED: run 3's six documents sit at 0.0013-0.0088. Notation is not a script.
+  silent. 0.25 is MEASURED from BOTH sides: run 3's six RU documents sit at 0.0013-0.0088, the
+  first real EN-over-RU document at 0.0042. Notation is not a script.
 - **One module, two engines** (`folder.py`): `convert_many` = parallel pool, `run_phase` =
   strictly sequential. **Do not push the run through the pool** — the gate must price a whole
   folder. Its plan is SORTED, not `os.walk` order. **The walk prunes `output` from `dirnames` and
@@ -75,15 +77,13 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
 
 ## Next
 
-1. **TD-36 is the only debt left with work in it, and the size hypothesis is dead.** The 7th
-   document (lecture 1 alone, EN) lost its title on a reconcile input of ~21.5k tokens, SMALLER
-   than all six of run 3 (25.3k-33.3k). Title-drop rate 3 of 7. The live lead: lecture 1 kept its
-   title in RU and lost it in EN, same material, so vary the LANGUAGE next, not the length.
-2. **What is verified and needs no repeat.** Skip join: 6/6 skipped, $0 (2026-09-06, run 4).
-   `win-smoke.bat`: PASS on Windows with a 40s clip at `tests/fixtures/audio/smoke.mp3` (gitignored,
-   cut from lecture 3), so the killswitch gate is runnable again. TD-34 did NOT recur — the phase
-   that came back empty in run 3 (02:40:57-03:05:34) is the LONGEST of the seven here, so it is
-   intermittent, as recorded.
-3. TD-29c stays open on its own trigger (a second committer), declined 2026-09-06. Streaming; 1b.
-   **The Windows tree checks out CRLF with `core.autocrlf` unset**, so all 40 tracked text files
-   read as modified there; `git -c core.autocrlf=true status` proves it is only line endings.
+1. **TD-36 is the only debt with work in it, deferred by the operator 2026-09-06, and the size
+   hypothesis is already dead.** The 7th document (lecture 1 alone, EN) lost its title on a
+   reconcile input of ~21.5k tokens, SMALLER than all six of run 3 (25.3k-33.3k). Title-drop rate
+   3 of 7. The live lead: lecture 1 kept its title in RU and lost it in EN, same material — so the
+   next experiment varies the LANGUAGE, not the length, and it is one ~$0.80 re-summarize.
+2. **Verified on 3.1.0's own build, needs no repeat.** Skip join: 6/6 skipped, $0 (run 4).
+   `win-smoke.bat`: PASS off a 40s clip at `tests/fixtures/audio/smoke.mp3` (gitignored, cut from
+   lecture 3), so the killswitch gate no longer leans on a paid run. TD-34 did NOT recur: the phase
+   that came back empty in run 3 (02:40:57-03:05:34) is the LONGEST of the seven here.
+3. TD-29c stays open on its own trigger, a second committer. Streaming; 1b.
