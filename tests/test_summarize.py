@@ -1006,6 +1006,130 @@ def test_an_empty_reconcile_title_is_announced_not_just_substituted() -> None:
     assert any("no title" in line for line in loud)
 
 
+def test_an_empty_phase_fails_the_run_loud() -> None:
+    """TD-34: a paid phase came back ``{"heading": "", "prose": "", "anchors": []}``.
+
+    Observed on run 3, file 1, phase 7/7: the last 25 minutes of a 3h05m lecture were
+    absent from the document and the run still reported success. The zero-anchor notice
+    fired but told the operator to go READ prose that does not exist. Coverage (fidelity
+    property 5) is the acceptance criterion, so an empty phase stops the file.
+    """
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "First idea.", anchors=["[00:00:00]"])),
+        _outcome(_phase_ti("", "   ", anchors=[])),
+    )
+    with pytest.raises(summarize.SummarizeError) as exc:
+        summarize.synthesize_summary(
+            _two_phases(),
+            _tier(),
+            _cfg(),
+            language="en",
+            source_stem="lecture",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+            notice=lambda _m: None,
+        )
+    assert "Phase 2/2" in str(exc.value) and "empty" in str(exc.value)
+    # It stops BEFORE reconcile — the second call is the empty phase, there is no third.
+    assert len(caller.requests) == 2  # type: ignore[attr-defined]
+
+
+def test_an_empty_phase_keeps_the_phases_already_paid_for() -> None:
+    # The failure must not cost the phases already synthesized: ``on_phase`` fired for
+    # phase 1, so a retry from the saved transcript resumes and re-pays only phase 2.
+    partials: list[Summary] = []
+    caller = _seq_caller(
+        _outcome(_phase_ti("Intro", "First idea.", anchors=["[00:00:00]"])),
+        _outcome(_phase_ti("Body", "")),
+    )
+    with pytest.raises(summarize.SummarizeError):
+        summarize.synthesize_summary(
+            _two_phases(),
+            _tier(),
+            _cfg(),
+            language="en",
+            source_stem="lecture",
+            api_key="k",
+            caller=caller,
+            log=lambda _m: None,
+            notice=lambda _m: None,
+            on_phase=partials.append,
+        )
+    assert [sec.heading for sec in partials[-1].synthesis] == ["Intro"]
+
+
+@pytest.mark.parametrize(
+    ("field", "reply", "expected"),
+    [
+        ("core_idea", {"title": "T", "core_idea": "  ", "main_skill": "s"}, "core idea"),
+        ("main_skill", {"title": "T", "core_idea": "c", "main_skill": ""}, "key skill"),
+        (
+            "test_questions",
+            {"title": "T", "core_idea": "c", "main_skill": "s"},
+            "self-check questions",
+        ),
+    ],
+)
+def test_an_empty_essence_field_is_announced(
+    field: str, reply: dict[str, Any], expected: str
+) -> None:
+    """TD-36: file 2 of run 3 shipped with главный навык blank and nothing said so.
+
+    CLAUDE.md defines the essence block as главная мысль / главный навык / 3 проверочных
+    вопроса. An empty title was already announced; an empty block field was announced on
+    neither channel while the run reported success. A notice, not a failure — every phase's
+    prose is intact, only the one reconcile call came back short.
+    """
+    complete = summarize._running_summary(
+        [SynthesisSection("A", "a", ()), SynthesisSection("B", "b", ())], [], [], "en"
+    )
+    loud: list[str] = []
+    summarize.synthesize_summary(
+        _two_phases(),
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="Lecture 1",
+        api_key="k",
+        caller=_seq_caller(_outcome(reply)),
+        log=lambda _m: None,
+        notice=loud.append,
+        resume_from=complete,
+    )
+    assert any(expected in line for line in loud), (field, loud)
+
+
+def test_a_complete_essence_block_is_not_announced() -> None:
+    # The counterpart: a reconcile that returned every field says nothing about the block.
+    # (The zero-anchor line still fires — these stub sections cite nothing — which is why
+    # this asserts on the essence wording rather than on an empty notice list.)
+    complete = summarize._running_summary(
+        [SynthesisSection("A", "a", ()), SynthesisSection("B", "b", ())], [], [], "en"
+    )
+    loud: list[str] = []
+    summarize.synthesize_summary(
+        _two_phases(),
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="Lecture 1",
+        api_key="k",
+        caller=_seq_caller(
+            _outcome(
+                _reconcile_ti(
+                    main_skill="Ask before building.",
+                    test_questions=[{"question": "q?", "answer": "a"}],
+                )
+            )
+        ),
+        log=lambda _m: None,
+        notice=loud.append,
+        resume_from=complete,
+    )
+    assert not any("essence block is incomplete" in line for line in loud), loud
+
+
 def test_synthesize_ignores_overlong_partial_and_runs_fresh() -> None:
     # A partial with MORE sections than the plan has phases (len > K — the transcript/K
     # shrank) is genuinely stale and ignored; the run starts fresh.

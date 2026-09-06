@@ -52,11 +52,17 @@ model_id = "claude-sonnet-5"
 context_window = 1000000
 price_in_per_mtok = 3.0
 price_out_per_mtok = 15.0
-# Measured on the validated 2026-06-27 full-coverage 3h RU run (K=4, 5 calls): 18,382
-# output over 82,599 input = 0.2225. Sonnet writes noticeably less prose than Haiku over
-# the same material, which is exactly why this knob is per-tier and not global. n=1 file,
-# so the margin here is wider (~8%) than economy's.
-output_per_input_ratio = 0.24
+# RE-SEEDED 2026-09-06 from the third `КУРС2025` run (6 lectures, 18h18m, 46 calls),
+# the first clean unstitched whole-course measurement on this tier: 177,367 output over
+# 600,963 input = 0.29513 aggregate, per file 0.2828-0.3008 (a 0.018 spread). Run 2's five
+# clean files said 0.2805, so two independent aggregates exist and the trend is upward.
+# The old 0.24 was an n=1 June guess and made the run-3 gate quote $3.9616 against a
+# $4.4634 bill — 0.89x, UNDER (TD-35). The input leg needs no margin (it is read off the
+# real transcripts and landed 0.9987x), so this one number carries the whole bias.
+# Seeded above the +5% rule (which gives 0.31, only 1.03x) so a SINGLE file at the highest
+# ratio ever measured — 0.3171 on run 2 — is still quoted over, not under: 0.33 quotes
+# 1.07x the run-3 bill, the same margin economy carries.
+output_per_input_ratio = 0.33
 # scripts/check-models.py sets this true on a generation bump; a human clears it
 # after verifying the prices above against the Anthropic pricing page. While true,
 # the summarize flow prints a one-time non-blocking notice (it never blocks the run

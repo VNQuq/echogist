@@ -1199,8 +1199,11 @@ def synthesize_summary(
     validated against THAT phase's own transcript timecodes as it lands (a strict per-phase
     gate); the per-phase decisions/actions are then concatenated (phases are non-overlapping,
     so there is nothing to dedup — collapsing same-worded distinct points would violate
-    fidelity property #4). A truncated reply on ANY call fails loud, naming the phase; the
-    transcript is already saved.
+    fidelity property #4). A truncated reply on ANY call fails loud, naming the phase, and so
+    does a phase whose ``prose`` comes back EMPTY (TD-34) — that is a stretch of the recording
+    going missing under a run that reports success. An empty essence field is announced on
+    ``notice`` instead (TD-36): the phase prose is intact, only the one reconcile call is
+    short. The transcript is already saved in either case.
 
     **Artifact-resume (decision #2).** ``on_phase`` (if given) fires after each phase with
     the running partial Summary — the menu persists it. ``resume_from`` (a previously
@@ -1251,6 +1254,22 @@ def synthesize_summary(
                 "max_output_tokens (or lower phase_target_tokens) in models.toml, then "
                 "retry from the saved transcript."
             )
+        section = _synthesis_section(outcome.tool_input)
+        if not section.prose:
+            # TD-34: the call answered, was paid for, and carried no prose — so this phase's
+            # stretch of the recording is simply ABSENT from the document while the run
+            # reports success. That is the silent skip CLAUDE.md forbids and it breaks
+            # fidelity property (5), coverage. Fail loud here rather than widen the
+            # zero-anchor notice: no anchors has two causes with two different operator
+            # actions (uncited prose — go read it; NO prose — go re-run the phase) and the
+            # notice can only name one. The phases already done were persisted by
+            # ``on_phase``, so a retry from the saved transcript resumes and re-pays only
+            # this one.
+            raise SummarizeError(
+                f"Phase {ph.index}/{ph.total} ({ph.span}) came back empty, so that stretch "
+                "of the recording would be missing from the document. Retry from the saved "
+                "transcript — the phases already synthesized are not paid for again."
+            )
         # #4: validate THIS phase's anchors against THIS phase's own timecodes. A phase
         # that cites a timecode resolving only to some OTHER phase's block is hallucinating,
         # not citing — per-phase (not whole-transcript) is the strict gate. Inline [HH:MM:SS]
@@ -1262,7 +1281,7 @@ def synthesize_summary(
                 decisions=_decisions(outcome.tool_input.get("decisions")),
                 action_items=_action_items(outcome.tool_input.get("action_items")),
                 language=language,
-                synthesis=(_synthesis_section(outcome.tool_input),),
+                synthesis=(section,),
             ),
             ph.text,
             log=log,
@@ -1304,6 +1323,20 @@ def synthesize_summary(
         # sibling in the same run carries a real title, so it reads as a naming quirk rather
         # than a call that came back short.
         notice("Reconcile returned no title; naming the document after the source file.")
+    # TD-36: the essence block — главная мысль / главный навык / 3 проверочных вопроса — is
+    # what this document is FOR, and reconcile drops fields intermittently at this document
+    # size. An empty title already says so on ``notice``; an empty block field said nothing
+    # on either channel and shipped blank under a run that reported success. Announce each
+    # one. A notice, not a failure: every phase's prose (the graded material, K paid calls)
+    # is intact, so re-running the one reconcile call is the operator's call to make against
+    # the saved transcript.
+    for _field, _missing in (
+        ("core idea", not core_idea),
+        ("key skill", not main_skill),
+        ("self-check questions", not test_questions),
+    ):
+        if _missing:
+            notice(f"Reconcile returned no {_field}; the essence block is incomplete.")
     summary = Summary(
         title=title or _fallback_title(source_stem),
         core_idea=core_idea,
