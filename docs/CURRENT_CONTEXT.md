@@ -1,14 +1,13 @@
 # Current Context
 
-**Updated:** 2026-09-06 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`). v3.0.0 shipped the same
-day carrying TD-31's and TD-27's artifact-format breaks, with TD-34 + TD-35 (HIGH) and TD-36
-(MEDIUM) open on the operator's call; **3.1.0 is the answer to its own first real run** — TD-34,
-TD-35, TD-30, TD-29b and TD-36's announce half, MINOR because no artifact format moved.
+**Updated:** 2026-09-06 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`), and `main` has since
+moved past it: the empty-phase failure now ends in an offer to retry (`9ccdf47`, unreleased).
+3.1.0 is the answer to its own first real run — TD-34, TD-35, TD-30, TD-29b and TD-36's announce
+half, MINOR because no artifact format moved; 3.0.0 carried TD-31's and TD-27's format breaks.
 Calibration, four runs: run 1 (7 RU lectures, Haiku, **$2.4003**) seeded the cost model; run 2
-(`КУРС2025`, 6 lectures, **balanced**, **$3.7246**) closed TD-31 + TD-33; **run 3** (same 6,
-18h18m, first 3.0 run, **$4.4634**) is the clean unstitched measurement — 0 CJK slips, 6/6
-transcripts reused by fingerprint, 1 loop block dropped where the old rule dropped 39 per 13
-files; run 4 (3.1 build) skipped 6/6 and spent **$0**.
+(`КУРС2025`, 6, **balanced**, **$3.7246**) closed TD-31 + TD-33; **run 3** (same 6, 18h18m,
+first 3.0 run, **$4.4634**) is the clean measurement — 0 CJK slips, 6/6 transcripts reused by
+fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files; run 4 spent **$0**.
 **Authority:** [CLAUDE.md](../CLAUDE.md); TECHNICAL_DEBT TD-16 for the v2 rule's validation.
 **Max: ~88 lines** — only what the code and the CHANGELOG cannot. Cut, don't append.
 
@@ -63,7 +62,11 @@ files; run 4 (3.1 build) skipped 6/6 and spent **$0**.
   paid call whose stretch of the recording would go missing, so it FAILS the file loud (TD-34,
   costing one file — `folder.run_phase` carries on and `on_phase` already persisted the rest);
   an empty title or essence field is one short reconcile call over intact prose, so it is a
-  `notice` and the run finishes (TD-36).
+  `notice` and the run finishes (TD-36). **The failure then ends in ONE question, AFTER the
+  cycle** — at the failure an 18h run would sit on a y/N for hours. Scoped by TYPE
+  (`EmptyPhaseError`, a `SummarizeError` subclass so `_RECOVERABLE` is unchanged), never by
+  message text; **default YES**, alone among the paid gates; asked once, retries only the lost
+  files, and its report prices the retry, not the run.
 - **Cost model** projects output as `ratio x that call's input`. The input leg is near-exact over
   a whole folder (0.9987x) but runs ~1.10x on ONE file, so the output ratio carries most, not all,
   of the bias. **Re-seed a tier from its own "Actual cost" line: output/input, +~5%.** economy
@@ -82,8 +85,7 @@ files; run 4 (3.1 build) skipped 6/6 and spent **$0**.
    reconcile input of ~21.5k tokens, SMALLER than all six of run 3 (25.3k-33.3k). Title-drop rate
    3 of 7. The live lead: lecture 1 kept its title in RU and lost it in EN, same material — so the
    next experiment varies the LANGUAGE, not the length, and it is one ~$0.80 re-summarize.
-2. **Verified on 3.1.0's own build, needs no repeat.** Skip join: 6/6 skipped, $0 (run 4).
-   `win-smoke.bat`: PASS off a 40s clip at `tests/fixtures/audio/smoke.mp3` (gitignored, cut from
-   lecture 3), so the killswitch gate no longer leans on a paid run. TD-34 did NOT recur: the phase
-   that came back empty in run 3 (02:40:57-03:05:34) is the LONGEST of the seven here.
+2. **Verified on 3.1.0's build, no repeat needed.** Skip join 6/6 at $0; `win-smoke.bat` PASS off
+   `tests/fixtures/audio/smoke.mp3` (gitignored, 40s of lecture 3) — the killswitch gate no longer
+   leans on a paid run. TD-34 did not recur, and its phase is the LONGEST of the seven.
 3. TD-29c stays open on its own trigger, a second committer. Streaming; 1b.

@@ -102,8 +102,15 @@ implementation, `docs/TECHNICAL_DEBT.md` for active debt.
 
 ## State Update Protocol
 
+`docs/CURRENT_CONTEXT.md` is **owned by the assistant** (operator instruction, 2026-09-06).
+Write it, trim it, and keep it true without asking. Never put a question about its contents,
+its shape or its status to the operator — not "may I update it", not "is this still current",
+not "which line should go". If a fact in it turns out to be wrong, fix it; if the ~88-line cap
+forces a choice, make the choice and cut. The operator still edits it whenever they want, and
+their version wins.
+
 Upon task completion, before closing:
-- Propose an update to `docs/CURRENT_CONTEXT.md`
+- Update `docs/CURRENT_CONTEXT.md` (silently — see above)
 - Flag any new technical debt for `docs/TECHNICAL_DEBT.md`
 
 ## Workflow (gstack)
