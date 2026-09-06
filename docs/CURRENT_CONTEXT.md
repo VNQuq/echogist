@@ -16,10 +16,9 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files; ru
 - **The folder preview is AUTOMATIC and the three actions must agree with it.** `mp3` gets that
   walk's file LIST, not the root. An interrupted walk is silent about the folder, never a verdict;
   an empty PLAN means "already done" only if there were files to plan.
-- **The loop detector measures REPETITION SHAPE, not vocabulary** (TD-33). A stuck decoder
-  repeats one phrase verbatim (3-gram coverage 0.60-1.00); this lecturer repeats to teach (never
-  above 0.20). The old unique-word ratio deleted 39 blocks / 5172 words of real lecture per 13
-  files. WHOLE blocks only, still.
+- **The loop detector measures REPETITION SHAPE, not vocabulary** (TD-33). A stuck decoder repeats
+  one phrase verbatim (3-gram coverage 0.60-1.00); this lecturer repeats to teach (never above
+  0.20). The old unique-word ratio deleted 5172 words of real lecture. WHOLE blocks only, still.
 - **Two channels, from `summarize` AND `render`** (TD-29, TD-28). `log` = chatter, muted;
   `notice` = act on it, loud: a DROPPED anchor, a phase citing NOTHING over a timecoded
   transcript, a foreign script, a wrong-language document, an unfont-able character, an empty
@@ -49,11 +48,10 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files; ru
   single-level `glob` and would find nothing. `paths` is the ONE layout definition; it computes
   and never creates.
 - **Identity is CONTENT and lives in the transcript's NAME** (TD-31). `fp = sha256(size +
-  head/tail 1 MiB)[:16]`; both joins key on it, so a move or rename costs nothing and two
-  courses with identical filenames never share a transcript. **Taken ONCE from the original and
-  inherited forward** — a re-encode (1b) carries its parent's value or it re-buys the summary.
-  Never put metadata IN the .txt: `chunk._blocks` anchors it at `[00:00:00]` and the model
-  could cite it past validation.
+  head/tail 1 MiB)[:16]`; both joins key on it, so a move or rename costs nothing and two courses
+  with identical filenames never share a transcript. **Taken ONCE from the original and inherited
+  forward** — a re-encode (1b) carries its parent's value or it re-buys the summary. Never put
+  metadata IN the .txt: `chunk._blocks` anchors it at `[00:00:00]`, citable past validation.
 - **Ctrl-C stops the run, not the app** — `folder.Cancelled` carries the partial report, the WHOLE
   loop iteration is guarded (BaseException), and a resume partial is keyed by path + language +
   tier, so a tier switch re-runs and never mixes.
@@ -76,7 +74,6 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files; ru
 - **Key:** env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are
   Windows-only. **`/mnt/c/Users/operator/Documents/echogist/output/` reads that tree from here, and
   reading the saved `.json` beats reading the log** — run 3's loudest WARN named the wrong cause.
-  The real pool is migrated: 13/13 summaries and transcripts carry their fingerprint (2026-09-05).
 
 ## Next
 
