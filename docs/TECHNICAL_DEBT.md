@@ -38,6 +38,16 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   plus two other losses on run 3 — and the announcements added here are what will make the next
   run's rate readable without opening the `.json`. **Trigger:** the next paid folder run's notice
   lines, then `/plan-eng-review` if the rate holds.
+  **2026-09-06, a 7th data point, and it kills the obvious hypothesis.** Lecture 1 re-summarized
+  alone (EN, from the saved transcript) lost the title again — announced correctly this time — and
+  its reconcile input was **~21,503 tokens, SMALLER than every one of run 3's six** (25,348–33,263).
+  Ordered by reconcile input, the losses now fall at 21.5k (title), 30.2k (title) and 33.3k (title
+  + `main_skill`), with 25.3k / 27.5k / 28.4k / 30.4k clean — so "reconcile drops fields when the
+  document gets long" does not survive contact with the smallest document of the seven. Title-drop
+  rate is **3 of 7**, and the essence fields are otherwise intact (`core_idea` 2,036 chars,
+  `main_skill` 1,190, 3 questions, 8 themes). What is NOT ruled out and is now the cheapest thing
+  to vary: **the title is the only field whose loss repeats on the same material** — lecture 1 kept
+  its title in run 3 (RU) and lost it here (EN), one lecture, two languages, two outcomes.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, and all of them are now
@@ -79,8 +89,12 @@ with them. **Open now: TD-36's second half (MEDIUM) and TD-29c (MINOR)** — TD-
   real RU documents — 253,289 letters — the non-primary share runs 0.0013–0.0088, and a wholesale
   switch measures above 0.95, so 0.25 sits ~28x over the loudest real document and ~4x under a
   drift. Reports and never raises, like its sibling; an uncalibrated language stays silent.
-  **Re-measure from the first real EN-over-RU run** — that is the direction with the heavier
-  quoting — and the source-language pairing stays available if the share ever proves too blunt.
+  **Re-measured 2026-09-06 on the first real EN-over-RU summary** (lecture 1, `language: en`, the
+  full 3h05m document): the Cyrillic share is **0.0042** — the direction expected to quote the
+  heaviest turns out to sit in the same band as the RU documents' incidental Latin, ~60x under the
+  line. The threshold is now confirmed from BOTH sides, and it fired on neither, which is the
+  correct outcome for a document that really is in the language it was asked for. The
+  source-language pairing stays available if the share ever proves too blunt.
 
 - **TD-29b — pointing a folder run at `output/` processes EchoGist's own artifacts** ·
   LOW · closed 2026-09-06. `scan.walk` applies its prune rule to `dirnames` only, never to the

@@ -62,11 +62,12 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
   costing one file — `folder.run_phase` carries on and `on_phase` already persisted the rest);
   an empty title or essence field is one short reconcile call over intact prose, so it is a
   `notice` and the run finishes (TD-36).
-- **Cost model** projects output as `ratio x that call's input`; the input leg needs no margin
-  (0.9987x, read off the real transcripts), so that ONE number carries the whole bias. **Re-seed a
-  tier from its own "Actual cost" line: output/input, +~5%.** economy 0.39; balanced **0.33 since
-  2026-09-06** (TD-35), above the rule so a SINGLE file at the worst ratio ever seen (0.3171) is
-  still quoted over — run 3 gave 0.29513 over 46 calls. Token estimate: 3 rates by script.
+- **Cost model** projects output as `ratio x that call's input`. The input leg is near-exact over
+  a whole folder (0.9987x) but runs ~1.10x on ONE file, so the output ratio carries most, not all,
+  of the bias. **Re-seed a tier from its own "Actual cost" line: output/input, +~5%.** economy
+  0.39; balanced **0.33 since 2026-09-06** (TD-35): run 3 gave 0.29513 over 46 calls, the 7th
+  measurement 0.29825, and 0.33 quoted 1.17x over it. **The duration projection is ~1.5x the bill**
+  (it multiplies the same ratio, so it rose with it). Token estimate: 3 rates by script.
 - **Key:** env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are
   Windows-only. **`/mnt/c/Users/operator/Documents/echogist/output/` reads that tree from here, and
   reading the saved `.json` beats reading the log** — run 3's loudest WARN named the wrong cause.
@@ -74,18 +75,15 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
 
 ## Next
 
-1. **Run 4 is the test of everything above, and of three things at once.** Point a folder run at
-   `КУРС2025` again: (a) the **summary-skip join** is still unexercised — the 6 JSONs in
-   `summaries/raw/` carry fingerprints matching their transcripts exactly, so it should skip all
-   6 and spend **$0**; (b) any real work it does quotes at 0.33 and the "Actual cost" line says
-   whether that margin is right; (c) an empty phase or essence field now announces itself, which
-   is how TD-36's rate gets measured without opening the `.json`.
-2. **TD-36's second half is the only debt left with work in it** — WHY reconcile drops fields on
-   half the documents at this size. Collect the rate from run 4's notices; do not guess it from six
-   samples. TD-29c stays open on its own trigger (a second committer), declined 2026-09-06.
-3. **The stub pipeline still cannot gate a release from WSL** (no clip fixture, no Whisper model).
-   `scripts/win-smoke.bat` is the Windows entry point and now holds its window open when
-   double-clicked; it needs a short clip at `tests/fixtures/audio/smoke.*` (not committed) or
-   `--clip PATH`. Until one is placed, a real run stands in for the killswitch gate.
-4. Streaming; 1b. **TD-30 and TD-29b closed 2026-09-06** — every remaining debt waits on
-   evidence, none on a decision.
+1. **TD-36 is the only debt left with work in it, and the size hypothesis is dead.** The 7th
+   document (lecture 1 alone, EN) lost its title on a reconcile input of ~21.5k tokens, SMALLER
+   than all six of run 3 (25.3k-33.3k). Title-drop rate 3 of 7. The live lead: lecture 1 kept its
+   title in RU and lost it in EN, same material, so vary the LANGUAGE next, not the length.
+2. **What is verified and needs no repeat.** Skip join: 6/6 skipped, $0 (2026-09-06, run 4).
+   `win-smoke.bat`: PASS on Windows with a 40s clip at `tests/fixtures/audio/smoke.mp3` (gitignored,
+   cut from lecture 3), so the killswitch gate is runnable again. TD-34 did NOT recur — the phase
+   that came back empty in run 3 (02:40:57-03:05:34) is the LONGEST of the seven here, so it is
+   intermittent, as recorded.
+3. TD-29c stays open on its own trigger (a second committer), declined 2026-09-06. Streaming; 1b.
+   **The Windows tree checks out CRLF with `core.autocrlf` unset**, so all 40 tracked text files
+   read as modified there; `git -c core.autocrlf=true status` proves it is only line endings.
