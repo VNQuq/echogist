@@ -224,6 +224,35 @@ def walk(
     return found
 
 
+def is_own_artifact_tree(root: Path, output_dir: Path) -> bool:
+    """Whether ``root`` IS EchoGist's artifact tree, or sits inside it (TD-29b).
+
+    :func:`walk` prunes ``output`` out of ``dirnames``, which never looks at the walk ROOT
+    — so both the name floor and the TD-25 resolved-path ``exclude`` are bypassed the
+    moment the operator picks ``output/`` or ``output/audio`` itself. That is a plausible
+    gesture ("summarize the MP3s I already made") and the picker opens on the last
+    directory used, so it is easy to land on. What follows is not a no-op: every artifact
+    is re-transcribed, a Summary run re-buys every summary already paid for (a re-encode
+    is a different file, so the TD-31 fingerprint join cannot recognize it), and the
+    results are saved under doubly-dated names.
+
+    Callers refuse the folder on a true answer rather than walking it. The check is the
+    RESOLVED-path one only, deliberately: the name floor in :func:`_keep_dir` exists for
+    callers that do not know where the artifacts live, and applying it to the root would
+    also refuse an unrelated media folder that happens to be called ``output``, which is
+    the operator's folder and none of our business.
+    """
+    root_resolved = _resolve(root)
+    out_resolved = _resolve(output_dir)
+    if _norm(root_resolved) == _norm(out_resolved):
+        return True
+    # Not ``Path.is_relative_to``: on Windows the two can be spelled with different case
+    # (``resolve`` does not fold it) and a junction resolves to the real tree, so the
+    # comparison has to go through the same ``_norm`` key the walk's own exclusion uses.
+    prefix = _norm(out_resolved) + os.sep
+    return _norm(root_resolved).startswith(prefix)
+
+
 def _keep_dir(path: Path, seen: set[Path], excluded: str | None = None) -> bool:
     """Whether to descend into ``path``, recording it as visited when we do."""
     # EchoGist's own artifact tree, never counted as a source wherever it turns up under

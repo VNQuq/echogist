@@ -136,3 +136,35 @@ def test_the_measured_defect_is_still_caught_including_a_single_character() -> N
     assert [f.run for f in alphabet.foreign_findings("Преподаватель描написывает", allowed)] == [
         "描"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# script_shares — the proportional half (TD-30)
+# --------------------------------------------------------------------------- #
+def test_script_shares_counts_letters_only() -> None:
+    # Digits, punctuation and spaces are outside the denominator: a timecode-heavy
+    # document must not read as less Cyrillic than a prose-heavy one.
+    shares = alphabet.script_shares("абв 123 —, xy")
+    assert shares == {"cyrillic": 0.6, "latin": 0.4}
+
+
+def test_script_shares_is_ordered_biggest_first() -> None:
+    assert list(alphabet.script_shares("aaaaбб"))[0] == "latin"
+
+
+def test_script_shares_of_textless_input_is_empty_not_zero() -> None:
+    # "No letters" is not "0% foreign" — a caller must not read a share out of nothing.
+    assert alphabet.script_shares("") == {}
+    assert alphabet.script_shares("123 —— ...") == {}
+
+
+def test_script_shares_separates_a_quotation_from_a_language_switch() -> None:
+    """The measurement TD-30 turns on, at both ends of the range it has to tell apart.
+
+    The six real RU documents of run 3 (253,289 letters) run 0.0013-0.0088 non-primary;
+    the numbers below stand in for that shape without shipping a 40k-character fixture.
+    """
+    quoting = "English prose about what the lecturer argues here. " * 8 + "она сказала так"
+    assert alphabet.script_shares(quoting)["cyrillic"] < 0.25
+    switched = "Заголовок и весь документ по-русски, хотя просили английский. " * 3 + "ok"
+    assert alphabet.script_shares(switched)["cyrillic"] > 0.9

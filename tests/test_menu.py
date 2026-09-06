@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from echogist import config, extract, folder, menu, naming, scan, summarize
+from echogist import config, extract, folder, menu, naming, paths, scan, summarize
 from echogist.extract import ExtractError
 from echogist.render import RenderError
 from echogist.summarize import SummarizeError, SummarizeResult, Summary, SynthesisSection
@@ -1840,6 +1840,47 @@ def test_an_empty_folder_never_reaches_the_action_question(
     assert menu.run_menu(deps) == 0
 
     assert not [m for m in stub.messages if m[0] == "select" and "produce for" in m[1]]
+
+
+def test_the_folder_module_refuses_echogists_own_output_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TD-29b: the walk prunes output/ out of its SUBdirectories and never sees the root.
+
+    Reproduced on a real run: picking ``output/`` (the picker opens on the last directory
+    used) re-transcribes every artifact, re-buys every summary already paid for — a
+    re-encode has its own fingerprint, so the TD-31 join cannot recognize it — and writes
+    the results under doubly-dated names. Refused before the preview, and the message names
+    the flow that does what the gesture meant.
+    """
+    _offline_scan(monkeypatch)
+    audio = paths.audio(tmp_path)
+    audio.mkdir(parents=True)
+    (audio / "2026-01-01-lecture.mp3").write_bytes(b"x")
+    deps, stub, calls = _make_deps(tmp_path, ["folder", str(paths.output(tmp_path)), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    said = " ".join(m[1] for m in stub.messages if m[0] == "error")
+    assert "own output folder" in said and "saved-transcript" in said
+    assert not [m for m in stub.messages if m[0] == "select" and "produce for" in m[1]]
+    assert calls["transcribe"] == 0 and calls["summarize"] == 0
+
+
+def test_the_folder_module_refuses_a_subdirectory_of_its_own_output_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "Summarize the MP3s I already made" points at output/audio, not at output/ — the
+    # same defect one level down, and the likelier of the two to be picked by hand.
+    _offline_scan(monkeypatch)
+    audio = paths.audio(tmp_path)
+    audio.mkdir(parents=True)
+    (audio / "2026-01-01-lecture.mp3").write_bytes(b"x")
+    deps, stub, _calls = _make_deps(tmp_path, ["folder", str(audio), "exit"])
+
+    assert menu.run_menu(deps) == 0
+
+    assert [m for m in stub.messages if m[0] == "error" and "own output folder" in m[1]]
 
 
 def test_the_folder_module_offers_exactly_the_single_file_outputs(

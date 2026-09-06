@@ -101,6 +101,23 @@ _ALLOWED_SCRIPTS = {
     "en": frozenset({"latin", "cyrillic", "greek"}),
 }
 
+# TD-30, the other half of the instrument. Allowing Cyrillic in an EN summary is what
+# keeps a faithful quotation of the author's own words from being a finding, and it is
+# also what makes the failure it cannot see: a summary asked for in English that came back
+# wholesale in Russian is legal character by character. Only the PROPORTION separates a
+# quote from a language switch, so the primary script is named here and its share measured.
+_PRIMARY_SCRIPT = {"ru": "cyrillic", "en": "latin"}
+
+# The share of the summary's LETTERS that may be written in something other than the
+# primary script before the document is called drifted. MEASURED, not guessed: across the
+# six real RU documents of run 3 — 253,289 letters — the non-primary (latin) share runs
+# 0.0013 to 0.0088, i.e. the loudest real document sits 28x under this line, and a reply
+# that switched language wholesale measures above 0.95. The gap is wide enough that the
+# exact number is not load-bearing; what matters is that it is far above incidental terms
+# and quotations and far below a switch. Re-measure it the first time an EN summary over a
+# RU lecture is actually run — that is the direction with the heavier quoting.
+_DRIFT_SHARE = 0.25
+
 # How many script findings reach the console before they are counted instead of quoted. A
 # stray morpheme is one or two lines; a reply that switched language wholesale would be
 # hundreds, and burying the run's own result under them helps nobody.
@@ -1013,6 +1030,48 @@ def report_foreign_scripts(
     return findings
 
 
+def report_language_drift(
+    summary: Summary,
+    language: str,
+    *,
+    notice: Notice = print,
+) -> tuple[str, float] | None:
+    """Report a summary that came back mostly NOT in the language it was asked for (TD-30).
+
+    :func:`report_foreign_scripts` asks "is there a character from a writing system this
+    language does not use" and is deliberately blind here: ``en`` allows Cyrillic so the
+    author's own words can be quoted, which also means an English summary that reverted
+    wholesale to Russian is legal in every character. This asks the proportional question
+    instead — what share of the letters is NOT the primary script — and says so once when
+    it crosses ``_DRIFT_SHARE``.
+
+    Returns ``(script, share)`` for the largest non-primary script when it reports, else
+    ``None``. Like its sibling it reports and never raises: the document is paid for and
+    readable, and which sentences are the author's words is the operator's call, not a
+    threshold's. A language with no calibrated primary script, or a summary with no
+    letters, is silent rather than guessed at.
+    """
+    primary = _PRIMARY_SCRIPT.get(language)
+    if primary is None:
+        return None
+    shares = alphabet.script_shares("\n".join(_readable_text(summary)))
+    if not shares:
+        return None
+    other = {script: share for script, share in shares.items() if script != primary}
+    if not other:
+        return None
+    script, share = max(other.items(), key=lambda kv: kv[1])
+    if share < _DRIFT_SHARE:
+        return None
+    notice(
+        f"This summary was asked for in {_language_name(language)}, but {share:.0%} of its "
+        f"letters are {script}, not {primary} — the model wrote the document in the wrong "
+        "language, not just a quotation. The text is kept as written; re-run it from the "
+        "saved transcript if it is not what you wanted."
+    )
+    return (script, share)
+
+
 def _readable_text(summary: Summary) -> tuple[str, ...]:
     """Every field of ``summary`` that becomes prose in the rendered document.
 
@@ -1361,5 +1420,7 @@ def synthesize_summary(
     # covered too, and a resumed run — whose earlier phases were restored from disk and
     # never re-synthesized — is still checked end to end.
     report_foreign_scripts(summary, summary.language, notice=notice)
+    # TD-30: the same finished prose, asked the proportional question its sibling cannot.
+    report_language_drift(summary, summary.language, notice=notice)
     log(f"Summary ready: {summary.title}")
     return SummarizeResult(summary=summary, input_tokens=total_in, output_tokens=total_out)

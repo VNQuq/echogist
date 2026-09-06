@@ -11,31 +11,9 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-30 — the script check trades EN drift detection for quiet** · LOW · created
-  2026-09-05. `_ALLOWED_SCRIPTS["en"]` now allows Cyrillic, because summarizing a Russian
-  lecture in English is a supported setting and every faithful quotation of the author's
-  own words was otherwise a finding. The cost: an EN reply drifting wholesale back into
-  Russian is now invisible to the check. Taken deliberately — the measured defect is a CJK
-  morpheme spliced into a word, and an instrument that cries at correct text stops being
-  read. **Trigger:** the first EN summary the operator actually runs. The real fix is to
-  key allowed scripts on (summary language, SOURCE language) rather than on summary
-  language alone, which needs the source language to be known — Whisper auto-detects it
-  today and it is never recorded.
-
-- **TD-29b — pointing a folder run at `output/` processes EchoGist's own artifacts** ·
-  LOW · created 2026-09-05. `scan.walk` applies its prune rule to `dirnames` only, never
-  to the walk ROOT, so both the literal-name floor and the TD-25 resolved-path `exclude`
-  are bypassed when the operator picks `output/` or `output/audio` in the folder picker —
-  a plausible "summarize the MP3s I already made" gesture, and the picker opens on the
-  last directory used. Result: every artifact is re-transcribed, and on a Summary run
-  re-summarized and paid for, saving doubly-dated transcripts (`2026-09-05-2026-09-04-…`).
-  Reproduced. **Not fixed because it is a scope call, not a bug fix:** refusing the folder
-  removes a gesture that may be legitimate (the operator may genuinely want summaries of
-  extracted MP3s), and the useful version of that gesture needs the double-dating and the
-  summary-skip join fixed first — i.e. TD-31. **Trigger:** TD-31, or the first time it
-  happens.
-
-- **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05. `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
+- **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05, re-affirmed 2026-09-06
+  (the operator declined CI while the trigger has not fired; a workflow is ~20 lines and needs a
+  dev-requirements list, which does not exist — the runtime lock is GPU wheels the CI venv skips). `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
 
 - **TD-36 — reconcile returns PARTIAL output, and an empty essence field is announced nowhere** ·
   MEDIUM · created 2026-09-06. Same run, 3 of 6 files lost something from the reconcile call: file 1
@@ -78,11 +56,48 @@ TD-27's artifact-format breaks, which is what it exists for, and none of the thr
 against v2.3.0: TD-35 was a stale constant that predates it, and TD-34 and TD-36 are pre-existing
 gaps that this run's own new `notice` lines are what made visible. All three were answered the next
 day, 2026-09-06 (`5539ee9`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
-with them. **Open now: TD-36's second half (MEDIUM), TD-29b and TD-30 (LOW), TD-29c (MINOR).**
+with them. **Open now: TD-36's second half (MEDIUM) and TD-29c (MINOR)** — TD-30 and TD-29b closed
+2026-09-06, the registry's two LOW entries answered the same day as its two HIGH ones.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-30 — the script check trades EN drift detection for quiet** · LOW ·
+  closed 2026-09-06. `_ALLOWED_SCRIPTS["en"]` allows Cyrillic so a faithful quotation of a
+  Russian lecturer's own words is not a finding — which also means an EN summary that reverted
+  wholesale to Russian is legal in every single character, i.e. the check was blind to the
+  LARGEST version of the defect it exists to catch. **Closed with the cheaper half of the entry's
+  own answer.** The entry proposed keying allowed scripts on (summary language, SOURCE language),
+  which needs the detected language persisted — and metadata cannot go in the `.txt` (`chunk._blocks`
+  would anchor it at `[00:00:00]`), so it would have to go in the transcript NAME: a third
+  artifact-format break in a week, touching both joins and four single-level `glob` readers.
+  **The proportional question needs no new data at all.** A quotation and a language switch are
+  the same characters; only the SHARE of them tells the two apart. `alphabet.script_shares` counts
+  letters by script and `summarize.report_language_drift` announces the largest non-primary share
+  once it crosses `_DRIFT_SHARE`. **The threshold is measured, not chosen:** across run 3's six
+  real RU documents — 253,289 letters — the non-primary share runs 0.0013–0.0088, and a wholesale
+  switch measures above 0.95, so 0.25 sits ~28x over the loudest real document and ~4x under a
+  drift. Reports and never raises, like its sibling; an uncalibrated language stays silent.
+  **Re-measure from the first real EN-over-RU run** — that is the direction with the heavier
+  quoting — and the source-language pairing stays available if the share ever proves too blunt.
+
+- **TD-29b — pointing a folder run at `output/` processes EchoGist's own artifacts** ·
+  LOW · closed 2026-09-06. `scan.walk` applies its prune rule to `dirnames` only, never to the
+  walk ROOT, so both the literal-name floor and the TD-25 resolved-path `exclude` were bypassed
+  when the operator picked `output/` or `output/audio` in the folder picker — a plausible
+  "summarize the MP3s I already made" gesture, and the picker opens on the last directory used.
+  Result: every artifact re-transcribed, every summary re-bought (a re-encode has its own
+  fingerprint, so the TD-31 join cannot recognize it), saved under doubly-dated names.
+  **Its trigger fired twice** — TD-31 closed, and it happened. Closed the way the entry framed it,
+  as a scope call decided by the operator (2026-09-06): **refuse the folder loud** and name the
+  flow that does what the gesture meant. `scan.is_own_artifact_tree` is the predicate,
+  `menu._flow_folder` refuses before the preview, so nothing is walked, counted or priced.
+  **Resolved-path only, deliberately:** the name floor in `_keep_dir` exists for callers that do
+  not know where the artifacts live, and applying it to the ROOT would also refuse an unrelated
+  media folder the operator happens to have called `output`. Junction-proof through the same
+  `_norm` key the walk's own exclusion uses. **Rejected:** warn-and-continue, which keeps the
+  gesture but leaves the re-purchase and the triple-dating one keypress away.
 
 - **TD-34 — a synthesis phase can come back EMPTY and take its stretch of the lecture with it** ·
   HIGH · closed 2026-09-06 (`5539ee9`). Run 3, file 1, phase 7/7 (02:40:57–03:05:34) returned

@@ -1182,6 +1182,119 @@ def test_build_synthesis_request_substitutes_language_and_interpretation() -> No
 # --------------------------------------------------------------------------- #
 # Anchor validation — exact accept, snap-within-window, drop hallucinated
 # --------------------------------------------------------------------------- #
+def test_the_drift_check_is_wired_into_the_run_not_just_importable() -> None:
+    # The TD-29 lesson: a check nobody passes ``notice=`` to prints into a dead end and the
+    # suite stays green. This asserts the finished run announces it, not that the function
+    # exists.
+    ru = "Весь документ по-русски, хотя просили английский. " * 3
+    complete = summarize._running_summary([SynthesisSection("Раздел", ru, ())], [], [], "en")
+    loud: list[str] = []
+    summarize.synthesize_summary(
+        [Phase(text="[00:00:00] w", index=1, total=1, start_seconds=0.0, end_seconds=0.0)],
+        _tier(),
+        _cfg(),
+        language="en",
+        source_stem="lecture",
+        api_key="k",
+        caller=_seq_caller(
+            _outcome(
+                _reconcile_ti(
+                    title="Стратегия",
+                    core_idea=ru,
+                    main_skill=ru,
+                    test_questions=[{"question": "Вопрос?", "answer": "Ответ"}],
+                )
+            )
+        ),
+        log=lambda _m: None,
+        notice=loud.append,
+        resume_from=complete,
+    )
+    assert any("wrong language" in line for line in loud)
+
+
+def test_a_summary_that_switched_language_wholesale_is_announced() -> None:
+    """TD-30: the failure the foreign-script check is deliberately blind to.
+
+    ``en`` allows Cyrillic so the author's own words can be quoted faithfully, which also
+    means an English summary that reverted wholesale to Russian is legal in every single
+    character. Only the proportion tells them apart.
+    """
+    ru_prose = "Весь документ написан по-русски, хотя просили английский. " * 3
+    summary = Summary(
+        title="Стратегия",
+        core_idea=ru_prose,
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(SynthesisSection("Раздел", ru_prose, ()),),
+    )
+    loud: list[str] = []
+    assert summarize.report_foreign_scripts(summary, "en", notice=loud.append) == ()
+    assert loud == [], "the character-level check cannot see this, which is why TD-30 exists"
+
+    reported = summarize.report_language_drift(summary, "en", notice=loud.append)
+    assert reported is not None and reported[0] == "cyrillic" and reported[1] > 0.9
+    assert any("wrong language" in line for line in loud)
+
+
+def test_quoting_the_author_in_the_other_script_is_not_drift() -> None:
+    # The reason ``en`` allows Cyrillic in the first place. Measured on the real run-3
+    # documents, the non-primary share is 0.0013-0.0088; a few quoted phrases in an
+    # otherwise English document stay far under the line.
+    summary = Summary(
+        title="Working backwards from the end goal",
+        core_idea="The lecturer calls this «обратное планирование» and returns to it often.",
+        decisions=(),
+        action_items=(),
+        language="en",
+        synthesis=(
+            SynthesisSection(
+                "Planning backwards",
+                "He argues that a plan written forward from today inherits today's limits. "
+                "The phrase he uses for the reverse move is «от конечной цели», and he repeats it "
+                "whenever a student describes a goal in terms of what they already have.",
+                (),
+            ),
+        ),
+    )
+    loud: list[str] = []
+    assert summarize.report_language_drift(summary, "en", notice=loud.append) is None
+    assert loud == []
+
+
+def test_a_russian_summary_of_a_russian_lecture_is_silent() -> None:
+    # The everyday case, and the one the six real documents measure: incidental Latin
+    # (terms, names) sits three orders of magnitude under the threshold.
+    summary = Summary(
+        title="Модуль «Основы», занятие 1",
+        core_idea="Разбор стратегии от конечной цели, с упоминанием MVP и Google.",
+        decisions=(),
+        action_items=(),
+        language="ru",
+        synthesis=(SynthesisSection("Введение", "Русская проза про стратегию. " * 20, ()),),
+    )
+    loud: list[str] = []
+    assert summarize.report_language_drift(summary, "ru", notice=loud.append) is None
+    assert loud == []
+
+
+def test_language_drift_is_silent_for_an_uncalibrated_language() -> None:
+    # Fail-soft, exactly like the empty allowed-set path of the character check: a language
+    # nobody has calibrated must say nothing rather than guess at a primary script.
+    summary = Summary(
+        title="Titel", core_idea="Deutscher Text", decisions=(), action_items=(), language="de"
+    )
+    loud: list[str] = []
+    assert summarize.report_language_drift(summary, "de", notice=loud.append) is None
+    assert loud == []
+
+
+def test_language_drift_over_a_summary_with_no_letters_says_nothing() -> None:
+    summary = Summary(title="00:00:00", core_idea="", decisions=(), action_items=(), language="en")
+    assert summarize.report_language_drift(summary, "en", notice=lambda _m: None) is None
+
+
 def _synth_summary(anchors: tuple[str, ...]) -> Summary:
     return Summary(
         title="t",

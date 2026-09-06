@@ -142,6 +142,35 @@ def foreign_findings(text: str, allowed: frozenset[str]) -> tuple[Finding, ...]:
     return tuple(findings)
 
 
+def script_shares(text: str) -> dict[str, float]:
+    """The fraction of ``text``'s LETTERS written in each script, biggest first (TD-30).
+
+    The other half of the instrument. :func:`foreign_findings` answers "is there a
+    character from a writing system this language does not use", which cannot see the
+    failure where every character is individually legal: a summary asked for in English
+    that came back wholesale in Russian. Both scripts are allowed there — a faithful
+    quotation of the author's own words is the reason — so only the PROPORTION separates
+    a quote from a language switch.
+
+    Counts letters only, by :func:`script_of`, so digits, punctuation, the notation
+    excluded there and every space are outside the denominator. Empty text (or text with
+    no letters at all) returns an empty mapping rather than a zero share for anything —
+    there is nothing to be a share OF, and a caller must not read that as "0% foreign".
+    """
+    counts: dict[str, int] = {}
+    for char in text:
+        script = script_of(char)
+        if script is not None:
+            counts[script] = counts.get(script, 0) + 1
+    total = sum(counts.values())
+    if not total:
+        return {}
+    return {
+        script: count / total
+        for script, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    }
+
+
 def _finding(text: str, start: int, end: int, script: str) -> Finding:
     """Build the report for ``text[start:end]``, quoted with its surroundings."""
     left = max(0, start - _CONTEXT_CHARS)

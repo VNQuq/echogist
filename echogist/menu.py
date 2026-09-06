@@ -1555,6 +1555,22 @@ def _flow_folder(deps: Deps) -> None:
     root = _pick_folder(ui, "Select a folder")
     if root is None:
         return
+    if scan.is_own_artifact_tree(root, paths.output(deps.base)):
+        # TD-29b: the walk prunes output/ out of its SUBdirectories and never looks at the
+        # root, so this folder would be walked like any other — re-transcribing every
+        # artifact, re-buying every summary already paid for (a re-encode has its own
+        # fingerprint, so the TD-31 join cannot recognize it), and saving the results under
+        # doubly-dated names. Refused here rather than walked: the same rule the walk
+        # already applies one level down, and the operator gets the flow that actually
+        # does what the gesture meant.
+        ui.error(
+            f"'{root.name}' is EchoGist's own output folder, so everything in it is an "
+            "artifact this app already made. Running it would re-transcribe and re-buy "
+            "work already paid for. To make a summary from a transcript you already have, "
+            "use the saved-transcript flow on the main menu; to process recordings, pick "
+            "the folder they came from."
+        )
+        return
     result, cancelled = _preview_folder(deps, root)
     if _found_nothing(result) and not cancelled:
         # _report_scan already said so. Asking "what should I produce?" about an empty tree

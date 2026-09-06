@@ -91,6 +91,48 @@ def test_walk_excludes_the_artifact_tree_by_path_not_by_name(tmp_path: Path) -> 
     assert [p.name for p in scan.walk(tmp_path, exclude=artifacts)] == ["lecture.mp4"]
 
 
+def test_the_artifact_tree_itself_is_recognised_as_the_scan_root(tmp_path: Path) -> None:
+    """TD-29b: the walk's own exclusion never looks at the ROOT, so the root is checked here.
+
+    Picking ``output/`` or ``output/audio`` is a plausible gesture — "summarize the MP3s I
+    already made" — and the picker opens on the last directory used. Walked, it
+    re-transcribes every artifact, re-buys every summary already paid for, and saves the
+    results doubly dated.
+    """
+    out = tmp_path / "output"
+    (out / "audio").mkdir(parents=True)
+    (tmp_path / "Course").mkdir()
+
+    assert scan.is_own_artifact_tree(out, out)
+    assert scan.is_own_artifact_tree(out / "audio", out), "a subdirectory of it is still it"
+    assert not scan.is_own_artifact_tree(tmp_path / "Course", out)
+    assert not scan.is_own_artifact_tree(tmp_path, out), "the parent holds sources too"
+
+
+def test_the_artifact_tree_is_recognised_through_a_junction(tmp_path: Path) -> None:
+    # TD-25's lesson applied to the root: the tree reachable under another name is the same
+    # tree. A symlink stands in for the NTFS junction a cloud-sync client makes.
+    out = tmp_path / "output"
+    (out / "audio").mkdir(parents=True)
+    link = tmp_path / "Synced"
+    link.symlink_to(out, target_is_directory=True)
+
+    assert scan.is_own_artifact_tree(link, out)
+    assert scan.is_own_artifact_tree(link / "audio", out)
+
+
+def test_a_folder_merely_NAMED_output_is_the_operators_own(tmp_path: Path) -> None:
+    # The name floor in _keep_dir is for callers that do not know where the artifacts live.
+    # Applied to the root it would refuse an unrelated media folder called "output", which
+    # is not ours to refuse — the resolved path is what identifies the artifact tree.
+    mine = tmp_path / "output"
+    mine.mkdir()
+    elsewhere = tmp_path / "echogist" / "output"
+    elsewhere.mkdir(parents=True)
+
+    assert not scan.is_own_artifact_tree(mine, elsewhere)
+
+
 def test_walk_terminates_on_a_directory_loop(tmp_path: Path) -> None:
     # A symlink here stands in for an NTFS junction, which is what a cloud-sync client
     # actually creates in a media library. followlinks=False does not cover junctions, so

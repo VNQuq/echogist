@@ -83,6 +83,36 @@ path nobody needs. Cost of the reversal: three fewer files in the diff.
 An unlisted language allows everything (reports nothing) rather than flooding a language
 nobody calibrated.
 
+### 3b. The proportional half — `script_shares` (TD-30, 2026-09-06)
+
+Cyrillic was later allowed in `en` too, for the same reason Latin is allowed in `ru`: an
+English summary of a Russian lecture quotes the author's own words, and every quotation
+was otherwise a finding. That bought quiet at a price — **an English summary that reverted
+wholesale to Russian is legal in every single character**, so the check above cannot see
+the largest version of the defect it exists to catch (TD-30).
+
+```python
+def script_shares(text: str) -> dict[str, float]   # alphabet.py
+def report_language_drift(summary, language, *, notice) -> tuple[str, float] | None
+```
+
+The character-level question ("is this script used here at all") cannot separate a
+quotation from a language switch, because both are the same characters. The
+**proportional** question can: what share of the document's letters is not the primary
+script (`_PRIMARY_SCRIPT`: `ru` → cyrillic, `en` → latin).
+
+**The threshold is measured, not chosen.** Across the six real RU documents of run 3 —
+253,289 letters — the non-primary share runs **0.0013 to 0.0088**; a reply that switched
+language wholesale measures **above 0.95**. `_DRIFT_SHARE = 0.25` sits ~28x above the
+loudest real document and ~4x below a switch. The gap is wide enough that the exact number
+is not load-bearing; re-measure from the first real EN-over-RU summary, which is the
+direction with the heavier quoting. Letters only: digits, punctuation and the notation
+`script_of` already excludes stay out of the denominator, and a document with no letters
+returns an empty mapping rather than a 0% share of anything.
+
+Same posture as its sibling: reports once on `notice`, never raises, never edits. A
+language with no calibrated primary script is silent rather than guessed at.
+
 ### 4. Where it runs, and what it does when it fires
 
 **Once, at the end of `synthesize_summary`**, over the final Summary, after the last
