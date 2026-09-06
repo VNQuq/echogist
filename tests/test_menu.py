@@ -2396,8 +2396,24 @@ def test_the_retry_question_comes_after_the_failure_is_reported(tmp_path: Path) 
     assert failure < question
 
 
+def test_the_retry_question_defaults_to_yes(tmp_path: Path) -> None:
+    """Enter retries. Every other paid gate here defaults No because it guards a decision
+    the operator has not made yet; this one finishes the run they already paid for, and the
+    alternative on Enter is a document with a stretch of the recording missing from it."""
+    seen: list[bool] = []
+
+    class Recording(StubUI):
+        def confirm(self, prompt: str, *, default: bool = False) -> bool:
+            seen.append(default)
+            return super().confirm(prompt, default=default)
+
+    ui = Recording([True])
+    assert menu._confirm_retry(ui, 1) is True
+    assert seen == [True]
+
+
 def test_declining_the_retry_costs_nothing_more(tmp_path: Path) -> None:
-    """Default No — it is still a paid call, and the transcript may be the real problem."""
+    """One keystroke away: it is still a paid call, and the transcript may be the problem."""
     _seed_transcript(tmp_path)
     deps, _stub, calls = _make_deps(
         tmp_path, ["single", "transcript", "0", False, "exit"], empty_phase_calls=1

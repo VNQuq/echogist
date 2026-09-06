@@ -570,14 +570,18 @@ def _confirm_retry(ui: UI, count: int) -> bool:
     An empty phase is intermittent (TD-34: the phase that came back empty in run 3 was fine
     on the re-run), the phases already synthesized are on disk, and the transcript is the
     checkpoint — so a retry costs the missing phase and nothing else, and that is the whole
-    reason it is worth one question instead of a trip back through the menu. Default No: it
-    is still a paid call, and the operator may want to look at the transcript first.
+    reason it is worth one question instead of a trip back through the menu.
+
+    Default YES (operator call), unlike every other paid gate here. Those gates guard a
+    decision the operator has not made yet; this one only finishes the run they already
+    paid for, at the price of one phase, and the alternative on Enter is a document with a
+    stretch of the recording missing from it. Declining stays one keystroke away.
     """
     files = "file" if count == 1 else "files"
     return ui.confirm(
         f"{count} {files} stopped on an empty phase. Retry from the saved transcript? "
         "Only the missing phase is paid for again.",
-        default=False,
+        default=True,
     )
 
 
