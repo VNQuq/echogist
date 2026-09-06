@@ -105,9 +105,15 @@ implementation, `docs/TECHNICAL_DEBT.md` for active debt.
 `docs/CURRENT_CONTEXT.md` is **owned by the assistant** (operator instruction, 2026-09-06).
 Write it, trim it, and keep it true without asking. Never put a question about its contents,
 its shape or its status to the operator — not "may I update it", not "is this still current",
-not "which line should go". If a fact in it turns out to be wrong, fix it; if the ~88-line cap
-forces a choice, make the choice and cut. The operator still edits it whenever they want, and
-their version wins.
+not "which line should go". If a fact in it turns out to be wrong, fix it. The operator still
+edits it whenever they want, and their version wins.
+
+**ONE trim per update, and it lands under the ~88-line cap.** Add and cut in the SAME edit:
+count the lines before writing, and if the result is over, cut in that write — never commit an
+over-cap file and trim it in a follow-up. A second trim pass means the first was not a decision,
+and it spends two commits saying what one says. Cut the paraphrase, the note that has become the
+steady state, and anything CLAUDE.md or the CHANGELOG already carries; keep what only this file
+knows.
 
 Upon task completion, before closing:
 - Update `docs/CURRENT_CONTEXT.md` (silently — see above)
