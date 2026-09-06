@@ -37,47 +37,6 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 - **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05. `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
 
-- **TD-34 — a synthesis phase can come back EMPTY and take its stretch of the lecture with it** ·
-  HIGH · created 2026-09-06. Third `КУРС2025` run (2026-09-05 21:39, `balanced`, first run
-  of the post-TD-31/TD-27/TD-33 build): file 1 phase 7/7 (02:40:57–03:05:34) returned
-  `{"heading": "", "prose": "", "anchors": []}` — 43 bytes against 6,517–10,691 for its six
-  siblings. The last 25 minutes of a 3h05m lecture, ~13% of the material, is absent from the
-  document; the call was paid for; the run reported success. This breaks fidelity property (5),
-  coverage, which is the v2 acceptance criterion, and it is the "silent truncation or skip"
-  CLAUDE.md forbids. **The TD-29 `notice` channel DID catch it** — the zero-anchor rule added
-  2026-09-05 fired on `notice`, and without it the phase would have scrolled past in muted grey.
-  What is wrong is the message: `Nothing here cites the recording, so nothing here can be checked.`
-  describes prose that failed to cite. Zero anchors has two causes with two different operator
-  actions — uncited prose (go read it) and NO prose (go re-run that phase) — and the line names
-  only the first, sending the operator to read text that does not exist. Only one empty phase in
-  the six files, so this is intermittent, not systematic. **Not fixed here: the operator chose to
-  release the build as-is.** The narrow fix is to assert non-empty `prose` per phase and fail the
-  run loud (CLAUDE.md: fail loud, return to menu) rather than to widen the anchor message; shares
-  its root with TD-36 — the anchor validator proves every emitted string RESOLVES and nothing
-  proves a required field EXISTS. **Trigger:** before the next paid folder run. ADR-triggering
-  (it changes what fails a run), so `/plan-eng-review` first.
-
-- **TD-35 — the `balanced` output/input ratio is stale, so the gate quote ran UNDER the bill** ·
-  HIGH · created 2026-09-06. Same run: quoted **$3.9616**, spent **$4.4634** — **0.89x**, the exact
-  TD-24 failure mode recurring one day after TD-24 closed. Decomposed, the cause is a single
-  number. Input estimate 600,193 vs 600,963 actual = **0.9987x** (it is read off the real
-  transcripts, so it is nearly exact); output estimate 144,068 vs 177,367 actual = **0.812x**, and
-  144,068 / 600,193 = 0.2400 exactly, i.e. the whole miss IS
-  `[tiers.balanced].output_per_input_ratio`. Verified against Sonnet pricing end to end: 600,193 x
-  $3/M + 144,068 x $15/M = $3.9616 (the printed quote) and 600,963 x $3/M + 177,367 x $15/M =
-  $4.4634 (the printed bill). **This run is the clean, unstitched, whole-course measurement the
-  registry was waiting for**, and it retires 0.24 as an n=1 June guess: aggregate **0.29513**, per
-  file 0.2961 / 0.2914 / 0.2828 / 0.2991 / 0.3001 / 0.3008 — a 0.018 spread across 46 calls. Run 2's
-  five clean files said 0.2805, so two independent aggregates now exist and the trend is upward.
-  CLAUDE.md's re-seed rule (output/input, +~5%) gives **0.31**, which would have quoted $4.5915 =
-  1.03x — biased high, but by 3%. **0.33** quotes $4.7716 = 1.07x and also covers the highest single
-  file ever measured (0.3171, run 2). The pick is the operator's and is deliberately NOT made here.
-  The duration-based scan quote is unaffected and still biased high ($5.16 vs $4.4634 = 1.156x);
-  raising the ratio lifts it too. **Not fixed here: released as-is at 0.24, so the next `balanced`
-  folder run will again quote ~0.89x its bill.** Fix is a two-number `config/models.toml` edit
-  (config is data, not code) — no ADR, no code change. **Trigger:** before the next paid
-  `balanced` run.
-
 - **TD-36 — reconcile returns PARTIAL output, and an empty essence field is announced nowhere** ·
   MEDIUM · created 2026-09-06. Same run, 3 of 6 files lost something from the reconcile call: file 1
   the phase-heading outline, files 2 and 6 the title, and file 2 ALSO `main_skill` (`''`). The
@@ -91,7 +50,16 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   and the first is cheap: route every empty essence field to `notice`, the way the empty title
   already is. The second — why a Sonnet reconcile call drops fields on half the documents — is an
   investigation, not a patch, and should not be guessed at from six samples. Shares TD-34's root:
-  nothing asserts a required field is non-empty. **Trigger:** with TD-34, same `/plan-eng-review`.
+  nothing asserts a required field is non-empty. **First half CLOSED 2026-09-06 (`5539ee9`):**
+  every empty essence field — core idea, key skill, self-check questions — is now announced on
+  `notice`, so a blank главный навык can no longer ship under a run that reports success. It stays
+  a notice and not a failure because the K paid phases of prose are intact; only the single
+  reconcile call came back short, and re-running it is the operator's call against the saved
+  transcript. **What remains open is the second half: WHY reconcile drops fields on half the
+  documents at this size.** The rate is the evidence to collect — 1 of 6 titles on run 2, 2 of 6
+  plus two other losses on run 3 — and the announcements added here are what will make the next
+  run's rate readable without opening the `.json`. **Trigger:** the next paid folder run's notice
+  lines, then `/plan-eng-review` if the rate holds.
 
 The registry was fully closed on 2026-08-03 (TD-9 and TD-17 implemented, TD-7 and TD-20 WONTFIX,
 branch `chore/close-tech-debt`); TD-22 through TD-28 are the entries since, and all of them are now
@@ -104,16 +72,44 @@ P3 enhancement, not debt. TD-32 and TD-33 both came out of the operator's read o
 `dbdda98` and took TD-27's two load-bearing constraints with it, which is what left TD-27 answerable
 as an ergonomics question rather than a design one. That state lasted one day: the third
 `КУРС2025` run, on 2026-09-05, was the first exercise of the post-TD-31/TD-27/TD-33 build on
-real material and opened TD-34, TD-35 and TD-36 off its log and its saved artifacts. **Open now:
-TD-34 and TD-35 (HIGH), TD-36 (MEDIUM), TD-29b and TD-30 (LOW), TD-29c (MINOR).** v3.0 was cut with
-all three open, deliberately and on the operator's call — the release carries TD-31's and TD-27's
-artifact-format breaks, which is what it exists for, and none of the three is a regression against
-v2.3.0: TD-35 is a stale constant that predates it, and TD-34 and TD-36 are pre-existing gaps that
-this run's own new `notice` lines are what made visible.
+real material and opened TD-34, TD-35 and TD-36 off its log and its saved artifacts. v3.0 was cut
+with all three open, deliberately and on the operator's call — the release carries TD-31's and
+TD-27's artifact-format breaks, which is what it exists for, and none of the three was a regression
+against v2.3.0: TD-35 was a stale constant that predates it, and TD-34 and TD-36 are pre-existing
+gaps that this run's own new `notice` lines are what made visible. All three were answered the next
+day, 2026-09-06 (`5539ee9`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
+with them. **Open now: TD-36's second half (MEDIUM), TD-29b and TD-30 (LOW), TD-29c (MINOR).**
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-34 — a synthesis phase can come back EMPTY and take its stretch of the lecture with it** ·
+  HIGH · closed 2026-09-06 (`5539ee9`). Run 3, file 1, phase 7/7 (02:40:57–03:05:34) returned
+  `{"heading": "", "prose": "", "anchors": []}` — 43 bytes against 6,517–10,691 for its six
+  siblings. The last 25 minutes of a 3h05m lecture, ~13% of the material, absent from the
+  document; the call paid for; the run reporting success. The fix is the narrow one the entry
+  called for: `synthesize_summary` refuses a phase whose `prose` is empty and fails the file loud,
+  naming the phase and its span. **Not a widened anchor message** — zero anchors has two causes
+  with two different operator actions (uncited prose: go read it; NO prose: go re-run the phase),
+  and one line cannot name both. **Cheap to fail because nothing else is lost:** `on_phase` has
+  already persisted every phase before it, so a retry from the saved transcript resumes and
+  re-pays only the empty one, and `folder.run_phase` records the file `failed` and carries on
+  with the rest of the folder — a bad phase costs one file, never an 18-hour run.
+
+- **TD-35 — the `balanced` output/input ratio is stale, so the gate quote ran UNDER the bill** ·
+  HIGH · closed 2026-09-06 (`5539ee9`). Run 3 quoted **$3.9616**, spent **$4.4634** — 0.89x, the
+  TD-24 failure mode one day after TD-24 closed. Decomposed to a single number: the input estimate
+  was 0.9987x (it is read off the real transcripts), the output estimate 0.812x, and 144,068 /
+  600,193 = 0.2400 exactly — the whole miss WAS `[tiers.balanced].output_per_input_ratio`. Run 3
+  is the clean unstitched whole-course measurement that retires 0.24 as an n=1 June guess:
+  **0.29513** aggregate over 46 calls, per file 0.2828–0.3008, with run 2's 0.2805 as a second
+  independent aggregate and the trend upward. **Re-seeded to 0.33, above the CLAUDE.md +5% rule
+  (0.31) on the operator's call:** 0.31 quotes 1.03x the folder and would still under-quote a
+  SINGLE file at the highest ratio ever measured (0.3171, run 2); 0.33 quotes 1.07x, the same
+  margin economy carries, and the gate exists to be biased high. Config only — no code changed.
+  The duration-based scan quote is unaffected and still high ($5.16 vs $4.4634); raising the ratio
+  lifts it too, so it needs no separate fix.
 
 - **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
   HIGH · closed 2026-09-05 (`5106175`, `383da25`, `61de114`). Opened as a design question —

@@ -1,13 +1,14 @@
 # Current Context
 
 **Updated:** 2026-09-06 · **v3.0.0 released**, carrying TD-31's and TD-27's artifact-format
-breaks. **Released with TD-34 + TD-35 (HIGH) and TD-36 (MEDIUM) open, on the operator's call** —
-none is a regression against v2.3.0; run 3's own new `notice` lines are what made two of them
-visible. Calibration: run 1 (7 RU lectures, Haiku, **$2.4003**) seeded the cost model; run 2
-(`КУРС2025`, 6 lectures, **balanced**, **$3.7246**) closed TD-31 + TD-33 off its 13
-transcripts; **run 3** (same 6 lectures, 18h18m, first run of the 3.0 build, **$4.4634**) is the
-clean unstitched measurement — **0 CJK slips, 0 undrawable chars**, 6/6 transcripts reused by
-fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
+breaks; it shipped with TD-34 + TD-35 (HIGH) and TD-36 (MEDIUM) open on the operator's call,
+and **all three were answered the next day, unreleased on `main` (`5539ee9`)** — TD-34 and
+TD-35 closed, TD-36's announce half with them. Calibration: run 1 (7 RU lectures, Haiku,
+**$2.4003**) seeded the cost model; run 2 (`КУРС2025`, 6 lectures, **balanced**,
+**$3.7246**) closed TD-31 + TD-33 off its 13 transcripts; **run 3** (same 6 lectures, 18h18m,
+first run of the 3.0 build, **$4.4634**) is the clean unstitched measurement — **0 CJK slips,
+0 undrawable chars**, 6/6 transcripts reused by fingerprint, 1 loop block dropped where the
+old rule dropped 39 per 13 files.
 **Authority:** [CLAUDE.md](../CLAUDE.md); TECHNICAL_DEBT TD-16 for the v2 rule's validation.
 **Max: ~88 lines** — only what the code and the CHANGELOG cannot tell you. Cut, don't append.
 
@@ -22,7 +23,8 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
   39 blocks / 5172 words of real lecture per 13 files. WHOLE blocks only, still.
 - **Two channels, from `summarize` AND `render`** (TD-29, TD-28). `log` = chatter, muted;
   `notice` = act on it, loud: a DROPPED anchor, a phase citing NOTHING over a timecoded
-  transcript, a foreign script, an unfont-able character, an empty title. **Do not merge them**;
+  transcript, a foreign script, an unfont-able character, an empty title or essence field.
+  **Do not merge them**;
   pass `notice=` to EVERY `validate_anchors` call — the per-phase one drops.
 - **The script check is an instrument** ([design](./designs/script-check.md)): it MEASURES
   whether the prompt sentence works, so keep it. Notation is not a script (TD-30).
@@ -52,12 +54,17 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
   WHOLE loop iteration is guarded (BaseException). A resume partial is keyed by path + language
   + tier, so a tier switch re-runs, never mixes.
 - **Essence block** is phase prose only; reconcile ALWAYS runs; every emitted string is
-  anchor-validated, title included — an EMPTY title says so.
-- **Cost model** projects output as `ratio x that call's input`. **Re-seed a tier from its own
-  "Actual cost" line: output/input, +~5%.** economy 0.39; **balanced 0.24 is now MEASURED WRONG**
-  (TD-35): run 3 gives 0.29513 aggregate, 0.2828-0.3008 across 6 files, so the gate quotes 0.89x
-  its bill. The input leg is near-exact (0.9987x) — the whole miss is this one number. Token
-  estimate: 3 rates by script.
+  anchor-validated. **Two different answers to a short reply, on purpose:** an empty PHASE is a
+  paid call whose stretch of the recording would go missing, so it FAILS the file loud (TD-34,
+  costing one file — `folder.run_phase` carries on and `on_phase` already persisted the rest);
+  an empty title or essence field is one short reconcile call over intact prose, so it is a
+  `notice` and the run finishes (TD-36).
+- **Cost model** projects output as `ratio x that call's input`, and the input leg needs no margin
+  (0.9987x — it is read off the real transcripts), so that ONE number carries the whole bias.
+  **Re-seed a tier from its own "Actual cost" line: output/input, +~5%.** economy 0.39; balanced
+  **0.33 since 2026-09-06** (TD-35), seeded above the rule (0.31) so a SINGLE file at the highest
+  ratio ever measured, 0.3171, is still quoted over — run 3 gave 0.29513 aggregate over 46 calls,
+  0.2828-0.3008 per file. Token estimate: 3 rates by script.
 - **Key:** env, then gitignored `config/secrets.toml` — absent in WSL, so paid runs are
   Windows-only; `/mnt/c/Users/operator/Documents/echogist/output/` reads that tree from here.
   **The real pool is migrated (2026-09-05):** 13/13 summaries and 13/13 transcripts carry
@@ -65,17 +72,17 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files.
 
 ## Next
 
-1. **TD-35 first — it is a two-number `config/models.toml` edit and every `balanced` run until
-   then quotes under its bill.** The measurement is done; only the pick is open: 0.31 (the
-   CLAUDE.md +5% rule, quotes 1.03x) or 0.33 (1.07x, also covers the worst file ever seen,
-   0.3171). Operator's call, deliberately not made.
-2. **TD-34 + TD-36 together via `/plan-eng-review`** — one root: the anchor validator proves every
-   emitted string RESOLVES, nothing proves a required field EXISTS. ADR-triggering.
-3. **The summary-skip join is still unexercised on a real run.** `summaries/raw/` was cleared
-   before run 3, so nothing was skippable. The 6 JSONs now carry fingerprints matching their
-   transcripts exactly, so the next run over the same folder is the test — it should skip all 6
-   and spend $0.
-4. **The stub pipeline still cannot run in WSL** (no clip fixture, no Whisper model), so it did
-   not gate 3.0.0; run 3 on Windows — 46 paid calls, 6 documents — stood in for it.
-5. TD-30 (needs a home now the header idea is dead); TD-29b — **now louder**, a folder run
+1. **Run 4 is the test of everything above, and of three things at once.** Point a folder run at
+   `КУРС2025` again: (a) the **summary-skip join** is still unexercised — the 6 JSONs in
+   `summaries/raw/` carry fingerprints matching their transcripts exactly, so it should skip all
+   6 and spend **$0**; (b) any real work it does quotes at 0.33 and the "Actual cost" line says
+   whether that margin is right; (c) an empty phase or essence field now announces itself, which
+   is how TD-36's rate gets measured without opening the `.json`.
+2. **TD-36's second half stays open** — WHY reconcile drops fields on half the documents at this
+   size. Collect the rate from run 4's notices first; do not guess it from six samples.
+3. **The stub pipeline still cannot gate a release from WSL** (no clip fixture, no Whisper model).
+   `scripts/win-smoke.bat` is the Windows entry point and now holds its window open when
+   double-clicked; it needs a short clip at `tests/fixtures/audio/smoke.*` (not committed) or
+   `--clip PATH`. Until one is placed, a real run stands in for the killswitch gate.
+4. TD-30 (needs a home now the header idea is dead); TD-29b — **now louder**, a folder run
    pointed at `output/` writes triple-dated names; TD-29c; streaming; 1b.
