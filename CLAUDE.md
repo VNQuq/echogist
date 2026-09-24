@@ -20,9 +20,9 @@ no history/analytics. Personal-use, Windows-only; developed in WSL2.
   the only network stage; every stage left of it (incl. the token GUARD and cost
   estimate) is local and offline — no `count_tokens` or any network call. The
   pipeline must run end-to-end against a stub summarizer, locally, before every push.
-- **Every push to `main` passes: ruff + mypy + tests.** One exception: a docs-only commit
-  may land without the gate — nothing under `echogist/`, `tests/`, `scripts/` or `config/`
-  touched. A commit that mixes docs with code is a code commit and passes the gate.
+- **Every push to `main` passes: ruff + ruff format + mypy + tests.** One exception: a
+  docs-only commit may land without the gate — nothing under `echogist/`, `tests/`, `scripts/`
+  or `config/` touched. A commit that mixes docs with code is a code commit and passes the gate.
 - **No manual workarounds.** Provisioning, fetching, and recovery must be automated
   and idempotent.
 - **English is the language of the application.** Commit messages (subject and body),
