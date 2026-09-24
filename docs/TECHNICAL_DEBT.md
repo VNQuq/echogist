@@ -11,6 +11,21 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
+- **TD-37 — the Windows-only branches are type-checked nowhere** · LOW · created 2026-09-24.
+  mypy pins `platform = "linux"` so one verdict holds on both CI runners; the price is that code
+  behind `sys.platform != "win32"` / `os.name == "nt"` (the DLL shim in `gpu.py`, `msvcrt` and
+  `os.startfile` in `ui.py`) is unreachable to it, and its `type: ignore`s can never be flagged
+  unused. It was already so: dev has only ever run mypy on Linux. The fix is a second
+  `mypy --platform win32` on the Windows job, which means rewriting ~9 guards so both passes are
+  clean. **Trigger: the next change to `gpu.py` or to a Windows branch of `ui.py`.**
+
+- **TD-38 — the dev venv is not the CI venv** · LOW · created 2026-09-24. CI installs the locks
+  on 3.11; the WSL `.venv` is 3.12 with hand-installed packages (`anthropic` 1.3.0 against the
+  lock's 0.109.1), and the lock cannot go into 3.12 — the CUDA wheels are cp311. A green local
+  gate is therefore a strong hint, not a verdict; CI is the verdict. **Trigger: a local-green /
+  CI-red disagreement, or rebuilding the dev venv for any other reason (rebuild it on 3.11 from
+  both locks then).**
+
 - **TD-36 — reconcile returns PARTIAL output, and an empty essence field is announced nowhere** ·
   MEDIUM · created 2026-09-06. Same run, 3 of 6 files lost something from the reconcile call: file 1
   the phase-heading outline, files 2 and 6 the title, and file 2 ALSO `main_skill` (`''`). The
@@ -62,8 +77,9 @@ TD-27's artifact-format breaks, which is what it exists for, and none of the thr
 against v2.3.0: TD-35 was a stale constant that predates it, and TD-34 and TD-36 are pre-existing
 gaps that this run's own new `notice` lines are what made visible. All three were answered the next
 day, 2026-09-06 (`5539ee9`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
-with them. **Open now: TD-36's second half (MEDIUM)** — TD-30 and TD-29b closed 2026-09-06, the
-registry's two LOW entries answered the same day as its two HIGH ones; TD-29c closed 2026-09-24.
+with them. **Open now: TD-36's second half (MEDIUM), TD-37 and TD-38 (LOW)** — TD-30 and TD-29b
+closed 2026-09-06, the registry's two LOW entries answered the same day as its two HIGH ones;
+TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
 
 ---
 
@@ -75,10 +91,11 @@ registry's two LOW entries answered the same day as its two HIGH ones; TD-29c cl
   `windows-latest` and `ubuntu-latest`, both on 3.11, over the FULL hash-locked runtime lock plus a
   new `requirements-dev.lock` (the gate tools, pinned, resolved against it). The entry's premise
   that CI would skip the GPU wheels was dropped: the lock installs on a GPU-less runner, so the
-  suite runs against the versions run.bat ships. **The first 3.11 run earned it on day one:** dev
+  suite runs against the versions run.bat ships. **Reproducing its command locally before the first
+  push earned it on day one:** dev
   had only ever run 3.12, whose float `sum` is compensated; 3.11's is not, so `guard` estimated
   `100 x 0.3` as 31 tokens and four guard tests failed on the ship target. Fixed with `math.fsum`.
-  The first WINDOWS run, the suite's first on the ship OS, failed 16 more: 15 tests assumed posix
+  The same command on native Windows 3.11, the suite's first run on the ship OS, failed 16 more: 15 tests assumed posix
   (`/` in expected paths, `termios`, a console prompt_toolkit could open, the host's encoding) and
   one was the product — a folder row printed `Course-1\bonus/` there. mypy pins `platform = linux`
   so the nt branches' ignores read the same on both runners.

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Generate the hash-pinned requirements.lock from requirements.in (plan §12.2).
+# Generate the hash-pinned requirements.lock from requirements.in (plan §12.2), then
+# requirements-dev.lock from requirements-dev.in resolved against it (-c). CI installs both;
+# regenerate them together, or their shared pins can drift apart and the install fails.
 #
 # Cross-platform in ONE pass via uv's universal resolver. CUDA wheels are
 # platform-specific (win_amd64 vs manylinux), so we resolve a single version set

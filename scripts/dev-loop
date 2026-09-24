@@ -5,7 +5,7 @@
 # test suite against the STUB summarizer (killswitch-safe — no live API, no key).
 # Cold Windows runs are reserved for scripts/win-smoke.bat.
 #
-#   scripts/dev-loop          ruff + mypy + pytest (the default fast loop)
+#   scripts/dev-loop          ruff + ruff format + mypy + pytest (the default fast loop)
 #   scripts/dev-loop --gpu    ... then the optional real-GPU transcribe of a
 #                             fixture clip (extract + transcribe in WSL; offline —
 #                             the paid summary stays killswitch-gated). Needs a clip

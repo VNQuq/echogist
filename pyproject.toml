@@ -30,8 +30,8 @@ warn_redundant_casts = true
 platform = "linux"
 files = ["echogist", "tests", "scripts/measure_model.py", "scripts/smoke_run.py", "scripts/release.py", "scripts/check-models.py"]
 
-# Runtime wheels are GPU/native and not installed in the dev/CI venv; they are
-# imported lazily inside functions, so stub-less imports are fine to ignore. fontTools
+# Runtime wheels are GPU/native: CI installs them from the lock, the WSL dev venv may not.
+# They are imported lazily inside functions, so stub-less imports are fine to ignore. fontTools
 # (fpdf2's own dependency, read for the font cmap in render) ships no py.typed marker.
 [[tool.mypy.overrides]]
 module = ["ctranslate2", "faster_whisper", "anthropic", "fpdf", "fontTools.*", "imageio_ffmpeg", "huggingface_hub"]
