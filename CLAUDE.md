@@ -5,8 +5,8 @@
 EchoGist: a single-`.bat` Windows console tool. Input is a local audio/video file
 or a saved transcript. Output is an MP3 track and/or a structured RU/EN summary
 (PDF default, Markdown optional). Transcription is local GPU Whisper; summarization
-is one cloud Anthropic call. No online sources, no logins, no history/analytics.
-Personal-use, Windows-only; developed in WSL2.
+is cloud Anthropic calls (one per phase + one reconcile). No online sources, no logins,
+no history/analytics. Personal-use, Windows-only; developed in WSL2.
 
 ## Hard Constraints
 
