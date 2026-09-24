@@ -1,7 +1,8 @@
 # Current Context
 
-**Updated:** 2026-09-06 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`), and `main` has since
+**Updated:** 2026-09-24 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`), and `main` has since
 moved past it: the empty-phase failure now ends in an offer to retry (`9ccdf47`, unreleased).
+**Being prepared for a public repo** (branch `publish-prep`): third-party content out, MIT, CI.
 3.1.0 is the answer to its own first real run — TD-34, TD-35, TD-30, TD-29b and TD-36's announce
 half, MINOR because no artifact format moved; 3.0.0 carried TD-31's and TD-27's format breaks.
 Calibration, four runs: run 1 (7 RU lectures, Haiku, **$2.4003**) seeded the cost model; run 2
@@ -82,7 +83,6 @@ fingerprint, 1 loop block dropped where the old rule dropped 39 per 13 files; ru
    reconcile input of ~21.5k tokens, SMALLER than all six of run 3 (25.3k-33.3k). Title-drop rate
    3 of 7. The live lead: lecture 1 kept its title in RU and lost it in EN, same material — so the
    next experiment varies the LANGUAGE, not the length, and it is one ~$0.80 re-summarize.
-2. **Verified on 3.1.0's build, no repeat needed.** Skip join 6/6 at $0; `win-smoke.bat` PASS off
-   `tests/fixtures/audio/smoke.mp3` (gitignored, 40s of lecture 3) — the killswitch gate no longer
-   leans on a paid run. TD-34 did not recur, and its phase is the LONGEST of the seven.
-3. TD-29c stays open on its own trigger, a second committer. Streaming; 1b.
+2. `win-smoke.bat` runs off `tests/fixtures/audio/smoke.mp3` (gitignored): no paid run needed.
+3. **CI enforces the gate** (`ci.yml`: windows + ubuntu, 3.11, full lock), the only 3.11-on-Windows
+   run (dev is 3.12/WSL); its first caught a float-sum drift and 16 posix-only tests. Streaming; 1b.

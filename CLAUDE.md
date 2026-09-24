@@ -23,6 +23,7 @@ no history/analytics. Personal-use, Windows-only; developed in WSL2.
 - **Every push to `main` passes: ruff + ruff format + mypy + tests.** One exception: a
   docs-only commit may land without the gate — nothing under `echogist/`, `tests/`, `scripts/`
   or `config/` touched. A commit that mixes docs with code is a code commit and passes the gate.
+  CI (`.github/workflows/ci.yml`) re-runs the same four on Windows and Linux, Python 3.11.
 - **No manual workarounds.** Provisioning, fetching, and recovery must be automated
   and idempotent.
 - **English is the language of the application.** Commit messages (subject and body),

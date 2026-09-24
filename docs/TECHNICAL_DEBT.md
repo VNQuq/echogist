@@ -11,10 +11,6 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
 
 ## Open debts
 
-- **TD-29c — no machine enforces the gate** · MINOR · created 2026-09-05, re-affirmed 2026-09-06
-  (the operator declined CI while the trigger has not fired; a workflow is ~20 lines and needs a
-  dev-requirements list, which does not exist — the runtime lock is GPU wheels the CI venv skips). `.github/` has never existed in any commit and no git hooks are installed, so ruff + ruff format + mypy + tests are run by hand every time. Verified 2026-09-05 that this has cost nothing: all nine commits of 2026-09-04 pass the full gate when replayed in a clean worktree. CLAUDE.md's wording was corrected the same day (it claimed CI); the killswitch itself IS test-covered and the suite runs offline with no key in ~4s. **Trigger: a second committer.**
-
 - **TD-36 — reconcile returns PARTIAL output, and an empty essence field is announced nowhere** ·
   MEDIUM · created 2026-09-06. Same run, 3 of 6 files lost something from the reconcile call: file 1
   the phase-heading outline, files 2 and 6 the title, and file 2 ALSO `main_skill` (`''`). The
@@ -66,12 +62,26 @@ TD-27's artifact-format breaks, which is what it exists for, and none of the thr
 against v2.3.0: TD-35 was a stale constant that predates it, and TD-34 and TD-36 are pre-existing
 gaps that this run's own new `notice` lines are what made visible. All three were answered the next
 day, 2026-09-06 (`5539ee9`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
-with them. **Open now: TD-36's second half (MEDIUM) and TD-29c (MINOR)** — TD-30 and TD-29b closed
-2026-09-06, the registry's two LOW entries answered the same day as its two HIGH ones.
+with them. **Open now: TD-36's second half (MEDIUM)** — TD-30 and TD-29b closed 2026-09-06, the
+registry's two LOW entries answered the same day as its two HIGH ones; TD-29c closed 2026-09-24.
 
 ---
 
 ## Closed debts (compact — verbose history in git)
+
+- **TD-29c — no machine enforces the gate** · MINOR · closed 2026-09-24 (`d48ff07`). Its trigger
+  was a second committer; publication is a second READER, and a public gate is only a claim until
+  a machine runs it. `.github/workflows/ci.yml` runs ruff, ruff format, mypy and pytest on
+  `windows-latest` and `ubuntu-latest`, both on 3.11, over the FULL hash-locked runtime lock plus a
+  new `requirements-dev.lock` (the gate tools, pinned, resolved against it). The entry's premise
+  that CI would skip the GPU wheels was dropped: the lock installs on a GPU-less runner, so the
+  suite runs against the versions run.bat ships. **The first 3.11 run earned it on day one:** dev
+  had only ever run 3.12, whose float `sum` is compensated; 3.11's is not, so `guard` estimated
+  `100 x 0.3` as 31 tokens and four guard tests failed on the ship target. Fixed with `math.fsum`.
+  The first WINDOWS run, the suite's first on the ship OS, failed 16 more: 15 tests assumed posix
+  (`/` in expected paths, `termios`, a console prompt_toolkit could open, the host's encoding) and
+  one was the product — a folder row printed `Course-1\bonus/` there. mypy pins `platform = linux`
+  so the nt branches' ignores read the same on both runners.
 
 - **TD-30 — the script check trades EN drift detection for quiet** · LOW ·
   closed 2026-09-06. `_ALLOWED_SCRIPTS["en"]` allows Cyrillic so a faithful quotation of a
