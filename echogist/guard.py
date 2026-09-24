@@ -108,8 +108,10 @@ def estimate_input_tokens(
     sum is rounded **up** and the fixed ``prompt_overhead`` added — every rounding goes in
     the conservative (over-estimate) direction.
     """
+    # fsum, not sum: 3.11's float sum drifts (100 x 0.3 = 30.000000000000004) and ceil turns
+    # the drift into a token; 3.12's compensated sum does not, so the two disagreed.
     body = math.ceil(
-        sum(
+        math.fsum(
             _rate(ch, cyrillic_rate=cyrillic_rate, default_rate=default_rate, cjk_rate=cjk_rate)
             for ch in text
         )
