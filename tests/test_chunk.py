@@ -173,7 +173,8 @@ def test_drop_is_configurable_off() -> None:
 # --------------------------------------------------------------------------- #
 # TD-33 — the discriminator tells a stuck decoder from a lecturer making a point
 # --------------------------------------------------------------------------- #
-#: A Socratic drill from the operator's real lecture 1 at [01:12:24]. The answer IS a
+#: A Socratic drill from the operator's real lecture 1 at [01:12:24], paraphrased word for
+#: word (same word count, same repeats, same score) before publication. The answer IS a
 #: repeated phrase, five times, because that is the teaching device. The unique-word ratio
 #: this replaced scored it 0.550 against a 0.55 floor and deleted the whole minute.
 _RHETORICAL = (
@@ -186,7 +187,7 @@ _RHETORICAL = (
 
 
 def test_rhetorical_repetition_is_speech_and_is_kept() -> None:
-    """The TD-33 defect, verbatim from a real lecture.
+    """The TD-33 defect, in the exact shape of a real lecture passage.
 
     A phrase repeated to make a point is scattered among varied sentences; a decoder loop
     blankets the block. Measured over 13 lectures, the old ratio deleted 39 such blocks
