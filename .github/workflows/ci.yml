@@ -1,0 +1,41 @@
+# The push gate, on GitHub: ruff, ruff format, mypy, pytest — the same four as scripts/dev-loop.
+#
+# Windows is the ship target (run.bat, the win32 DLL shim, msvcrt, os.startfile); Linux is
+# where the fast loop runs (WSL) and where the posix branches live. Both run on 3.11, the
+# version run.bat enforces. No GPU, no Whisper model, no network beyond pip, no secrets:
+# every paid or GPU path is lazy-imported and every test drives it through a stub.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.lock
+      # The full runtime lock, CUDA wheels included (~2.6 GB on Linux): the suite runs
+      # against the exact versions run.bat installs, not a hand-picked subset.
+      - name: Install (hash-locked)
+        run: python -m pip install --require-hashes -r requirements.lock -r requirements-dev.lock
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: pytest

@@ -25,6 +25,9 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+# The nt-only branches (msvcrt, WinDLL, os.startfile) carry their ignores against a posix
+# check; pinning the platform makes the verdict the same on the Windows and Linux runners.
+platform = "linux"
 files = ["echogist", "tests", "scripts/measure_model.py", "scripts/smoke_run.py", "scripts/release.py", "scripts/check-models.py"]
 
 # Runtime wheels are GPU/native and not installed in the dev/CI venv; they are

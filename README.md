@@ -1,5 +1,7 @@
 # EchoGist
 
+[![CI](https://github.com/VNQuq/echogist/actions/workflows/ci.yml/badge.svg)](https://github.com/VNQuq/echogist/actions/workflows/ci.yml)
+
 > Достаёт суть из видео и аудио: извлекает дорожку или делает структурированное резюме.
 
 ```text

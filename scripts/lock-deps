@@ -39,6 +39,15 @@ fi
   --output-file requirements.lock \
   requirements.in
 
+"$UV" pip compile \
+  --universal \
+  --generate-hashes \
+  --python-version "$PY_TARGET" \
+  --constraint requirements.lock \
+  --output-file requirements-dev.lock \
+  requirements-dev.in
+
 echo "Wrote requirements.lock (universal, python $PY_TARGET) from requirements.in."
+echo "Wrote requirements-dev.lock (the gate tools, constrained by requirements.lock)."
 echo "Acceptance gate: verify it installs on the first Windows cold run via"
 echo "  pip install --require-hashes -r requirements.lock   (plan §12.2 / T2)."
