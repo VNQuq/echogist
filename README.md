@@ -29,19 +29,21 @@ summary whose every timecode is checked against the transcript.*
 ## Архитектура
 
 ```mermaid
-flowchart LR
-    subgraph local["Локально, офлайн"]
-        A[Аудио или видео] --> T[Транскрипция<br/>Whisper на GPU]
-        F[Папка:<br/>пакетный прогон] --> T
-        T --> E[Оценка стоимости<br/>и подтверждение]
-        S[Сохранённый<br/>транскрипт] --> E
-        V[Проверка тайм-кодов<br/>→ PDF / Markdown]
+flowchart TB
+    subgraph before["Локально, до оплаты"]
+        direction LR
+        A[Аудио или видео] --> T[Whisper на GPU] --> S[(Транскрипт)] --> E[Оценка цены]
     end
     subgraph api["Anthropic API, платно"]
-        P[Фазы по очереди] --> R[Сводящий вызов]
+        direction LR
+        P[Резюме по фазам] --> R[Финальная сборка]
     end
-    E --> P
-    R --> V
+    subgraph after["Локально, проверка"]
+        direction LR
+        V[Проверка тайм-кодов] --> O[PDF / Markdown]
+    end
+    before -->|подтверждено| api
+    api --> after
 ```
 
 - **Граница оплаты:** платные только вызовы Anthropic — по одному на фазу и один сводящий.
