@@ -703,6 +703,28 @@ def test_a_ui_built_without_a_log_path_writes_nothing(tmp_path: Path) -> None:
 _POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="termios is posix-only")
 
 
+def test_drain_input_empties_the_windows_console_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The nt branch, runnable anywhere: msvcrt is imported inside the call, so a stand-in
+    # module decides what the console holds.
+    pending = list("abc")
+    fake = types.SimpleNamespace(kbhit=lambda: bool(pending), getwch=lambda: pending.pop(0))
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr("os.name", "nt")
+    _tty_ui().drain_input()
+    assert pending == []
+
+
+def test_drain_input_never_raises_when_the_windows_console_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom() -> bool:
+        raise OSError("no console")
+
+    monkeypatch.setitem(sys.modules, "msvcrt", types.SimpleNamespace(kbhit=_boom, getwch=str))
+    monkeypatch.setattr("os.name", "nt")
+    _tty_ui().drain_input()
+
+
 @_POSIX_ONLY
 def test_drain_input_flushes_the_posix_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     import termios

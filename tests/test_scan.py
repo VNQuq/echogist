@@ -855,6 +855,12 @@ def test_a_folder_with_only_unreadable_files_still_renders_its_totals(tmp_path: 
     ]
 
 
+def test_files_in_the_scan_root_get_a_dot_row_with_the_native_separator(tmp_path: Path) -> None:
+    _media(tmp_path, "top.mp4")
+    rows = scan.folder_rows(_scan(tmp_path, tmp_path), {})
+    assert rows[0][0] == f".{os.sep}"
+
+
 def test_problem_lists_are_shown_relative_to_the_scan_root(tmp_path: Path) -> None:
     # An absolute path per row wraps over several lines in the report and buries the part
     # that identifies the file. The operator picked the root seconds ago.
