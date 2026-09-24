@@ -9,7 +9,7 @@
 *A Windows console tool: local GPU Whisper transcription, then a phase-by-phase Claude
 summary whose every timecode is checked against the transcript.*
 
-> **Плейсхолдер (GIF):** запись консоли от выбора файла до готового резюме.
+![EchoGist: от выбора файла до готового резюме](docs/images/demo.gif)
 
 ## Что делает
 
