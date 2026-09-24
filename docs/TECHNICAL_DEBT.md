@@ -39,7 +39,7 @@ commit ref, kept in the compact one-liner form below; verbose history lives in g
   and the first is cheap: route every empty essence field to `notice`, the way the empty title
   already is. The second — why a Sonnet reconcile call drops fields on half the documents — is an
   investigation, not a patch, and should not be guessed at from six samples. Shares TD-34's root:
-  nothing asserts a required field is non-empty. **First half CLOSED 2026-09-06 (`5539ee9`):**
+  nothing asserts a required field is non-empty. **First half CLOSED 2026-09-06 (`601c270`):**
   every empty essence field — core idea, key skill, self-check questions — is now announced on
   `notice`, so a blank главный навык can no longer ship under a run that reports success. It stays
   a notice and not a failure because the K paid phases of prose are intact; only the single
@@ -68,7 +68,7 @@ run off that run's own audited numbers, and TD-27 on 2026-09-05. TD-29 closed 20
 forward item is T8 (offline LLM-judge groundedness eval), tracked in `docs/CURRENT_CONTEXT.md` as a
 P3 enhancement, not debt. TD-32 and TD-33 both came out of the operator's read of the six-file
 `КУРС2025` run on 2026-09-05 and both closed the same week; TD-31 closed 2026-09-05 with
-`dbdda98` and took TD-27's two load-bearing constraints with it, which is what left TD-27 answerable
+`419d5cd` and took TD-27's two load-bearing constraints with it, which is what left TD-27 answerable
 as an ergonomics question rather than a design one. That state lasted one day: the third
 `КУРС2025` run, on 2026-09-05, was the first exercise of the post-TD-31/TD-27/TD-33 build on
 real material and opened TD-34, TD-35 and TD-36 off its log and its saved artifacts. v3.0 was cut
@@ -76,7 +76,7 @@ with all three open, deliberately and on the operator's call — the release car
 TD-27's artifact-format breaks, which is what it exists for, and none of the three was a regression
 against v2.3.0: TD-35 was a stale constant that predates it, and TD-34 and TD-36 are pre-existing
 gaps that this run's own new `notice` lines are what made visible. All three were answered the next
-day, 2026-09-06 (`5539ee9`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
+day, 2026-09-06 (`601c270`), before the next paid run: TD-34 and TD-35 closed, TD-36's first half
 with them. **Open now: TD-36's second half (MEDIUM), TD-37 and TD-38 (LOW)** — TD-30 and TD-29b
 closed 2026-09-06, the registry's two LOW entries answered the same day as its two HIGH ones;
 TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
@@ -85,7 +85,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
 
 ## Closed debts (compact — verbose history in git)
 
-- **TD-29c — no machine enforces the gate** · MINOR · closed 2026-09-24 (`d48ff07`). Its trigger
+- **TD-29c — no machine enforces the gate** · MINOR · closed 2026-09-24 (`99f82b3`). Its trigger
   was a second committer; publication is a second READER, and a public gate is only a claim until
   a machine runs it. `.github/workflows/ci.yml` runs ruff, ruff format, mypy and pytest on
   `windows-latest` and `ubuntu-latest`, both on 3.11, over the FULL hash-locked runtime lock plus a
@@ -141,7 +141,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   gesture but leaves the re-purchase and the triple-dating one keypress away.
 
 - **TD-34 — a synthesis phase can come back EMPTY and take its stretch of the lecture with it** ·
-  HIGH · closed 2026-09-06 (`5539ee9`). Run 3, file 1, phase 7/7 (02:40:57–03:05:34) returned
+  HIGH · closed 2026-09-06 (`601c270`). Run 3, file 1, phase 7/7 (02:40:57–03:05:34) returned
   `{"heading": "", "prose": "", "anchors": []}` — 43 bytes against 6,517–10,691 for its six
   siblings. The last 25 minutes of a 3h05m lecture, ~13% of the material, absent from the
   document; the call paid for; the run reporting success. The fix is the narrow one the entry
@@ -154,7 +154,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   with the rest of the folder — a bad phase costs one file, never an 18-hour run.
 
 - **TD-35 — the `balanced` output/input ratio is stale, so the gate quote ran UNDER the bill** ·
-  HIGH · closed 2026-09-06 (`5539ee9`). Run 3 quoted **$3.9616**, spent **$4.4634** — 0.89x, the
+  HIGH · closed 2026-09-06 (`601c270`). Run 3 quoted **$3.9616**, spent **$4.4634** — 0.89x, the
   TD-24 failure mode one day after TD-24 closed. Decomposed to a single number: the input estimate
   was 0.9987x (it is read off the real transcripts), the output estimate 0.812x, and 144,068 /
   600,193 = 0.2400 exactly — the whole miss WAS `[tiers.balanced].output_per_input_ratio`. Run 3
@@ -168,7 +168,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   lifts it too, so it needs no separate fix.
 
 - **TD-27 — `output/` has no artifact-release concept; it is a flat dumping ground** ·
-  HIGH · closed 2026-09-05 (`5106175`, `383da25`, `61de114`). Opened as a design question —
+  HIGH · closed 2026-09-05 (`1155903`, `672c121`, `55d8358`). Opened as a design question —
   what IS an EchoGist artifact release — after a mid-session request for a dated `date_bulk`
   directory was cancelled rather than shipped. TD-31 removed two of its three constraints;
   reading the REAL pool on disk answered the third and reframed the whole entry.
@@ -223,7 +223,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   Residual: the single mixed block (215 words, ~37% loop) now reaches the model intact; keeping
   135 words of real speech was judged the better side of that trade.
 - **TD-31 — a transcript could not say which recording it came from** · HIGH · closed 2026-09-05
-  (`dbdda98`). Identity is now the recording's CONTENT (`naming.source_fingerprint`: sha256 over
+  (`419d5cd`). Identity is now the recording's CONTENT (`naming.source_fingerprint`: sha256 over
   size + first and last mebibyte, 16 hex) and it lives in the transcript's FILENAME, never inside
   the file — the body is the exact text the summarizer reads, and a metadata line in it would
   become block #1 at `[00:00:00]` and could be quoted back with an anchor that passes validation.
@@ -247,7 +247,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
 - TD-26 — Whisper boilerplate reached the summary · closed 2026-09-04 · `chunk.drop_degenerate_blocks` trims the synthesis INPUT only (the saved transcript stays verbatim ground truth); two measured, content-agnostic rules — a unique-word-ratio floor for the repetition loop, plus adjacency for the short credit line touching it. Drops 10 of 198 blocks on the real lecture with no false positives, and is reported to the operator rather than skipped silently.
 
 - **TD-22 — A summary has no back-link to its source file** · CLOSED 2026-09-04 (bulk v3
-  increment 2, commit `7000af4`). `Summary.source_path` carries the resolved source, stamped
+  increment 2, commit `e580c8c`). `Summary.source_path` carries the resolved source, stamped
   by `save_raw_result` at save time rather than by the summarize call (the back-link is
   provenance, not model output, and the tool schema never sets it). `summarize.summary_index`
   reads the stamps back and `bulk.plan_run` uses it to skip a source that already has a
@@ -288,10 +288,10 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   06-26; operator principle reversal, eng-reviewed). The transcript is ground truth, read DIRECTLY into faithful
   prose (one hop): `plan_phases` (computed K, contiguous, overlap=0) → `synthesize_summary` ×K forward-only →
   per-phase `validate_anchors` (accept/snap-2s/drop) → reconcile header (K>1) → one readable doc. Supersedes TD-5
-  + TD-15 (deleted in `43b7daf`). Shipped `7ad2185`/`1fdd3de`/`43b7daf`/`2b8ab6f` + `/review` Tier-1/2 (`52a36ef`).
+  + TD-15 (deleted in `fc68447`). Shipped `90dcce3`/`cb808ca`/`fc68447`/`1cce735` + `/review` Tier-1/2 (`49b51c8`).
   **Reference run #1 (06-27, $0.39) FAILED coverage** — phase 2 dropped ~22% of the lecture while every automated
   check passed (green anchors ≠ coverage); root cause was a prompt that never compelled span coverage + an
-  over-firing "do not restate" block. Coverage-fix prompt landed `ba1b973`. **Re-run (06-27, balanced/Sonnet,
+  over-firing "do not restate" block. Coverage-fix prompt landed `2aa6784`. **Re-run (06-27, balanced/Sonnet,
   2:58:57 RU, K=4, $0.5237) operator-ACCEPTED:** phase 2 covers its full 00:44→01:31 span (decider types,
   the four no-decision positions, fit criterion restored); anchors 131/131 + 9/9 resolve (validator log "0 dropped",
   re-checked offline); fidelity spot-check clean (12/12 sampled claims grounded, faithful negative stance, no
@@ -304,32 +304,32 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
 - **TD-18 — Phase headings had no document meta-frame** ✓ CLOSED 2026-06-27 (was MEDIUM). `emit_reconcile` returns
   a `phase_headings` array; `_apply_normalized_headings` swaps the forward-only headings into one coherent outline,
   fail-soft on count/empty mismatch; K=1 keeps its heading; `validate_anchors` strips inline timecodes from
-  headings too. Validated on the re-run — the 4 headings read as one arc (`5d0df0c`).
+  headings too. Validated on the re-run — the 4 headings read as one arc (`55d54ec`).
 - **TD-19 — Per-phase anchor footer dump** ✓ CLOSED 2026-06-27 (was LOW). Dropped the footer in PDF + Markdown;
   the prompt weaves a handful of `[HH:MM:SS]` INLINE in prose, the full `anchors` array stays in the `.json`.
-  Validated on the re-run (131 inline timecodes, all resolve) (`5d0df0c`).
+  Validated on the re-run (131 inline timecodes, all resolve) (`55d54ec`).
 - **TD-21 — Pre-call cost estimate margin** ✓ CLOSED 2026-06-27 (was MEDIUM). `estimate_cost_synthesis` projects
   output from `per_call_output_tokens` (= `[guard].output_tokens_estimate`), not the `max_output_tokens` cap, and
   drops the phantom `K × cap` reconcile-input — killing the old ~2.4× ceiling. The re-run exposed the TD-21 value
   `2800` (fit to truncated run #1) as an UNDERSHOOT — estimate ran 0.91× the bill, breaking the high bias.
   Recalibrated `output_tokens_estimate` 2800 → 4600 (~25% over the re-run's ~3.7k/call mean): estimate now ~1.2×
-  ($0.6330 vs $0.5237). Local offline arithmetic, no new paid run needed. `5d0df0c`, `230deee`.
+  ($0.6330 vs $0.5237). Local offline arithmetic, no new paid run needed. `55d54ec`, `c79e162`.
 - **TD-15 — Summary readability: hierarchical grouping** ✓ CLOSED 2026-06-26 (was MEDIUM, created 06-25).
   Superseded by TD-16: grouping navigated a 221-point map-reduce wall that direct synthesis never produces;
-  the grouping code was deleted in `43b7daf`. Phase 1 render wins (paragraphing, owner-suppression) survive.
+  the grouping code was deleted in `fc68447`. Phase 1 render wins (paragraphing, owner-suppression) survive.
 - **TD-5 — Chunked map-reduce summarization** ✓ CLOSED 2026-06-26 (was LOW, created 06-14). Shipped + paid-
   validated (179-min RU, $1.46, 221→221) but output was an unreadable flat wall; operator reversed to
-  fidelity-over-completeness (TD-16). Machinery deleted in `43b7daf`. The two live bugs it surfaced (Claude
+  fidelity-over-completeness (TD-16). Machinery deleted in `fc68447`. The two live bugs it surfaced (Claude
   4.x `temperature` 400; forced-tool extraction match) survive in the v2 caller.
 - **TD-6 — Title can leak the source language** ✓ CLOSED 2026-06-25 (was LOW). Hardened the `title`
-  instruction + schema desc to force the target language; paid T10 live gate confirmed. `94d7e93`, `5c8fbd4`.
+  instruction + schema desc to force the target language; paid T10 live gate confirmed. `febe62c`, `f041656`.
 - **TD-10 — File input forced manual path typing** ✓ CLOSED 2026-06-23 (was HIGH). `UI.pick_file` native
   tkinter dialog → `questionary.path()` fallback; last-dir persisted; operator Windows run confirmed.
-  `8629ec2`/`8c67b68`/`9e8d768`.
+  `51582db`/`890337d`/`ed85f4e`.
 - **TD-11 — Accumulated menu chrome** ✓ CLOSED 2026-06-23 (was MEDIUM). `UI.clear()` on flow entry (not
-  menu-loop-top); full TUI ruled out of scope. `f4fd2ca`.
+  menu-loop-top); full TUI ruled out of scope. `647f667`.
 - **TD-13 — Submenu back-navigation** ✓ CLOSED 2026-06-23 (was MEDIUM). Explicit `← Back` entries; ESC stays
-  exit (distinguishing it would risk the `_ask` cancel/exit contract). `f4fd2ca`.
+  exit (distinguishing it would risk the `_ask` cancel/exit contract). `647f667`.
 - **TD-14 — Open Explorer at the saved folder** ✓ CLOSED 2026-06-23, REOPENED + RE-CLOSED 2026-06-27. Reopen: the
   once-per-launch `_revealed` bool popped `transcripts` after a summary (transcribe revealed first; `_run_summary`
   revealed nothing). Fix: `reveal_dir(path, *, priority)` — a higher priority supersedes a lower one already shown
@@ -337,7 +337,7 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   "transcripts are never revealed" rule was reversed by TD-12 — a transcript-only run now pops `transcripts`
   (`REVEAL_SUMMARY(3) > REVEAL_TRANSCRIPT(2) > REVEAL_AUDIO(1)`); the reveal lives in the transcript branch of
   `_flow_local_file`, never in `_transcribe_to_checkpoint`. Original close: `nt`-guarded once/launch + no-focus-steal
-  `ShellExecuteW(SW_SHOWNOACTIVATE)`. `f4fd2ca`, 06-25 MP3-only ext.
+  `ShellExecuteW(SW_SHOWNOACTIVATE)`. `647f667`, 06-25 MP3-only ext.
 - **TD-12 — "What should EchoGist produce?" menu misleading + gap** ✓ CLOSED 2026-06-21, REOPENED + RE-CLOSED
   2026-06-27 (design /office-hours, eng-reviewed). Reopen: non-mp3 menu (Summary / MP3 only / Both / Back) implied
   Summary needed no audio and had NO transcript-only path. Fix (MP3-as-baseline): video menu = `MP3 only / Summary /
@@ -347,16 +347,16 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   (`Summary / Transcript only`). Transcript-only now reveals `transcripts` (see TD-14). Source decodes the container
   directly (transcript quality unchanged); the MP3 is an added artifact. Design doc:
   `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md`. Original close: mp3 trimmed menu via
-  `extract.is_mp3`. `f4fd2ca`, `738cf9e`.
+  `extract.is_mp3`. `647f667`, `92048e0`.
 - **TD-8 — `setuptools<81` pin** ✓ CLOSED 2026-06-21 (premise dismissed). No such pin ever existed; lockfile
   ships `setuptools==82.0.1` and passes. The cuDNN↔ctranslate2 tripwire (the pin that matters) is untouched.
 - **TD-3 — GPU provisioning automation** ✓ CLOSED 2026-06-16 (was MEDIUM). `run.bat` provisions idempotently;
   `gpu.register_cuda_libraries` + `PATH`/`ctypes.WinDLL` pin fixed ctranslate2's bare-name cuBLAS load on the
-  4060. `b024368`, `173541d`, `e9a9cfb`.
+  4060. `bd29e2c`, `1f73ce3`, `eb62d76`.
 - **TD-4 — GPU transcription speed unmeasured** ✓ CLOSED 2026-06-16 (was LOW). Warm: `int8_float16` =
-  10.11x realtime / 3.46 GB (kept — same speed, ~2 GB less VRAM, better RU). `b93fd72`, `6bbb1fe`.
+  10.11x realtime / 3.46 GB (kept — same speed, ~2 GB less VRAM, better RU). `929e57d`, `cd0297d`.
 - **TD-1 — Whisper model runtime download** ✓ CLOSED 2026-06-15 (was MEDIUM/HIGH). Root cause = Xet transport
   (not RU region); fetch vanilla `Systran/faster-whisper-large-v3` with `HF_HUB_DISABLE_XET=1`, load
-  `int8_float16`. Model arrives outside the lockfile (accepted). `1f25ef1`…`2748196`.
+  `int8_float16`. Model arrives outside the lockfile (accepted). `88aad24`…`2ee7d3f`.
 - **TD-2 — YouTube ingestion** ✓ CLOSED 2026-06-14 (was HIGH, obsolete). Eng-review falsified the bypass
   hypothesis; dropped all online/link ingestion — local files + saved transcript only, offline, no-credential.

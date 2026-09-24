@@ -2287,7 +2287,7 @@ def test_a_finding_is_loud_while_the_phase_chatter_stays_muted(
     """TD-28 / TD-29: the summarize stage has two channels and the menu must not merge
     them. The phase lines are sixty-per-run scenery; a dropped anchor or a foreign-script
     slip is a finding the operator has to act on. Routing both through ``ui.detail`` — what
-    shipped in 91d4c77 — makes the finding dimmer than the noise it sits in."""
+    shipped in b7bc0b2 — makes the finding dimmer than the noise it sits in."""
     _write_settings(tmp_path)
     video = _lecture(tmp_path / "inbox", "lecture.mp4")
     deps, stub, _ = _make_deps(tmp_path, ["single", "file", str(video), "summary", "exit"])

@@ -141,7 +141,7 @@ result under hundreds of lines.
 ### 5. TD-29 — the channel that makes it loud
 
 None of the above is worth anything if it prints in the same muted grey as the sixty
-phase lines (which is exactly what shipped in `91d4c77`). `summarize.Logger` is
+phase lines (which is exactly what shipped in `b7bc0b2`). `summarize.Logger` is
 `Callable[[str], object]` and cannot say "this one matters".
 
 **Chosen:** a second channel, `notice: Notice = print`, alongside `log` on

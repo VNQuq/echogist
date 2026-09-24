@@ -1,7 +1,7 @@
 # Current Context
 
-**Updated:** 2026-09-25 · **v3.1.0 released** (`5c5145a`, tag `v3.1.0`), and `main` has since
-moved past it: the empty-phase failure now ends in an offer to retry (`9ccdf47`, unreleased).
+**Updated:** 2026-09-25 · **v3.1.0 released** (`c74d50c`, tag `v3.1.0`), and `main` has since
+moved past it: the empty-phase failure now ends in an offer to retry (`b22bba7`, unreleased).
 **Published from a rewritten history** as `VNQuq/echogist`; v3.1.1 ships `[Unreleased]` next.
 3.1.0 is the answer to its own first real run — TD-34, TD-35, TD-30, TD-29b and TD-36's announce
 half, MINOR because no artifact format moved; 3.0.0 carried TD-31's and TD-27's format breaks.

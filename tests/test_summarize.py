@@ -1624,7 +1624,7 @@ def test_a_transcript_with_no_timecodes_to_cite_stays_quiet() -> None:
 def test_a_dropped_anchor_goes_to_the_loud_channel() -> None:
     """TD-29: a dropped anchor is a timecode the model invented — the one fidelity failure
     this stage detects on its own. Printed in the same muted grey as the phase chatter it
-    is indistinguishable from a clean run, which is what shipped in 91d4c77."""
+    is indistinguishable from a clean run, which is what shipped in b7bc0b2."""
     quiet: list[str] = []
     loud: list[str] = []
     summarize.validate_anchors(
