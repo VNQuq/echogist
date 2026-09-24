@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -44,3 +45,11 @@ def test_a_pushed_tag_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", _ls_remote("abc123\trefs/tags/v2.4.0\n"))
 
     release.require_pushed_tag("v2.4.0")  # does not raise
+
+
+def test_pyproject_version_is_the_version_file() -> None:
+    """VERSION is what release.py tags; pyproject's copy sat at 0.1.0 through nine releases
+    because nothing compared them."""
+    root = Path(__file__).resolve().parent.parent
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["version"] == (root / "VERSION").read_text(encoding="utf-8").strip()

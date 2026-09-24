@@ -85,10 +85,10 @@ Before implementing:
 ## Release
 
 Releases are cut with `scripts/release.py` + a GitHub PAT — **never `/ship`** (the gstack ship
-skill is not used here). Flow for `vX.Y.Z`: bump `VERSION`, write the `## [X.Y.Z]` `CHANGELOG.md`
-section, commit + push, push the annotated tag `vX.Y.Z`, then `python3 scripts/release.py`. The PAT
-lives only in the `ECHOGIST_GITHUB_TOKEN` env var (`~/.bashrc`, "Contents: Read and write"), never
-in git.
+skill is not used here). Flow for `vX.Y.Z`: bump `VERSION` and pyproject's `version` (a test
+holds them equal), write the `## [X.Y.Z]` `CHANGELOG.md` section, commit + push, push the annotated
+tag `vX.Y.Z`, then `python3 scripts/release.py`. The PAT lives only in the `ECHOGIST_GITHUB_TOKEN`
+env var (`~/.bashrc`, "Contents: Read and write"), never in git.
 
 ## Context Loading Policy
 
