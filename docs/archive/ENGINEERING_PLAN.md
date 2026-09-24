@@ -187,7 +187,7 @@ Failure of any auto step → clear, copy-pasteable guidance, clean stop. No `.ps
 
 ## 6. Console UX layer — the UI seam (Phase 2, locked)
 
-**Lineage:** office-hours design `~/.gstack/projects/echogist/pc-main-design-20260617-142906.md`
+**Lineage:** office-hours design (kept in the operator's local gstack store, not published)
 (APPROVED) → this phase. Decisions logged in the gstack decision store.
 
 ### 6.1 Goal

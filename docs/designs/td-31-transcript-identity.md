@@ -131,7 +131,7 @@ Per the operator's clean-slate rule for 3.0, there is no backward compatibility.
 matching goes entirely:
 
 - `scan._TRANSCRIPT_NAME` / `_DATE_PREFIX` — the two-readings `-N` machinery added
-  2026-09-04 (`d70829e`). A fixed-width fingerprint anchored at the end of the name is
+  2026-09-04 (`4d6070f`). A fixed-width fingerprint anchored at the end of the name is
   unambiguous by construction, so the ambiguity it defended against cannot arise.
 - `scan.transcript_files` / `scan.transcript_index` — replaced by `transcript_sources`,
   keyed by fingerprint.

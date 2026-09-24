@@ -1202,7 +1202,7 @@ def test_the_drift_check_is_wired_into_the_run_not_just_importable() -> None:
         caller=_seq_caller(
             _outcome(
                 _reconcile_ti(
-                    title="Стратегия",
+                    title="Заголовок",
                     core_idea=ru,
                     main_skill=ru,
                     test_questions=[{"question": "Вопрос?", "answer": "Ответ"}],
@@ -1225,7 +1225,7 @@ def test_a_summary_that_switched_language_wholesale_is_announced() -> None:
     """
     ru_prose = "Весь документ написан по-русски, хотя просили английский. " * 3
     summary = Summary(
-        title="Стратегия",
+        title="Заголовок",
         core_idea=ru_prose,
         decisions=(),
         action_items=(),

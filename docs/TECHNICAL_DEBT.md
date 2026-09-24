@@ -345,8 +345,8 @@ TD-29c closed 2026-09-24 and CI opened TD-37 and TD-38 the same day.
   in `output/audio` (MP3-only failure FATAL, Summary/Transcript DEGRADE — warn + continue, catching both
   ExtractError and bare OSError so a locked-folder `os.replace` can't abort the run; /review red-team fix). `.mp3` menu unchanged
   (`Summary / Transcript only`). Transcript-only now reveals `transcripts` (see TD-14). Source decodes the container
-  directly (transcript quality unchanged); the MP3 is an added artifact. Design doc:
-  `~/.gstack/projects/echogist/pc-main-design-20260627-104405.md`. Original close: mp3 trimmed menu via
+  directly (transcript quality unchanged); the MP3 is an added artifact. Design doc: kept in the
+  operator's local gstack store, not published. Original close: mp3 trimmed menu via
   `extract.is_mp3`. `647f667`, `92048e0`.
 - **TD-8 — `setuptools<81` pin** ✓ CLOSED 2026-06-21 (premise dismissed). No such pin ever existed; lockfile
   ships `setuptools==82.0.1` and passes. The cuDNN↔ctranslate2 tripwire (the pin that matters) is untouched.
