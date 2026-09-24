@@ -40,7 +40,9 @@ def _console(**kwargs: Any) -> Console:
 # --------------------------------------------------------------------------- #
 def test_utf8_terminal_is_fancy() -> None:
     # Forced terminal + default UTF-8 encoding + color on → fancy glyphs.
-    console = _console(force_terminal=True, no_color=False)
+    console = _console(
+        file=_FakeFile("utf-8"), force_terminal=True, no_color=False, legacy_windows=False
+    )
     assert theme.detect_caps(console) is True
 
 

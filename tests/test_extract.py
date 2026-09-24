@@ -403,7 +403,7 @@ broken.mp4: Invalid data found when processing input
 
 def _stderr_runner(text: str) -> extract.Runner:
     def runner(argv: list[str]) -> tuple[int, str]:
-        assert argv[-1] == "/media/file"  # the source is the last argv element
+        assert argv[-1] == str(Path("/media/file"))  # the source is the last argv element
         return 1, text  # ffmpeg -i ALWAYS exits non-zero; the code carries no signal
 
     return runner
@@ -460,7 +460,7 @@ def test_probe_media_uses_a_single_ffmpeg_run() -> None:
     extract.probe_media(Path("/media/file"), "/fake/ffmpeg", runner)
 
     assert len(calls) == 1
-    assert calls[0] == ["/fake/ffmpeg", "-nostdin", "-i", "/media/file"]
+    assert calls[0] == ["/fake/ffmpeg", "-nostdin", "-i", str(Path("/media/file"))]
 
 
 def test_probe_runner_turns_a_hang_into_a_loud_error(monkeypatch: pytest.MonkeyPatch) -> None:

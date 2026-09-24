@@ -13,13 +13,17 @@ import os
 import re
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 import questionary
+from prompt_toolkit.application import create_app_session
+from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.output import DummyOutput
 from rich.text import Text
 
 from echogist.ui import (
@@ -148,6 +152,15 @@ def test_select_single_choice_keeps_bare_hint(monkeypatch: pytest.MonkeyPatch) -
     assert _captured_instruction(monkeypatch, [("only", "Only")]) == "(Use arrow keys)"
 
 
+@pytest.fixture
+def no_console() -> Iterator[None]:
+    """questionary builds a prompt_toolkit Application on construction, and on Windows that
+    needs a real console buffer — which a CI runner and a piped shell do not have."""
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        yield
+
+
+@pytest.mark.usefixtures("no_console")
 def test_bind_number_keys_maps_digits_to_row_positions() -> None:
     # Position-based: digit N picks the N-th row (a ← Back row is just a position), and
     # the handler exits with that row's value — exactly what Enter on the row would do.
@@ -169,6 +182,7 @@ def test_bind_number_keys_maps_digits_to_row_positions() -> None:
         event.app.exit.assert_called_once_with(result=expected)
 
 
+@pytest.mark.usefixtures("no_console")
 def test_bind_number_keys_caps_at_nine() -> None:
     choices = [questionary.Choice(title=str(i), value=str(i)) for i in range(12)]
     q = questionary.select("pick", choices=choices)
@@ -686,6 +700,10 @@ def test_a_ui_built_without_a_log_path_writes_nothing(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # drain_input — the buffered-keystroke fix
 # --------------------------------------------------------------------------- #
+_POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="termios is posix-only")
+
+
+@_POSIX_ONLY
 def test_drain_input_flushes_the_posix_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     import termios
 
@@ -698,6 +716,7 @@ def test_drain_input_flushes_the_posix_terminal(monkeypatch: pytest.MonkeyPatch)
     assert flushed and flushed[0][1] == termios.TCIFLUSH  # input queue, not output
 
 
+@_POSIX_ONLY
 def test_drain_input_never_raises_on_a_terminal_that_cannot_be_drained(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

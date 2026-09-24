@@ -781,7 +781,7 @@ def folder_rows(result: ScanResult, transcripts: Mapping[str, Path]) -> list[Cho
     """
     rows: list[Choice] = []
     for folder, items in group_by_folder(result):
-        name = f"{folder}/" if str(folder) != "." else "./"
+        name = f"{folder}{os.sep}" if str(folder) != "." else f".{os.sep}"
         with_transcript = transcribed_count(items, transcripts)
         rows.append(
             (

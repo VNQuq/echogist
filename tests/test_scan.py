@@ -801,7 +801,8 @@ def test_folder_rows_are_one_row_per_folder_with_the_numbers_packed(tmp_path: Pa
     result = _scan(tmp_path, tmp_path)
     rows = scan.folder_rows(result, {})
 
-    assert [key for key, _value in rows] == ["Course-1/", "Course-1/bonus/"]
+    bonus = Path("Course-1/bonus")
+    assert [key for key, _value in rows] == [f"Course-1{os.sep}", f"{bonus}{os.sep}"]
     assert "2 files" in rows[0][1]
     assert "2h 00m" in rows[0][1]
     assert "0 transcripts" in rows[0][1]
@@ -860,7 +861,7 @@ def test_problem_lists_are_shown_relative_to_the_scan_root(tmp_path: Path) -> No
     _media(tmp_path / "Course" / "week 2", "broken.mp4")
     result = _scan(tmp_path, tmp_path, runner=_runner(_STDERR_NO_DURATION))
 
-    assert scan.unreadable_rows(result)[0][0] == "Course/week 2/broken.mp4"
+    assert scan.unreadable_rows(result)[0][0] == str(Path("Course/week 2/broken.mp4"))
 
 
 def test_reuse_survives_a_recording_being_renamed(tmp_path: Path) -> None:

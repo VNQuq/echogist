@@ -19,6 +19,7 @@ when the queue empties.
 from __future__ import annotations
 
 import ast
+import os
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
@@ -1592,7 +1593,7 @@ def test_scan_flow_reports_folders_totals_and_costs_nothing(
     assert "prices the summaries before you spend anything" in stub.log_text
     assert ("table", "Folders") in stub.messages
     assert ("table", "Totals") in stub.messages
-    assert "Course-1/" in stub.log_text
+    assert f"Course-1{os.sep}" in stub.log_text
     assert "2h 00m" in stub.log_text
     assert "PROJECTION from duration, biased high" in stub.log_text
     # Read-only: not one paid or heavy stage ran.
@@ -1616,7 +1617,8 @@ def test_scan_flow_surfaces_duplicate_names(
     assert ("table", "Duplicate names") in stub.messages
     # Rendered RELATIVE to the scan root. Three absolute paths per group wrap over several
     # lines and bury the one part that tells the files apart: which folder each is in.
-    assert ("table-row", "lecture: A/lecture.mp4, B/lecture.mp4") in stub.messages
+    row = f"lecture: {Path('A/lecture.mp4')}, {Path('B/lecture.mp4')}"
+    assert ("table-row", row) in stub.messages
 
 
 def test_scan_flow_never_counts_echogists_own_output(
