@@ -3,7 +3,11 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/);
 проект следует [семантическому версионированию](https://semver.org/lang/ru/).
 
-## [Unreleased]
+## [3.1.1] — 2026-09-25
+
+> Первая публичная версия. Функционально — один повтор пустой фазы; остальное — то, что
+> нужно проекту на виду: лицензия, CI на Windows и Linux и исправление, которое этот CI
+> нашёл в первый же день.
 
 ### Добавлено
 
@@ -530,7 +534,7 @@
 - Гайд по использованию: [docs/USAGE.md](docs/USAGE.md).
 - Locked build spec: [docs/archive/ENGINEERING_PLAN.md](docs/archive/ENGINEERING_PLAN.md).
 
-[Unreleased]: https://github.com/VNQuq/echogist/compare/v3.1.0...HEAD
+[3.1.1]: https://github.com/VNQuq/echogist/releases/tag/v3.1.1
 [3.1.0]: https://github.com/VNQuq/echogist/releases/tag/v3.1.0
 [3.0.0]: https://github.com/VNQuq/echogist/releases/tag/v3.0.0
 [2.3.0]: https://github.com/VNQuq/echogist/releases/tag/v2.3.0
